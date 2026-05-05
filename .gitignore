@@ -1,0 +1,31 @@
+# =========================
+# PlatformIO (CRITICAL)
+# =========================
+**/.pio/
+**/.platformio/
+**/.platformio-local/
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+*.code-workspace
+
+# =========================
+# Node (dashboard later)
+# =========================
+node_modules/
+dist/
+
+# =========================
+# Python (raspberry pi later)
+# =========================
+__pycache__/
+*.pyc
+venv/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
