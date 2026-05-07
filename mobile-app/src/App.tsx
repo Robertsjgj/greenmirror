@@ -13,8 +13,10 @@ interface ZoneReading {
   zone_id: string;
   node_id?: string;
   greenhouse_id?: string;
-  soil_moisture_pct: number;
+  soil_moisture_raw?: number | null;
+  soil_moisture_pct: number | null;
   soil_temp_c: number | null;
+  soil_temp_status?: string | null;
   alerts: string[];
 }
 
