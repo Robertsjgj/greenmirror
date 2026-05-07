@@ -11,14 +11,19 @@ type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 
 interface ZoneReading {
   zone_id: string;
+  node_id?: string;
+  greenhouse_id?: string;
   soil_moisture_pct: number;
   soil_temp_c: number | null;
   alerts: string[];
 }
 
 interface LatestReading {
-  node_id: string;
+  mode?: string;
+  node_id?: string;
   greenhouse_id: string;
+  node_count?: number;
+  zone_count?: number;
   zones: ZoneReading[];
   timestamp?: string;
 }

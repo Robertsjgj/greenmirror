@@ -20,6 +20,7 @@ interface PlantData {
   soilTempC?: number | null;
   alerts?: string[];
   zoneId?: string;
+  nodeId?: string;
   lastWatered: string;
 }
 interface PlantDetailProps {
@@ -213,6 +214,11 @@ export function PlantDetail({ plant, onBack }: PlantDetailProps) {
           {plant.zoneId &&
           <p className="text-xs font-bold text-emerald-600 mb-3 uppercase tracking-wider">
               {plant.zoneId}
+            </p>
+          }
+          {plant.nodeId &&
+          <p className="text-xs font-bold text-stone-400 mb-3 uppercase tracking-wider">
+              {plant.nodeId}
             </p>
           }
           <div
