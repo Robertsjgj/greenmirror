@@ -1,8 +1,10 @@
 const express = require("express");
 const cors = require("cors");
+const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
+const USE_SIMULATION = process.env.USE_SIMULATION === "true";
 
 // enable CORS for mobile app requests
 app.use(cors());
@@ -13,6 +15,7 @@ app.use(express.json());
 // in-memory storage for readings
 let readingsHistory = [];
 let latestReading = null;
+let latestSystemState = null;
 
 // basic zone analysis logic
 function analyzeZone(zone) {
@@ -49,6 +52,7 @@ app.post("/api/readings", (req, res) => {
 
   latestReading = {
     ...req.body,
+    mode: "real",
     zones,
     timestamp: new Date().toISOString()
   };
@@ -59,16 +63,35 @@ app.post("/api/readings", (req, res) => {
 });
 
 app.get("/api/latest", (req, res) => {
-  if (!latestReading) {
+  const latest = USE_SIMULATION ? latestSystemState : latestReading;
+
+  if (!latest) {
     return res.status(404).json({ error: "No readings available" });
   }
 
-  res.json(latestReading);
+  res.json(latest);
 });
 
 app.get("/api/history", (req, res) => {
   res.json(readingsHistory);
 });
+
+if (USE_SIMULATION) {
+  const simulator = createSimulator({
+    analyzeZone,
+    onSystemState: (systemState) => {
+      // Simulated ticks behave like incoming ESP readings and are kept in history.
+      latestSystemState = systemState;
+      readingsHistory.push(systemState);
+      console.log(
+        `Simulated ${systemState.node_count} nodes / ${systemState.zone_count} zones at ${systemState.timestamp}`
+      );
+    }
+  });
+
+  simulator.start();
+  console.log(`Simulation mode ON; updating every ${UPDATE_INTERVAL_MS / 1000}s`);
+}
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
