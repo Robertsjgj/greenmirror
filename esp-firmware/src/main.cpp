@@ -1,7 +1,14 @@
 #include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
+
+// ---------- WiFi / API ----------
+const char* WIFI_SSID = "1661";
+const char* WIFI_PASSWORD = "Henryboys";
+const char* API_URL = "http://192.168.7.202:5000/api/readings";
 
 // ---------- Pin Definitions ----------
 #define ZONE_A_SOIL_PIN 34
@@ -74,6 +81,9 @@ void addZoneReading(
   }
 }
 
+void connectWiFi();
+void ensureWiFiConnected();
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -86,7 +96,41 @@ void setup() {
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
 
+  connectWiFi();
   Serial.println("System ready.");
+}
+
+void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  Serial.println("Connecting to WiFi...");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.setAutoReconnect(true);
+
+  unsigned long startMillis = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startMillis < 10000) {
+    Serial.print('.');
+    delay(500);
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.println("WiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println();
+    Serial.println("WiFi connect failed");
+  }
+}
+
+void ensureWiFiConnected() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
 }
 
 void loop() {
@@ -119,6 +163,33 @@ void loop() {
 
   serializeJson(doc, Serial);
   Serial.println();
+
+  ensureWiFiConnected();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Sending data...");
+
+    HTTPClient http;
+    http.begin(API_URL);
+    http.addHeader("Content-Type", "application/json");
+
+    String payload;
+    serializeJson(doc, payload);
+
+    int responseCode = http.POST(payload);
+    if (responseCode > 0) {
+      Serial.println("Send success");
+      Serial.print("HTTP status: ");
+      Serial.println(responseCode);
+    } else {
+      Serial.println("Send failed");
+      Serial.print("HTTP error: ");
+      Serial.println(http.errorToString(responseCode));
+    }
+    http.end();
+  } else {
+    Serial.println("Send failed: no WiFi");
+  }
 
   delay(5000);
 }
