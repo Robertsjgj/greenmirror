@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Droplets, RotateCcw, Settings2 } from 'lucide-react';
 import { ZoneCard } from './ZoneCard';
@@ -138,11 +138,11 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
   };
 
   return (
-    <div className="space-y-5 pb-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-4 pb-4">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-stone-800">Greenhouse Map</h2>
-          <p className="mt-1 text-stone-500 font-medium">
+          <h2 className="text-xl font-extrabold text-stone-900 sm:text-2xl">Greenhouse Map</h2>
+          <p className="mt-0.5 text-sm font-bold text-stone-500">
             {error
               ? 'Backend is offline or unreachable'
               : !loading && !latestReading
@@ -154,7 +154,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="rounded-2xl bg-white px-3 py-2 text-right shadow-sm border border-stone-200">
+          <div className="rounded-2xl border border-stone-200 bg-white px-3 py-2 text-right shadow-sm">
             <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Visible</p>
             <p className="text-lg font-extrabold text-stone-800">{totalVisibleZones}</p>
           </div>
@@ -162,6 +162,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
             type="button"
             onClick={() => setShowSettings((current) => !current)}
             className="rounded-2xl border border-stone-200 bg-white p-3 text-stone-500 shadow-sm transition-colors hover:bg-stone-50 hover:text-stone-700"
+            aria-label="Open map and plant settings"
           >
             <Settings2 className="h-5 w-5" />
           </button>
@@ -176,9 +177,9 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <div className="rounded-3xl border border-stone-200 bg-white p-4 shadow-sm">
-              <div className="mb-4">
-                <h3 className="text-lg font-bold text-stone-800">Map Settings</h3>
+            <div className="rounded-[1.35rem] border border-stone-200 bg-white p-4 shadow-sm">
+              <div className="mb-3">
+                <h3 className="text-base font-extrabold text-stone-800">Map Settings</h3>
                 <p className="text-sm text-stone-500">
                   Adjust the greenhouse layout and keep it saved on this device.
                 </p>
@@ -222,25 +223,25 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         )}
       </AnimatePresence>
 
-      <div className="flex bg-white p-1 rounded-xl border border-stone-200">
+      <div className="flex rounded-2xl border border-stone-200 bg-white p-1 shadow-sm">
         <button
           type="button"
           onClick={() => setMode('live')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold transition-all ${mode === 'live' ? 'bg-emerald-100 text-emerald-700' : 'text-stone-500'}`}
+          className={`flex-1 rounded-xl py-2.5 text-sm font-extrabold transition-all ${mode === 'live' ? 'bg-emerald-100 text-emerald-700' : 'text-stone-500'}`}
         >
           Live View
         </button>
         <button
           type="button"
           onClick={() => setMode('simulate')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold transition-all ${mode === 'simulate' ? 'bg-blue-100 text-blue-700' : 'text-stone-500'}`}
+          className={`flex flex-1 items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-extrabold transition-all ${mode === 'simulate' ? 'bg-sky-100 text-sky-700' : 'text-stone-500'}`}
         >
           <Droplets className="h-4 w-4" />
           Simulate
         </button>
       </div>
 
-      <div className="flex flex-wrap justify-center gap-4 text-[11px] font-bold">
+      <div className="flex flex-wrap justify-center gap-x-3 gap-y-2 rounded-2xl bg-white px-3 py-2 text-[10px] font-extrabold shadow-sm ring-1 ring-stone-200">
         <span className="flex items-center gap-1.5 text-stone-500">
           <span className="h-3 w-3 rounded-full bg-emerald-500"></span> Good
         </span>
@@ -267,23 +268,23 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
       <motion.div
         initial={{ opacity: 0, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="rounded-3xl border border-stone-200 bg-white p-4 shadow-sm"
+        className="rounded-[1.35rem] border border-stone-200 bg-white p-3 shadow-sm sm:p-4"
       >
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Compact Layout</p>
-            <h3 className="text-lg font-bold text-stone-800">Vertical greenhouse grid</h3>
+            <h3 className="text-base font-extrabold text-stone-800 sm:text-lg">Vertical greenhouse grid</h3>
           </div>
-          <p className="text-xs font-bold uppercase tracking-wider text-stone-400">
+          <p className="shrink-0 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-extrabold uppercase tracking-wider text-stone-500">
             {layoutSettings.rows} x {layoutSettings.sectionsPerRow}
           </p>
         </div>
 
-        <div className="overflow-x-auto pb-1">
-          <div className="flex min-w-max gap-2">
+        <div className="-mx-1 overflow-x-auto px-1 pb-1">
+          <div className="flex min-w-max gap-1.5 sm:gap-2">
             {activeLayout.rows.map((row) => (
-              <div key={row.rowLabel} className="w-[68px] shrink-0">
-                <div className="mb-2 rounded-xl bg-stone-100 px-2 py-1 text-center text-[11px] font-extrabold uppercase tracking-wider text-stone-600">
+              <div key={row.rowLabel} className="w-[62px] shrink-0 sm:w-[72px]">
+                <div className="mb-1.5 rounded-xl bg-stone-100 px-2 py-1 text-center text-[10px] font-extrabold uppercase tracking-wider text-stone-600">
                   {row.rowLabel}
                 </div>
                 <div className="space-y-1.5">
@@ -320,7 +321,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         )}
 
         <div className="mt-4 flex justify-center">
-          <div className="rounded-full bg-stone-200 px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-stone-500">
+          <div className="rounded-full bg-stone-200 px-4 py-1 text-[10px] font-extrabold uppercase tracking-wider text-stone-500">
             Entrance
           </div>
         </div>
@@ -332,18 +333,18 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="rounded-2xl border border-blue-200 bg-blue-50 p-5"
+            className="rounded-[1.35rem] border border-sky-200 bg-sky-50 p-4"
           >
-            <h3 className="flex items-center gap-2 font-bold text-blue-900">
-              <Droplets className="h-5 w-5 text-blue-500" />
+            <h3 className="flex items-center gap-2 font-extrabold text-sky-900">
+              <Droplets className="h-5 w-5 text-sky-500" />
               Watering Simulation
             </h3>
-            <p className="mt-1 text-xs font-medium text-blue-700">
+            <p className="mt-1 text-xs font-bold text-sky-700">
               Preview how the current visible greenhouse layout reacts to extra water.
             </p>
 
             <div className="mt-4">
-              <div className="mb-2 flex justify-between text-sm font-bold text-blue-800">
+              <div className="mb-2 flex justify-between text-sm font-bold text-sky-800">
                 <span>Watering Volume</span>
                 <span>{wateringVolume}ml per zone</span>
               </div>
@@ -354,7 +355,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                 step="50"
                 value={wateringVolume}
                 onChange={(event) => setWateringVolume(Number(event.target.value))}
-                className="w-full cursor-pointer appearance-none rounded-full bg-blue-200 accent-blue-600"
+                className="w-full cursor-pointer appearance-none rounded-full bg-sky-200 accent-sky-600"
               />
             </div>
 
@@ -363,7 +364,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                 type="button"
                 onClick={runSimulation}
                 disabled={simRunning || liveZones.length === 0}
-                className="flex-1 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                className="flex-1 rounded-xl bg-sky-600 py-3 text-sm font-bold text-white transition-colors hover:bg-sky-700 disabled:opacity-50"
               >
                 {simRunning ? 'Simulating...' : 'Run Simulation'}
               </button>
@@ -373,7 +374,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                   setMode('live');
                   setSimRunning(false);
                 }}
-                className="rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-bold text-blue-700"
+                className="rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm font-bold text-sky-700"
               >
                 <RotateCcw className="h-4 w-4" />
               </button>

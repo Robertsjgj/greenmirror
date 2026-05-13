@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { PlantCare } from './components/PlantCare';
-import { EnvironmentView } from './components/EnvironmentView';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Bell, Droplets, Map, Sprout, Sun, Wifi, WifiOff } from 'lucide-react';
 import { AlertsView } from './components/AlertsView';
-import { SimpleRunoff } from './components/SimpleRunoff';
+import { EnvironmentView } from './components/EnvironmentView';
 import { GreenhouseView } from './components/GreenhouseView';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Sprout, Sun, Bell, Droplets, Map } from 'lucide-react';
+import { PlantCare } from './components/PlantCare';
+import { SimpleRunoff } from './components/SimpleRunoff';
+import { LATEST_READING_URL } from './config';
 
 type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 
@@ -29,46 +30,45 @@ interface LatestReading {
   zones: ZoneReading[];
   timestamp?: string;
 }
+
+const tabs = [
+  {
+    id: 'plants',
+    label: 'Plants',
+    icon: Sprout
+  },
+  {
+    id: 'greenhouse',
+    label: 'Map',
+    icon: Map
+  },
+  {
+    id: 'environment',
+    label: 'Weather',
+    icon: Sun
+  },
+  {
+    id: 'alerts',
+    label: 'Alerts',
+    icon: Bell
+  },
+  {
+    id: 'runoff',
+    label: 'Runoff',
+    icon: Droplets
+  }
+] as const;
+
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('plants');
   const [latestReading, setLatestReading] = useState<LatestReading | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const tabs = [
-    {
-      id: 'plants',
-      label: 'Plants',
-      icon: Sprout
-    },
-    {
-      id: 'greenhouse',
-      label: 'Map',
-      icon: Map
-    },
-    {
-      id: 'environment',
-      label: 'Weather',
-      icon: Sun
-    },
-    {
-      id: 'alerts',
-      label: 'Alerts',
-      icon: Bell
-    },
-    {
-      id: 'runoff',
-      label: 'Runoff',
-      icon: Droplets
-    }
-  ] as const;
-
-  const API_URL = 'http://192.168.7.202:5000/api/latest';
-
   const fetchLatestReading = async () => {
     setLoading(true);
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(LATEST_READING_URL);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -76,9 +76,9 @@ export function App() {
       const data = text ? JSON.parse(text) : null;
       setLatestReading(data?.zones?.length ? data : null);
       setError(null);
-    } catch (fetchError: any) {
+    } catch (fetchError: unknown) {
       setLatestReading(null);
-      setError(fetchError?.message || 'Unable to fetch latest reading');
+      setError(fetchError instanceof Error ? fetchError.message : 'Unable to fetch latest reading');
     } finally {
       setLoading(false);
     }
@@ -90,85 +90,61 @@ export function App() {
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    console.log('Latest Reading:', latestReading);
-  }, [latestReading]);
+  const online = !error && Boolean(latestReading);
 
   return (
-    <div className="min-h-screen bg-stone-200 flex items-start justify-center">
-      {/* Mobile Phone Frame */}
-      <div className="w-full max-w-[430px] min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-emerald-100 selection:text-emerald-900 pb-20 relative shadow-2xl overflow-hidden">
-        {/* Header */}
-        <header className="bg-stone-50/80 backdrop-blur-md sticky top-0 z-50 pt-4 pb-2 px-4">
-          <div className="flex items-center justify-between">
-            {/* Greeting */}
-            <div>
-              <h1 className="text-xl font-extrabold text-stone-800 tracking-tight">
-                Good morning! 🌞
+    <div className="min-h-screen bg-stone-100 text-stone-900 selection:bg-emerald-100 selection:text-emerald-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col bg-stone-50 shadow-none lg:border-x lg:border-stone-200 lg:shadow-2xl">
+        <header className="sticky top-0 z-40 border-b border-stone-200/70 bg-stone-50/90 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur-xl sm:px-6">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-600">GreenMirror</p>
+              <h1 className="truncate text-xl font-extrabold tracking-tight text-stone-900 sm:text-2xl">
+                Garden Control
               </h1>
-              <p className="text-sm font-bold text-emerald-600">
-                GreenMirror Garden
-              </p>
             </div>
 
-            {/* Avatar */}
-            <div className="h-10 w-10 rounded-full bg-emerald-100 border-2 border-white shadow-sm flex items-center justify-center text-xl">
-              🧑‍🌾
+            <div
+              className={`flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-extrabold ${
+                online
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : error
+                  ? 'border-rose-200 bg-rose-50 text-rose-700'
+                  : 'border-stone-200 bg-white text-stone-500'
+              }`}
+            >
+              {online ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+              <span>{online ? 'Live' : loading ? 'Syncing' : 'Offline'}</span>
             </div>
           </div>
         </header>
 
-        {/* Main Content */}
-        <main className="px-4 py-4 h-full overflow-y-auto">
+        <main className="mx-auto w-full max-w-5xl flex-1 px-3 py-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:pb-8">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
-              initial={{
-                opacity: 0,
-                x: 10
-              }}
-              animate={{
-                opacity: 1,
-                x: 0
-              }}
-              exit={{
-                opacity: 0,
-                x: -10
-              }}
-              transition={{
-                duration: 0.2
-              }}>
-              
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18 }}
+            >
               {activeTab === 'plants' && (
-                <PlantCare
-                  latestReading={latestReading}
-                  loading={loading}
-                  error={error}
-                />
+                <PlantCare latestReading={latestReading} loading={loading} error={error} />
               )}
               {activeTab === 'greenhouse' && (
-                <GreenhouseView
-                  latestReading={latestReading}
-                  loading={loading}
-                  error={error}
-                />
+                <GreenhouseView latestReading={latestReading} loading={loading} error={error} />
               )}
               {activeTab === 'environment' && <EnvironmentView />}
               {activeTab === 'alerts' && (
-                <AlertsView
-                  latestReading={latestReading}
-                  loading={loading}
-                  error={error}
-                />
+                <AlertsView latestReading={latestReading} loading={loading} error={error} />
               )}
               {activeTab === 'runoff' && <SimpleRunoff />}
             </motion.div>
           </AnimatePresence>
         </main>
 
-        {/* Bottom Navigation */}
-        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] bg-white border-t border-stone-200 z-50 rounded-t-3xl shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-          <div className="flex justify-around items-center h-[72px] px-1 pb-1">
+        <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_30px_rgba(41,37,36,0.08)] backdrop-blur-xl lg:absolute">
+          <div className="mx-auto grid h-[72px] max-w-2xl grid-cols-5 items-center gap-1 px-2">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -176,39 +152,30 @@ export function App() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className="relative flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all duration-300">
-                  
+                  className={`relative flex h-14 min-w-0 flex-col items-center justify-center rounded-2xl transition-all duration-200 ${
+                    isActive ? 'text-emerald-700' : 'text-stone-500 hover:bg-stone-50'
+                  }`}
+                >
                   <div
-                    className={`
-                    p-2 rounded-xl transition-colors duration-300 mb-0.5
-                    ${isActive ? 'bg-emerald-100 text-emerald-600' : 'text-stone-400'}
-                  `}>
-                    
-                    <Icon
-                      className="w-5 h-5"
-                      strokeWidth={isActive ? 2.5 : 2} />
-                    
+                    className={`mb-0.5 rounded-xl p-2 transition-colors duration-200 ${
+                      isActive ? 'bg-emerald-100 text-emerald-600' : 'text-stone-400'
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" strokeWidth={isActive ? 2.5 : 2} />
                   </div>
-                  <span
-                    className={`
-                    text-[10px] font-bold transition-colors duration-300
-                    ${isActive ? 'text-emerald-700' : 'text-stone-500'}
-                  `}>
-                    
-                    {tab.label}
-                  </span>
-                  {isActive &&
-                  <motion.div
-                    layoutId="activeMobileTab"
-                    className="absolute -top-2 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-emerald-500" />
-
-                  }
-                </button>);
-
+                  <span className="truncate text-[10px] font-bold">{tab.label}</span>
+                  {isActive && (
+                    <motion.div
+                      layoutId="activeMobileTab"
+                      className="absolute -top-2 left-1/2 h-1 w-8 -translate-x-1/2 rounded-full bg-emerald-500"
+                    />
+                  )}
+                </button>
+              );
             })}
           </div>
         </nav>
       </div>
-    </div>);
-
+    </div>
+  );
 }
