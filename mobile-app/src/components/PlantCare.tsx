@@ -8,7 +8,7 @@ type ZoneStatus = 'healthy' | 'monitor' | 'needs-water';
 interface ZoneReading {
   zone_id: string;
   node_id?: string;
-  soil_moisture_pct: number;
+  soil_moisture_pct: number | null;
   soil_temp_c: number | null;
   alerts?: string[];
 }
@@ -23,7 +23,7 @@ interface Section {
   emoji: string;
   status: ZoneStatus;
   statusText: string;
-  moisture: number;
+  moisture: number | null;
   soilTempC: number | null;
   alerts: string[];
   zoneId: string;
@@ -42,14 +42,14 @@ const ZONE_EMOJIS = ['🌱', '🍅', '🥬', '🌿', '🌶️', '🍓', '🌻', 
 const getSectionHealth = (zone: ZoneReading) => {
   const alerts = zone.alerts ?? [];
 
-  if (alerts.includes('too dry') || zone.soil_moisture_pct < 30) {
+  if (alerts.includes('too dry') || (zone.soil_moisture_pct ?? 100) < 30) {
     return { status: 'needs-water' as ZoneStatus, statusText: 'Needs water!' };
   }
 
   if (
     alerts.includes('too wet') ||
     alerts.includes('too cold') ||
-    zone.soil_moisture_pct > 80
+    (zone.soil_moisture_pct ?? 0) > 80
   ) {
     return {
       status: 'monitor' as ZoneStatus,
@@ -327,7 +327,7 @@ export function PlantCare({ latestReading, loading, error }: PlantCareProps) {
                       {section.statusText}
                     </div>
                     <div className="mt-2 text-xs font-extrabold text-stone-500">
-                      {section.moisture}%
+                      {section.moisture !== null ? `${section.moisture}%` : '--'}
                     </div>
                     <div className="mt-1 min-h-[14px] text-[11px] font-bold text-stone-400">
                       {section.soilTempC !== null

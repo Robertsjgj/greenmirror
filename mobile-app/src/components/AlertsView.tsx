@@ -3,7 +3,7 @@ import React from 'react';
 interface ZoneReading {
   zone_id: string;
   node_id?: string;
-  soil_moisture_pct: number;
+  soil_moisture_pct: number | null;
   soil_temp_c: number | null;
   alerts: string[];
 }
@@ -77,7 +77,7 @@ export function AlertsView({ latestReading, loading, error }: AlertsViewProps) {
               </div>
               <div className="flex flex-wrap gap-2 text-xs font-semibold">
                 <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-700">
-                  Moisture {zone.soil_moisture_pct}%
+                  Moisture {zone.soil_moisture_pct !== null ? `${zone.soil_moisture_pct}%` : '--'}
                 </span>
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
                   Temp {zone.soil_temp_c !== null ? `${zone.soil_temp_c.toFixed(1)}°C` : 'Sensor not detected'}

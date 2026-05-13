@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Droplets, RotateCcw, Settings2 } from 'lucide-react';
 import { ZoneCard } from './ZoneCard';
 import { ZoneDetailSheet } from './ZoneDetailSheet';
+import { PlantProfilesSettings } from './PlantProfilesSettings';
 import {
   LatestReading,
   LayoutSettings,
@@ -12,6 +13,15 @@ import {
   mapZonesToLayout,
   sanitizeSettings
 } from '../zoneLayout';
+import {
+  PlantProfile,
+  ZoneAssignments,
+  getPlantTone,
+  loadPlantProfiles,
+  loadZoneAssignments,
+  savePlantProfiles,
+  saveZoneAssignments
+} from '../plantProfiles';
 
 interface GreenhouseViewProps {
   latestReading: LatestReading | null;
@@ -33,8 +43,11 @@ function loadStoredSettings() {
   }
 }
 
-function countAttentionZones(zones: VisualZone[]) {
+function countAttentionZones(zones: VisualZone[], profilesById: Map<string, PlantProfile>) {
   return zones.filter((zone) => {
+    const plantTone = getPlantTone(zone, zone.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null);
+    if (plantTone) return plantTone === 'dry' || plantTone === 'wet' || plantTone === 'alert';
+
     const status = getZoneStatus(zone);
     return status.tone === 'dry' || status.tone === 'wet' || status.tone === 'alert';
   }).length;
@@ -47,32 +60,53 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
   const [simRunning, setSimRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredSettings);
+  const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
+  const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
 
-  const layout = mapZonesToLayout(latestReading, layoutSettings);
-  const liveZones = layout.rows.flatMap((row) => row.zones);
+  useEffect(() => {
+    savePlantProfiles(plantProfiles);
+  }, [plantProfiles]);
+
+  useEffect(() => {
+    saveZoneAssignments(zoneAssignments);
+  }, [zoneAssignments]);
+
+  const profilesById = useMemo(
+    () => new Map(plantProfiles.map((profile) => [profile.id, profile])),
+    [plantProfiles]
+  );
+  const layout = useMemo(
+    () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments),
+    [latestReading, layoutSettings, zoneAssignments]
+  );
+  const allLayoutZones = useMemo(
+    () => [...layout.rows.flatMap((row) => row.zones), ...layout.overflowZones],
+    [layout]
+  );
+  const liveZones = useMemo(() => layout.rows.flatMap((row) => row.zones), [layout]);
   const activeLayout = layout;
-  const needsAttention = countAttentionZones(activeLayout.rows.flatMap((row) => row.zones));
+  const needsAttention = countAttentionZones(liveZones, profilesById);
   const totalVisibleZones = layoutSettings.rows * layoutSettings.sectionsPerRow;
 
   useEffect(() => {
     if (!selectedZone) return;
 
-    const updatedZone =
-      activeLayout.rows.flatMap((row) => row.zones).find((zone) => zone.id === selectedZone.id) ??
-      activeLayout.overflowZones.find((zone) => zone.id === selectedZone.id);
+    const updatedZone = allLayoutZones.find((zone) => zone.id === selectedZone.id);
 
     if (updatedZone) {
-      setSelectedZone(updatedZone);
+      if (updatedZone !== selectedZone) {
+        setSelectedZone(updatedZone);
+      }
       return;
     }
 
     setSelectedZone(null);
-  }, [activeLayout, selectedZone]);
+  }, [allLayoutZones, selectedZone]);
 
   const runSimulation = () => {
     setSimRunning(true);
@@ -89,6 +123,18 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         [key]: value
       })
     );
+  };
+
+  const assignPlantToZone = (visualLabel: string, plantId: string | null) => {
+    setZoneAssignments((current) => {
+      const next = { ...current };
+      if (plantId) {
+        next[visualLabel] = plantId;
+      } else {
+        delete next[visualLabel];
+      }
+      return next;
+    });
   };
 
   return (
@@ -169,6 +215,8 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                   {layoutSettings.rows * layoutSettings.sectionsPerRow}
                 </p>
               </div>
+
+              <PlantProfilesSettings profiles={plantProfiles} onProfilesChange={setPlantProfiles} />
             </div>
           </motion.div>
         )}
@@ -240,7 +288,12 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                 </div>
                 <div className="space-y-1.5">
                   {row.zones.map((zone) => (
-                    <ZoneCard key={zone.id} zone={zone} onSelect={setSelectedZone} />
+                    <ZoneCard
+                      key={zone.id}
+                      zone={zone}
+                      assignedPlant={zone.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null}
+                      onSelect={setSelectedZone}
+                    />
                   ))}
                 </div>
               </div>
@@ -329,7 +382,13 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         )}
       </AnimatePresence>
 
-      <ZoneDetailSheet zone={selectedZone} onClose={() => setSelectedZone(null)} />
+      <ZoneDetailSheet
+        zone={selectedZone}
+        plantProfiles={plantProfiles}
+        assignedPlant={selectedZone?.assignedPlant ? profilesById.get(selectedZone.assignedPlant) ?? null : null}
+        onAssignPlant={assignPlantToZone}
+        onClose={() => setSelectedZone(null)}
+      />
     </div>
   );
 }

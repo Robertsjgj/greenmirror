@@ -1,9 +1,11 @@
 import React from 'react';
 import { Droplets, Thermometer } from 'lucide-react';
 import { VisualZone, getZoneStatus } from '../zoneLayout';
+import { PlantProfile, getPlantTone } from '../plantProfiles';
 
 interface ZoneCardProps {
   zone: VisualZone;
+  assignedPlant: PlantProfile | null;
   onSelect: (zone: VisualZone) => void;
 }
 
@@ -35,9 +37,10 @@ const TONE_STYLES = {
   }
 } as const;
 
-export function ZoneCard({ zone, onSelect }: ZoneCardProps) {
+export function ZoneCard({ zone, assignedPlant, onSelect }: ZoneCardProps) {
   const status = getZoneStatus(zone);
-  const tone = TONE_STYLES[status.tone];
+  const plantTone = getPlantTone(zone, assignedPlant);
+  const tone = TONE_STYLES[plantTone ?? status.tone];
 
   return (
     <button
@@ -49,7 +52,7 @@ export function ZoneCard({ zone, onSelect }: ZoneCardProps) {
         <div className="min-w-0">
           <p className="text-[11px] font-extrabold text-stone-800">{zone.visualLabel}</p>
           <p className="truncate text-[9px] font-bold uppercase tracking-wider text-stone-400">
-            {zone.hasReading ? zone.nodeId ?? 'Live zone' : 'No reading'}
+            {assignedPlant ? assignedPlant.name : zone.hasReading ? zone.nodeId ?? 'Live zone' : 'No reading'}
           </p>
         </div>
         <span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${tone.dot}`} />

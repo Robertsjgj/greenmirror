@@ -145,7 +145,8 @@ function createVisualZone(slot: LayoutSlot, zone: ZoneReading, timestamp?: strin
 
 export function mapZonesToLayout(
   latestReading: LatestReading | null,
-  settings: LayoutSettings
+  settings: LayoutSettings,
+  zoneAssignments: Record<string, string> = {}
 ): LayoutResult {
   const slots = buildLayoutSlots(settings);
   const zones = latestReading?.zones ?? [];
@@ -161,7 +162,7 @@ export function mapZonesToLayout(
     if (matchingSlot && !usedLabels.has(matchingSlot.visualLabel)) {
       assignedByLabel.set(
         matchingSlot.visualLabel,
-        createVisualZone(matchingSlot, zone, latestReading?.timestamp)
+        withAssignment(createVisualZone(matchingSlot, zone, latestReading?.timestamp), zoneAssignments)
       );
       usedLabels.add(matchingSlot.visualLabel);
       return;
@@ -180,7 +181,7 @@ export function mapZonesToLayout(
 
     assignedByLabel.set(
       slot.visualLabel,
-      createVisualZone(slot, zone, latestReading?.timestamp)
+      withAssignment(createVisualZone(slot, zone, latestReading?.timestamp), zoneAssignments)
     );
     unmatchedIndex += 1;
   });
@@ -189,7 +190,7 @@ export function mapZonesToLayout(
     const rowLabel = ROW_LETTERS[rowIndex] ?? `R${rowIndex + 1}`;
     const zonesForRow = Array.from({ length: settings.sectionsPerRow }, (__, sectionIndex) => {
       const slot = slots[rowIndex * settings.sectionsPerRow + sectionIndex];
-      return assignedByLabel.get(slot.visualLabel) ?? createEmptyVisualZone(slot);
+      return assignedByLabel.get(slot.visualLabel) ?? withAssignment(createEmptyVisualZone(slot), zoneAssignments);
     });
 
     return {
@@ -198,29 +199,43 @@ export function mapZonesToLayout(
     };
   });
 
-  const overflowZones = unmatchedZones.slice(unmatchedIndex).map((zone, index) => ({
-    id: `${zone.node_id ?? 'node'}-${zone.zone_id}-overflow-${index}`,
-    visualLabel: zone.zone_id,
-    rowLabel: 'Overflow',
-    rowIndex: settings.rows,
-    section: index + 1,
-    nodeId: zone.node_id,
-    backendZoneId: zone.zone_id,
-    greenhouseId: zone.greenhouse_id,
-    soilMoistureRaw: zone.soil_moisture_raw ?? null,
-    soilMoisturePct: zone.soil_moisture_pct ?? null,
-    soilTempC: zone.soil_temp_c ?? null,
-    soilTempStatus: zone.soil_temp_status ?? null,
-    alerts: zone.alerts ?? [],
-    timestamp: latestReading?.timestamp,
-    hasReading: true,
-    assignedPlant: null
-  }));
+  const overflowZones = unmatchedZones
+    .slice(unmatchedIndex)
+    .map((zone, index) =>
+      withAssignment(
+        {
+          id: `${zone.node_id ?? 'node'}-${zone.zone_id}-overflow-${index}`,
+          visualLabel: zone.zone_id,
+          rowLabel: 'Overflow',
+          rowIndex: settings.rows,
+          section: index + 1,
+          nodeId: zone.node_id,
+          backendZoneId: zone.zone_id,
+          greenhouseId: zone.greenhouse_id,
+          soilMoistureRaw: zone.soil_moisture_raw ?? null,
+          soilMoisturePct: zone.soil_moisture_pct ?? null,
+          soilTempC: zone.soil_temp_c ?? null,
+          soilTempStatus: zone.soil_temp_status ?? null,
+          alerts: zone.alerts ?? [],
+          timestamp: latestReading?.timestamp,
+          hasReading: true,
+          assignedPlant: null
+        },
+        zoneAssignments
+      )
+    );
 
   return {
     slots,
     rows,
     overflowZones
+  };
+}
+
+function withAssignment(zone: VisualZone, zoneAssignments: Record<string, string>): VisualZone {
+  return {
+    ...zone,
+    assignedPlant: zoneAssignments[zone.visualLabel] ?? null
   };
 }
 
