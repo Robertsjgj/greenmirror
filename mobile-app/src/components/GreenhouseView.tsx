@@ -4,6 +4,7 @@ import { Droplets, RotateCcw, Settings2 } from 'lucide-react';
 import { ZoneCard } from './ZoneCard';
 import { ZoneDetailSheet } from './ZoneDetailSheet';
 import { PlantProfilesSettings } from './PlantProfilesSettings';
+import { SydneyMapView } from './SydneyMapView';
 import {
   LatestReading,
   LayoutSettings,
@@ -13,6 +14,7 @@ import {
   mapZonesToLayout,
   sanitizeSettings
 } from '../zoneLayout';
+import { mapZonesToSydneyLayout } from '../sydneyLayout';
 import {
   PlantProfile,
   ZoneAssignments,
@@ -30,6 +32,9 @@ interface GreenhouseViewProps {
 }
 
 const STORAGE_KEY = 'greenmirror-map-layout-settings';
+const MAP_KIND_STORAGE_KEY = 'greenmirror-map-kind';
+
+type MapKind = 'truro' | 'sydney';
 
 function loadStoredSettings() {
   if (typeof window === 'undefined') return createDefaultSettings();
@@ -41,6 +46,11 @@ function loadStoredSettings() {
   } catch {
     return createDefaultSettings();
   }
+}
+
+function loadStoredMapKind(): MapKind {
+  if (typeof window === 'undefined') return 'truro';
+  return window.localStorage.getItem(MAP_KIND_STORAGE_KEY) === 'sydney' ? 'sydney' : 'truro';
 }
 
 function countAttentionZones(zones: VisualZone[], profilesById: Map<string, PlantProfile>) {
@@ -59,6 +69,7 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
   const [wateringVolume, setWateringVolume] = useState(200);
   const [simRunning, setSimRunning] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [mapKind, setMapKind] = useState<MapKind>(loadStoredMapKind);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredSettings);
   const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
@@ -67,6 +78,11 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(MAP_KIND_STORAGE_KEY, mapKind);
+  }, [mapKind]);
 
   useEffect(() => {
     savePlantProfiles(plantProfiles);
@@ -84,14 +100,22 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
     () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments),
     [latestReading, layoutSettings, zoneAssignments]
   );
+  const sydneyZones = useMemo(
+    () => mapZonesToSydneyLayout(latestReading, zoneAssignments),
+    [latestReading, zoneAssignments]
+  );
   const allLayoutZones = useMemo(
-    () => [...layout.rows.flatMap((row) => row.zones), ...layout.overflowZones],
-    [layout]
+    () =>
+      mapKind === 'sydney'
+        ? sydneyZones
+        : [...layout.rows.flatMap((row) => row.zones), ...layout.overflowZones],
+    [layout, mapKind, sydneyZones]
   );
   const liveZones = useMemo(() => layout.rows.flatMap((row) => row.zones), [layout]);
   const activeLayout = layout;
-  const needsAttention = countAttentionZones(liveZones, profilesById);
-  const totalVisibleZones = layoutSettings.rows * layoutSettings.sectionsPerRow;
+  const activeVisibleZones = mapKind === 'sydney' ? sydneyZones : liveZones;
+  const needsAttention = countAttentionZones(activeVisibleZones, profilesById);
+  const totalVisibleZones = mapKind === 'sydney' ? sydneyZones.length : layoutSettings.rows * layoutSettings.sectionsPerRow;
 
   useEffect(() => {
     if (!selectedZone) return;
@@ -185,7 +209,29 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="mb-3 flex rounded-2xl border border-stone-200 bg-stone-50 p-1">
+                <button
+                  type="button"
+                  onClick={() => setMapKind('truro')}
+                  className={`flex-1 rounded-xl py-2 text-sm font-extrabold ${
+                    mapKind === 'truro' ? 'bg-white text-emerald-700 shadow-sm' : 'text-stone-500'
+                  }`}
+                >
+                  Truro
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMapKind('sydney')}
+                  className={`flex-1 rounded-xl py-2 text-sm font-extrabold ${
+                    mapKind === 'sydney' ? 'bg-white text-emerald-700 shadow-sm' : 'text-stone-500'
+                  }`}
+                >
+                  Sydney
+                </button>
+              </div>
+
+              {mapKind === 'truro' && (
+                <div className="grid grid-cols-2 gap-3">
                 <label className="rounded-2xl bg-stone-50 p-3">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Rows</span>
                   <input
@@ -208,12 +254,13 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
                     className="mt-2 w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-bold text-stone-800 outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </label>
-              </div>
+                </div>
+              )}
 
               <div className="mt-3 rounded-2xl bg-emerald-50 px-4 py-3">
                 <p className="text-xs font-bold uppercase tracking-wider text-emerald-600">Total Zones</p>
                 <p className="mt-1 text-lg font-extrabold text-emerald-800">
-                  {layoutSettings.rows * layoutSettings.sectionsPerRow}
+                  {totalVisibleZones}
                 </p>
               </div>
 
@@ -265,20 +312,23 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
         </div>
       )}
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.98 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="rounded-[1.35rem] border border-stone-200 bg-white p-3 shadow-sm sm:p-4"
-      >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Compact Layout</p>
-            <h3 className="text-base font-extrabold text-stone-800 sm:text-lg">Vertical greenhouse grid</h3>
+      {mapKind === 'sydney' ? (
+        <SydneyMapView zones={sydneyZones} profilesById={profilesById} onSelect={setSelectedZone} />
+      ) : (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="rounded-[1.35rem] border border-stone-200 bg-white p-3 shadow-sm sm:p-4"
+        >
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Compact Layout</p>
+              <h3 className="text-base font-extrabold text-stone-800 sm:text-lg">Vertical greenhouse grid</h3>
+            </div>
+            <p className="shrink-0 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-extrabold uppercase tracking-wider text-stone-500">
+              {layoutSettings.rows} x {layoutSettings.sectionsPerRow}
+            </p>
           </div>
-          <p className="shrink-0 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-extrabold uppercase tracking-wider text-stone-500">
-            {layoutSettings.rows} x {layoutSettings.sectionsPerRow}
-          </p>
-        </div>
 
         <div className="-mx-1 overflow-x-auto px-1 pb-1">
           <div className="flex min-w-max gap-1.5 sm:gap-2">
@@ -325,7 +375,8 @@ export function GreenhouseView({ latestReading, loading, error }: GreenhouseView
             Entrance
           </div>
         </div>
-      </motion.div>
+        </motion.div>
+      )}
 
       <AnimatePresence>
         {mode === 'simulate' && (

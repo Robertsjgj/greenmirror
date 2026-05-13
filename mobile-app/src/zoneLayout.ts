@@ -34,6 +34,8 @@ export interface LayoutSlot {
 export interface VisualZone {
   id: string;
   visualLabel: string;
+  displayLabel?: string;
+  referenceCrop?: string;
   rowLabel: string;
   rowIndex: number;
   section: number;

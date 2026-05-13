@@ -53,7 +53,7 @@ export function ZoneDetailSheet({
                     Visual Zone {zone.visualLabel}
                   </p>
                   <h3 className="truncate text-xl font-extrabold text-stone-900">
-                    {assignedPlant?.name ?? zone.backendZoneId ?? zone.visualLabel}
+                    {assignedPlant?.name ?? zone.displayLabel ?? zone.backendZoneId ?? zone.visualLabel}
                   </h3>
                 </div>
                 <button
@@ -72,6 +72,10 @@ export function ZoneDetailSheet({
                 <InfoTile label="Backend" value={formatValue(zone.backendZoneId)} />
                 <InfoTile label="Node" value={formatValue(zone.nodeId)} />
                 <InfoTile label="Position" value={`${zone.rowLabel}-${zone.section}`} />
+                <InfoTile
+                  label="Reference Crop"
+                  value={zone.referenceCrop ? `${zone.referenceCrop} hint` : 'None'}
+                />
                 <InfoTile label="Moisture" value={zone.soilMoisturePct !== null ? `${zone.soilMoisturePct}%` : 'No data'} />
                 <InfoTile label="Soil Temp" value={zone.soilTempC !== null ? `${zone.soilTempC.toFixed(1)}C` : 'No data'} />
                 <InfoTile label="Raw" value={formatValue(zone.soilMoistureRaw)} />
