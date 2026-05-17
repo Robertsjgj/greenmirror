@@ -303,7 +303,7 @@ export function PlantCare({ latestReading, loading, error }: PlantCareProps) {
           </div>
         )}
 
-        <div className="overflow-y-auto pr-1 lg:max-h-[42rem]">
+        <div className="min-w-0">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {liveSections.map((section, index) => (
               <motion.div

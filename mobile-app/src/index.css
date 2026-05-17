@@ -29,6 +29,14 @@ button {
 
 html {
   background: #f5f5f4;
+  height: 100%;
+  overflow: hidden;
+}
+
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
 }
 
 @media (display-mode: standalone) {

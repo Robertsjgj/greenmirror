@@ -35,7 +35,7 @@ export function ZoneDetailSheet({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-40 bg-stone-950/35 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[70] bg-stone-950/35 backdrop-blur-[2px]"
             aria-label="Close zone details"
           />
           <motion.div
@@ -43,7 +43,7 @@ export function ZoneDetailSheet({
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 28, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 260, damping: 28 }}
-            className="fixed inset-x-0 bottom-0 z-50 mx-auto flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-t-[28px] border border-stone-200 bg-white shadow-2xl sm:inset-y-8 sm:bottom-auto sm:rounded-[28px]"
+            className="fixed inset-x-0 bottom-0 z-[80] mx-auto flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-t-[28px] border border-stone-200 bg-white shadow-2xl sm:inset-y-8 sm:bottom-auto sm:rounded-[28px]"
           >
             <div className="border-b border-stone-100 bg-white/95 px-4 py-3 backdrop-blur">
               <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-stone-200 sm:hidden" />

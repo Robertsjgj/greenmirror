@@ -93,9 +93,9 @@ export function App() {
   const online = !error && Boolean(latestReading);
 
   return (
-    <div className="min-h-screen bg-stone-100 text-stone-900 selection:bg-emerald-100 selection:text-emerald-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col bg-stone-50 shadow-none lg:border-x lg:border-stone-200 lg:shadow-2xl">
-        <header className="sticky top-0 z-40 border-b border-stone-200/70 bg-stone-50/90 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur-xl sm:px-6">
+    <div className="h-[100dvh] min-h-[100dvh] overflow-hidden bg-stone-100 text-stone-900 selection:bg-emerald-100 selection:text-emerald-900">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden bg-stone-50 shadow-none lg:border-x lg:border-stone-200 lg:shadow-2xl">
+        <header className="relative z-40 shrink-0 border-b border-stone-200/70 bg-stone-50/90 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur-xl sm:px-6">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
             <div className="min-w-0">
               <p className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-600">GreenMirror</p>
@@ -119,7 +119,7 @@ export function App() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-5xl flex-1 px-3 py-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:px-6 lg:pb-8">
+        <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto overscroll-contain px-3 py-4 pb-[calc(6.75rem+env(safe-area-inset-bottom))] sm:px-6">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -127,6 +127,7 @@ export function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.18 }}
+              className="min-w-0"
             >
               {activeTab === 'plants' && (
                 <PlantCare latestReading={latestReading} loading={loading} error={error} />
@@ -143,8 +144,9 @@ export function App() {
           </AnimatePresence>
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 z-50 mx-auto w-full border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_30px_rgba(41,37,36,0.08)] backdrop-blur-xl lg:absolute">
-          <div className="mx-auto grid h-[72px] max-w-2xl grid-cols-5 items-center gap-1 px-2">
+        <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-50 px-0 sm:px-4" aria-label="Primary navigation">
+          <div className="pointer-events-auto mx-auto w-full max-w-6xl border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_30px_rgba(41,37,36,0.08)] backdrop-blur-xl sm:mb-3 sm:rounded-[1.5rem] sm:border">
+            <div className="mx-auto grid h-[72px] max-w-2xl grid-cols-5 items-center gap-1 px-2">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -173,6 +175,7 @@ export function App() {
                 </button>
               );
             })}
+            </div>
           </div>
         </nav>
       </div>
