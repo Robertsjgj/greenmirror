@@ -13,7 +13,7 @@ const TONE_STYLES = {
   dry: 'border-amber-700 bg-amber-100 text-amber-900',
   wet: 'border-sky-700 bg-sky-100 text-sky-900',
   alert: 'border-rose-700 bg-rose-100 text-rose-900',
-  'no-data': 'border-[#4a2f18] bg-[#6B4A2B] text-amber-50'
+  'no-data': 'border-stone-300 bg-stone-100 text-stone-500'
 } as const;
 
 const LAYOUT_HEIGHT_UNITS = 112;

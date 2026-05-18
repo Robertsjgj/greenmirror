@@ -1,61 +1,65 @@
 # GreenMirror Mobile App
 
-React/Vite frontend for the GreenMirror greenhouse dashboard. The app is mobile-first, responsive on desktop, and includes a basic PWA manifest/service worker so it can be installed from supported mobile browsers.
+React/Vite frontend for the GreenMirror greenhouse dashboard. Mobile-first, responsive on desktop, installable as a PWA.
 
-## Local Development
+## Local development
 
 ```bash
 npm install
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-By default the frontend reads the backend from:
+**No IP configuration needed.** The app detects the backend automatically at runtime using `window.location.hostname` — it always targets port `5000` on the same host that served the frontend.
 
-```text
-http://192.168.7.202:5000
-```
+| Opened from | Backend used |
+|---|---|
+| `http://localhost:5174` | `http://localhost:5000` |
+| `http://10.9.1.96:5174` | `http://10.9.1.96:5000` |
+| `http://192.168.1.42:5174` | `http://192.168.1.42:5000` |
 
-Override it with `VITE_API_BASE_URL`:
+This works on any network without editing any files.
+
+## Phone testing on local Wi-Fi
+
+1. Start the backend (prints its LAN IP at startup):
+   ```bash
+   USE_SIMULATION=true node server.js
+   ```
+2. Start the frontend exposed on the network:
+   ```bash
+   npm run dev -- --host 0.0.0.0 --port 5174
+   ```
+3. Open the LAN URL from Vite's output on your phone, for example:
+   ```
+   http://10.9.1.96:5174
+   ```
+
+The app will automatically connect to the backend at `http://10.9.1.96:5000`. Phone and computer must be on the same Wi-Fi.
+
+## Manual override
+
+Only needed if the backend runs on a **different machine** than the frontend:
 
 ```bash
-VITE_API_BASE_URL=http://192.168.7.202:5000 npm run dev
+# bash / macOS / Linux
+VITE_API_BASE_URL=http://192.168.1.10:5000 npm run dev
 ```
-
-On Windows PowerShell:
 
 ```powershell
-$env:VITE_API_BASE_URL="http://192.168.7.202:5000"; npm.cmd run dev
+# Windows PowerShell
+$env:VITE_API_BASE_URL="http://192.168.1.10:5000"
+npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-## Phone Testing On Local Wi-Fi
+`VITE_API_BASE_URL` is a build-time Vite variable. When set, it takes priority over the automatic detection.
 
-1. Start the Raspberry Pi backend in simulation mode so it serves live-looking zone data on port `5000`.
-2. Start the frontend on all network interfaces:
-
-```bash
-npm run dev -- --host 0.0.0.0
-```
-
-3. Find your computer's LAN IP address.
-4. Open the Vite URL from your phone, for example:
-
-```text
-http://192.168.7.202:5173
-```
-
-Your phone and computer must be on the same Wi-Fi network. The backend must also be reachable from the phone/browser at:
-
-```text
-http://192.168.7.202:5000
-```
-
-If your backend IP is different, set `VITE_API_BASE_URL` before starting Vite.
-
-## Production Build
+## Production build
 
 ```bash
 npm run build
 ```
+
+For a production build targeting a fixed backend address, set `VITE_API_BASE_URL` before building. Otherwise the auto-detection logic will be included and will work as long as both frontend and backend are served from the same hostname.
 
 The production app includes:
 

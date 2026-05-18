@@ -1,12 +1,23 @@
 const express = require("express");
 const cors = require("cors");
+const os = require("os");
 const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
+
+function getLanIp() {
+  for (const nets of Object.values(os.networkInterfaces())) {
+    for (const net of nets) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "localhost";
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const USE_SIMULATION = process.env.USE_SIMULATION === "true";
 
-// enable CORS for mobile app requests
+// Open CORS — allows any origin (localhost, LAN IPs, phone browsers on same Wi-Fi).
+// Fine for local/embedded use; tighten if this ever faces the public internet.
 app.use(cors());
 
 // allow JSON
@@ -93,6 +104,10 @@ if (USE_SIMULATION) {
   console.log(`Simulation mode ON; updating every ${UPDATE_INTERVAL_MS / 1000}s`);
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  const lan = getLanIp();
+  console.log(`🚀 GreenMirror API ready`);
+  console.log(`   Local:   http://localhost:${PORT}`);
+  console.log(`   Network: http://${lan}:${PORT}`);
+  console.log(`   Frontend on the same machine will auto-detect http://${lan}:5174`);
 });

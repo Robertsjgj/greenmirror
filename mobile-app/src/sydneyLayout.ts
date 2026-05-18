@@ -62,12 +62,10 @@ export function mapZonesToSydneyLayout(
   latestReading: LatestReading | null,
   zoneAssignments: Record<string, string> = {}
 ): SydneyVisualZone[] {
-  const readingsByZone = new Map(
-    (latestReading?.zones ?? []).map((zone) => [normalizeZoneId(zone.zone_id), zone])
-  );
+  const orderedReadings = latestReading?.zones ?? [];
 
   return SYDNEY_BEDS.map((bed, index) => {
-    const reading = readingsByZone.get(normalizeZoneId(bed.id));
+    const reading = orderedReadings[index];
 
     return {
       id: reading ? `${reading.node_id ?? 'node'}-${reading.zone_id}-${bed.id}` : `empty-${bed.id}`,
@@ -96,8 +94,4 @@ export function mapZonesToSydneyLayout(
       height: bed.height
     };
   });
-}
-
-function normalizeZoneId(zoneId: string | undefined) {
-  return (zoneId ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }

@@ -15,28 +15,46 @@ GreenMirror is a modular greenhouse monitoring and automation system.
 - `mobile-app/` -> responsive web app and installable PWA
 - `docs/` -> system design and notes
 
-## Phone Testing
+## How local networking works
 
-Start the backend in simulation mode, then start the frontend from `mobile-app/` with:
+The frontend automatically detects the correct backend URL at runtime using `window.location.hostname`. No IP addresses need to be configured or hardcoded.
 
-```bash
-npm run dev -- --host 0.0.0.0
+| Frontend URL | API auto-detected as |
+|---|---|
+| `http://localhost:5174` | `http://localhost:5000` |
+| `http://192.168.1.42:5174` | `http://192.168.1.42:5000` |
+| `http://10.9.1.96:5174` | `http://10.9.1.96:5000` |
+
+The backend binds to `0.0.0.0` and prints both the local and LAN URLs at startup.
+
+## Quick start
+
+**Backend** (from `raspberry-pi/`):
+```powershell
+USE_SIMULATION=true node server.js
 ```
 
-Open the app on a phone using the computer IP and Vite port, for example:
-
-```text
-http://192.168.7.202:5173
+**Frontend** (from `mobile-app/`):
+```powershell
+npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-The phone and computer must be on the same Wi-Fi, and the backend must be reachable at:
+That's it. Open `http://localhost:5174` in a browser, or use the LAN IP printed by Vite to open the app on a phone.
 
-```text
-http://192.168.7.202:5000
-```
+## Phone testing
 
-Set `VITE_API_BASE_URL` in `mobile-app/` to point at a different backend:
+1. Start the backend — it prints the LAN IP at startup (e.g. `http://10.9.1.96:5000`).
+2. Start the frontend with `--host 0.0.0.0` so Vite is reachable on the network.
+3. Open the LAN URL on your phone (e.g. `http://10.9.1.96:5174`).
+4. The app automatically targets the backend at the same IP on port 5000.
 
-```bash
-VITE_API_BASE_URL=http://192.168.7.202:5000 npm run dev
+Phone and computer must be on the same Wi-Fi. No env vars or config edits required.
+
+## Manual override
+
+If the backend runs on a different machine than the frontend, set `VITE_API_BASE_URL` before building or running dev:
+
+```powershell
+$env:VITE_API_BASE_URL="http://192.168.1.10:5000"
+npm run dev -- --host 0.0.0.0 --port 5174
 ```
