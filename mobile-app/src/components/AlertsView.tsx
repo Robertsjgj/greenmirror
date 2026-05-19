@@ -1,28 +1,23 @@
 import { useMemo, useState } from 'react';
-import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
-import type { VisualZone } from '../zoneLayout';
+import { ZoneAlert, evaluateAllAlerts } from '../alertRules';
+import { PlantProfile } from '../plantProfiles';
+import { VisualZone } from '../zoneLayout';
 
 interface AlertsViewProps {
   zones: VisualZone[];
   loading: boolean;
   error: string | null;
-  plantProfiles: PlantProfile[];
   profilesById: Map<string, PlantProfile>;
   onOpenZone: (zone: VisualZone) => void;
 }
 
-type AlertTone = 'alert' | 'dry' | 'wet';
+type FilterKind = 'all' | 'critical' | 'moisture' | 'temperature' | 'sensor';
 
-interface AlertEntry {
-  zone: VisualZone;
-  kind: string;
-  status: AlertTone;
-}
-
-const STATUS_COLOR: Record<AlertTone, string> = {
-  alert: 'var(--alert)',
-  dry:   'var(--dry)',
-  wet:   'var(--wet)',
+const TYPE_ICON: Record<string, string> = {
+  moisture:    '💧',
+  temperature: '🌡️',
+  sensor:      '⚠️',
+  node:        '📶',
 };
 
 export function AlertsView({
@@ -30,59 +25,89 @@ export function AlertsView({
   profilesById,
   onOpenZone,
 }: AlertsViewProps) {
-  const [filter, setFilter] = useState<'all' | AlertTone>('all');
+  const [filter, setFilter] = useState<FilterKind>('all');
 
-  const alertsList = useMemo<AlertEntry[]>(() => {
-    const out: AlertEntry[] = [];
-    zones.forEach((z) => {
-      const profile = z.assignedPlantProfile ?? (z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
-      const evaluation = evaluateZoneAgainstPlant(z, profile);
-      if (evaluation.tone === 'good' || evaluation.tone === 'no-data') return;
-      const status: AlertTone = evaluation.tone === 'wet' ? 'wet' : evaluation.tone === 'dry' ? 'dry' : 'alert';
-      evaluation.messages.forEach((message) => out.push({ zone: z, kind: message, status }));
-    });
-  return out;
-  }, [zones, profilesById]);
+  const allAlerts = useMemo(
+    () => evaluateAllAlerts(zones, profilesById),
+    [zones, profilesById]
+  );
 
-  const filtered = filter === 'all' ? alertsList : alertsList.filter((a) => a.status === filter);
-  const time = useMemo(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), []);
+  const counts = useMemo(() => ({
+    critical:    allAlerts.filter((a) => a.severity === 'critical').length,
+    warning:     allAlerts.filter((a) => a.severity === 'warning').length,
+    moisture:    allAlerts.filter((a) => a.type === 'moisture').length,
+    temperature: allAlerts.filter((a) => a.type === 'temperature').length,
+    sensor:      allAlerts.filter((a) => a.type === 'sensor' || a.type === 'node').length,
+  }), [allAlerts]);
 
-  const counts = {
-    alert: alertsList.filter((a) => a.status === 'alert').length,
-    dry:   alertsList.filter((a) => a.status === 'dry').length,
-    wet:   alertsList.filter((a) => a.status === 'wet').length,
-  };
+  const filtered = useMemo(() => {
+    let list = allAlerts;
+    if (filter === 'critical')    list = allAlerts.filter((a) => a.severity === 'critical');
+    if (filter === 'moisture')    list = allAlerts.filter((a) => a.type === 'moisture');
+    if (filter === 'temperature') list = allAlerts.filter((a) => a.type === 'temperature');
+    if (filter === 'sensor')      list = allAlerts.filter((a) => a.type === 'sensor' || a.type === 'node');
+    return [...list].sort((a, b) =>
+      a.severity === b.severity ? 0 : a.severity === 'critical' ? -1 : 1
+    );
+  }, [allAlerts, filter]);
+
+  const time = useMemo(
+    () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    []
+  );
+
+  const headerColor =
+    counts.critical > 0 ? 'var(--alert)' :
+    allAlerts.length > 0 ? 'var(--dry)' :
+    'var(--good)';
 
   return (
     <div style={{ padding: '12px 16px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
 
+      {/* Backend offline banner */}
+      {error && (
+        <div className="gm-card" style={{ padding: 14, borderLeft: '3px solid var(--alert)', background: 'var(--alert-soft)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20 }}>📡</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--alert)' }}>Backend offline</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 2, fontWeight: 600 }}>
+                Cannot reach sensors — last known data shown.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header card */}
       <div className="gm-card" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: 'var(--ink-3)' }}>
               ACTIVE ALERTS
             </div>
             <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 30, lineHeight: 1, color: 'var(--ink)', marginTop: 4, fontWeight: 800 }}>
-              <span style={{ fontVariantNumeric: 'tabular-nums', color: alertsList.length > 0 ? 'var(--alert)' : 'var(--good)' }}>
-                {loading ? '…' : alertsList.length}
+              <span style={{ fontVariantNumeric: 'tabular-nums', color: headerColor }}>
+                {loading ? '…' : allAlerts.length}
               </span>{' '}
               <span style={{ fontSize: 18, color: 'var(--ink-2)' }}>
-                across {zones.length} zone{zones.length !== 1 ? 's' : ''}
+                {allAlerts.length === 1 ? 'alert' : 'alerts'}
               </span>
             </div>
-            {error && (
-              <div style={{ fontSize: 12, color: 'var(--alert)', marginTop: 4, fontWeight: 600 }}>
-                Backend offline: {error}
-              </div>
-            )}
           </div>
-          <div style={{
-            padding: '6px 10px', background: 'var(--bg-sub)', borderRadius: 99,
-            fontSize: 12, fontWeight: 600, color: 'var(--ink-2)',
-            fontVariantNumeric: 'tabular-nums',
-          }}>
-            {time}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <div style={{ fontVariantNumeric: 'tabular-nums', fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>
+              {time}
+            </div>
+            {counts.critical > 0 && (
+              <span className="gm-chip alert">{counts.critical} critical</span>
+            )}
+            {counts.warning > 0 && (
+              <span className="gm-chip dry">{counts.warning} warning{counts.warning !== 1 ? 's' : ''}</span>
+            )}
+            {counts.sensor > 0 && counts.critical === 0 && counts.warning === 0 && (
+              <span className="gm-chip outline">{counts.sensor} sensor</span>
+            )}
           </div>
         </div>
       </div>
@@ -90,10 +115,11 @@ export function AlertsView({
       {/* Filter chips */}
       <div className="gm-filter-chips">
         {([
-          { value: 'all',   label: 'All',      count: alertsList.length },
-          { value: 'alert', label: 'Critical',  count: counts.alert },
-          { value: 'dry',   label: 'Dry',       count: counts.dry },
-          { value: 'wet',   label: 'Wet',       count: counts.wet },
+          { value: 'all',         label: 'All',         count: allAlerts.length },
+          { value: 'critical',    label: 'Critical',    count: counts.critical },
+          { value: 'moisture',    label: 'Water',       count: counts.moisture },
+          { value: 'temperature', label: 'Temperature', count: counts.temperature },
+          { value: 'sensor',      label: 'Sensor',      count: counts.sensor },
         ] as const).map((o) => (
           <button
             key={o.value}
@@ -110,62 +136,88 @@ export function AlertsView({
 
       {/* Alert list */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {filtered.length === 0 ? (
+        {loading ? (
           <div className="gm-card" style={{ padding: 28, textAlign: 'center', color: 'var(--ink-3)' }}>
-            <div style={{ fontSize: 28, marginBottom: 6 }}>🌿</div>
-            <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>All clear</div>
-            <div style={{ fontSize: 12, marginTop: 2 }}>
-              {loading ? 'Loading sensor data…' : 'No alerts in this filter.'}
+            <div style={{ fontSize: 28, marginBottom: 6 }}>🔄</div>
+            <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Checking sensor data…</div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="gm-card" style={{ padding: 32, textAlign: 'center', color: 'var(--ink-3)' }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🌿</div>
+            <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontSize: 17, fontFamily: "'Baloo 2', system-ui" }}>
+              No urgent alerts.
+            </div>
+            <div style={{ fontSize: 13, marginTop: 4, color: 'var(--ink-3)', fontWeight: 600 }}>
+              Your garden looks steady.
             </div>
           </div>
-        ) : filtered.map((a, i) => {
-          const { zone: z, kind, status } = a;
-          const profile = z.assignedPlantProfile ?? (z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
-          return (
-            <button
-              key={`${z.visualLabel}-${i}`}
-              onClick={() => onOpenZone(z)}
-              className="gm-card"
-              style={{
-                textAlign: 'left',
-                padding: 14,
-                display: 'flex', flexDirection: 'column', gap: 8,
-                borderLeft: `3px solid ${STATUS_COLOR[status]}`,
-                cursor: 'pointer',
-                width: '100%',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>
-                    {z.displayLabel ?? z.visualLabel}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-                    {z.nodeId ? `${z.nodeId} · ` : ''}{z.backendZoneId}
-                  </div>
-                </div>
-                <span className={`gm-chip ${status}`}>
-                  {kind}
-                </span>
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                {profile && (
-                  <span className="gm-chip primary">
-                    {profile.icon ?? '🌱'} {profile.name}
-                  </span>
-                )}
-                <span className="gm-chip" style={{ background: 'var(--bg-sub)', color: 'var(--ink-2)' }}>
-                  💧 {z.soilMoisturePct != null ? `${z.soilMoisturePct}%` : '—'}
-                </span>
-                <span className="gm-chip" style={{ background: 'var(--bg-sub)', color: 'var(--ink-2)' }}>
-                  🌡 {z.soilTempC != null ? `${z.soilTempC.toFixed(1)}°C` : '—'}
-                </span>
-              </div>
-            </button>
-          );
-        })}
+        ) : filtered.map((alert) => (
+          <AlertCard
+            key={alert.id}
+            alert={alert}
+            onOpen={() => onOpenZone(alert.zone)}
+          />
+        ))}
       </div>
 
     </div>
+  );
+}
+
+function AlertCard({ alert, onOpen }: { alert: ZoneAlert; onOpen: () => void }) {
+  const isCritical = alert.severity === 'critical';
+  const tone = isCritical ? 'alert' : 'dry';
+
+  return (
+    <button
+      onClick={onOpen}
+      className="gm-card"
+      style={{
+        textAlign: 'left', width: '100%',
+        padding: 14, cursor: 'pointer',
+        display: 'flex', flexDirection: 'column', gap: 8,
+        borderLeft: `3px solid var(--${tone})`,
+        background: `var(--${tone}-soft)`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>{TYPE_ICON[alert.type] ?? '⚠️'}</span>
+          <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)', lineHeight: 1.2 }}>
+            {alert.title}
+          </div>
+        </div>
+        <span className={`gm-chip ${tone}`} style={{ flexShrink: 0 }}>
+          {isCritical ? 'Critical' : 'Warning'}
+        </span>
+      </div>
+
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, paddingLeft: 24 }}>
+        {alert.message}
+      </div>
+
+      {(alert.plantName || alert.displayLabel) && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', paddingLeft: 24 }}>
+          {alert.plantName && (
+            <span className="gm-chip primary">🌱 {alert.plantName}</span>
+          )}
+          {alert.displayLabel && (
+            <span className="gm-chip" style={{ background: 'var(--bg-sub)', color: 'var(--ink-2)' }}>
+              {alert.displayLabel}
+            </span>
+          )}
+        </div>
+      )}
+
+      {alert.action && (
+        <div style={{
+          fontSize: 11.5, fontWeight: 700,
+          color: isCritical ? 'var(--alert)' : 'oklch(0.5 0.13 65)',
+          paddingLeft: 24,
+        }}>
+          → {alert.action}
+        </div>
+      )}
+    </button>
   );
 }

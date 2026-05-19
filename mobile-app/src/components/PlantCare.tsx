@@ -59,14 +59,14 @@ export function PlantCare({
 
   const tasks = useMemo(() => {
     return zones
-      .map((z) => buildTask(z, z.assignedPlantProfile ?? (z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null)))
+      .map((z) => buildTask(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null))
       .filter((t): t is Task => t !== null);
   }, [zones, profilesById]);
 
   const summary = useMemo(() => {
     let good = 0, attention = 0;
     zones.forEach((z) => {
-      const evaluation = evaluateZoneAgainstPlant(z, z.assignedPlantProfile ?? (z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null));
+      const evaluation = evaluateZoneAgainstPlant(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
       if (evaluation.tone === 'good') good++;
       else if (evaluation.tone !== 'no-data') attention++;
     });

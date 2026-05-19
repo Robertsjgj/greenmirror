@@ -44,13 +44,13 @@ export function GreenhouseView({
   const [waterVol, setWaterVol] = useState(200);
 
   const sydneyZones = useMemo(
-    () => mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById),
-    [latestReading, zoneAssignments, profilesById]
+    () => mapZonesToSydneyLayout(latestReading, zoneAssignments),
+    [latestReading, zoneAssignments]
   );
 
   const truroLayout = useMemo(
-    () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments, profilesById),
-    [latestReading, layoutSettings, zoneAssignments, profilesById]
+    () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments),
+    [latestReading, layoutSettings, zoneAssignments]
   );
 
   const zones = mapKind === 'sydney'
@@ -60,7 +60,7 @@ export function GreenhouseView({
   const counts = useMemo(() => {
     const c = { good: 0, dry: 0, wet: 0, alert: 0, nodata: 0 };
     zones.forEach((z) => {
-      const evaluation = evaluateZoneAgainstPlant(z, z.assignedPlantProfile ?? (z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null));
+      const evaluation = evaluateZoneAgainstPlant(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
       if (evaluation.tone === 'no-data') c.nodata++;
       else if (evaluation.tone === 'dry') c.dry++;
       else if (evaluation.tone === 'wet') c.wet++;

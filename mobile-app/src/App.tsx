@@ -82,7 +82,7 @@ export function App() {
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
-  const [zoneSheetZone, setZoneSheetZone] = useState<import('./zoneLayout').VisualZone | null>(null);
+  const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -134,11 +134,11 @@ export function App() {
 
   const resolvedZones = useMemo((): VisualZone[] => {
     if (mapKind === 'sydney') {
-      return mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById);
+      return mapZonesToSydneyLayout(latestReading, zoneAssignments);
     }
-    return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments, profilesById)
+    return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments)
       .rows.flatMap((r) => r.zones);
-  }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
+  }, [mapKind, latestReading, layoutSettings, zoneAssignments]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -283,7 +283,6 @@ export function App() {
             zones={resolvedZones}
             loading={loading}
             error={error}
-            plantProfiles={plantProfiles}
             profilesById={profilesById}
             onOpenZone={setZoneSheetZone}
           />
