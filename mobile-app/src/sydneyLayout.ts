@@ -1,4 +1,5 @@
 import { LatestReading, VisualZone } from './zoneLayout';
+import type { PlantProfile } from './plantProfiles';
 
 interface SydneyBed {
   id: string;
@@ -60,12 +61,18 @@ export const SYDNEY_BEDS: SydneyBed[] = [
 
 export function mapZonesToSydneyLayout(
   latestReading: LatestReading | null,
-  zoneAssignments: Record<string, string> = {}
+  zoneAssignments: Record<string, string> = {},
+  profilesById?: Map<string, PlantProfile>
 ): SydneyVisualZone[] {
+  const readingsByZone = new Map(
+    (latestReading?.zones ?? []).map((zone) => [normalizeZoneId(zone.zone_id), zone])
+  );
   const orderedReadings = latestReading?.zones ?? [];
 
   return SYDNEY_BEDS.map((bed, index) => {
-    const reading = orderedReadings[index];
+    const reading = readingsByZone.get(normalizeZoneId(bed.id)) ?? orderedReadings[index];
+    const assignedPlant = zoneAssignments[bed.id] ?? null;
+    const assignedPlantProfile = assignedPlant && profilesById ? profilesById.get(assignedPlant) ?? null : null;
 
     return {
       id: reading ? `${reading.node_id ?? 'node'}-${reading.zone_id}-${bed.id}` : `empty-${bed.id}`,
@@ -85,7 +92,9 @@ export function mapZonesToSydneyLayout(
       alerts: reading?.alerts ?? [],
       timestamp: latestReading?.timestamp,
       hasReading: Boolean(reading),
-      assignedPlant: zoneAssignments[bed.id] ?? null,
+      assignedPlant,
+      assignedPlantProfile,
+      assignedPlantMissing: Boolean(assignedPlant && profilesById && !assignedPlantProfile),
       area: bed.area,
       shape: bed.shape,
       x: bed.x,
@@ -94,4 +103,8 @@ export function mapZonesToSydneyLayout(
       height: bed.height
     };
   });
+}
+
+function normalizeZoneId(zoneId: string | undefined) {
+  return (zoneId ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }

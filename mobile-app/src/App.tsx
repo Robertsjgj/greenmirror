@@ -1,184 +1,343 @@
-import { useEffect, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
-import { Bell, Droplets, Map, Sprout, Sun, Wifi, WifiOff } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsView } from './components/AlertsView';
 import { EnvironmentView } from './components/EnvironmentView';
 import { GreenhouseView } from './components/GreenhouseView';
 import { PlantCare } from './components/PlantCare';
+import { PlantEditorSheet } from './components/PlantEditorSheet';
 import { SimpleRunoff } from './components/SimpleRunoff';
+import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
+import { ZoneDetailSheet } from './components/ZoneDetailSheet';
 import { LATEST_READING_URL } from './config';
+import {
+  PlantProfile,
+  ZoneAssignments,
+  DEFAULT_PLANT_PROFILES,
+  isDefaultPlantProfile,
+  loadPlantProfiles,
+  loadZoneAssignments,
+  savePlantProfiles,
+  saveZoneAssignments
+} from './plantProfiles';
+import { mapZonesToSydneyLayout } from './sydneyLayout';
+import {
+  LatestReading,
+  LayoutSettings,
+  VisualZone,
+  createDefaultSettings,
+  mapZonesToLayout,
+  sanitizeSettings
+} from './zoneLayout';
+
+export type MapKind = 'truro' | 'sydney';
+
+const LAYOUT_SETTINGS_KEY = 'greenmirror-map-layout-settings';
+
+function loadStoredLayoutSettings(): LayoutSettings {
+  try {
+    const raw = window.localStorage.getItem(LAYOUT_SETTINGS_KEY);
+    if (!raw) return createDefaultSettings();
+    return sanitizeSettings(JSON.parse(raw));
+  } catch {
+    return createDefaultSettings();
+  }
+}
 
 type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 
-interface ZoneReading {
-  zone_id: string;
-  node_id?: string;
-  greenhouse_id?: string;
-  soil_moisture_raw?: number | null;
-  soil_moisture_pct: number | null;
-  soil_temp_c: number | null;
-  soil_temp_status?: string | null;
-  alerts: string[];
+const MAP_KIND_KEY = 'greenmirror-map-kind';
+
+function loadMapKind(): MapKind {
+  if (typeof window === 'undefined') return 'truro';
+  return window.localStorage.getItem(MAP_KIND_KEY) === 'sydney' ? 'sydney' : 'truro';
 }
 
-interface LatestReading {
-  mode?: string;
-  node_id?: string;
-  greenhouse_id: string;
-  node_count?: number;
-  zone_count?: number;
-  zones: ZoneReading[];
-  timestamp?: string;
-}
+const SITE_INFO: Record<MapKind, { name: string; region: string }> = {
+  sydney: { name: 'Sydney', region: 'Sydney, NSW' },
+  truro: { name: 'Truro', region: 'Truro, Cornwall' }
+};
 
-const tabs = [
-  {
-    id: 'plants',
-    label: 'Plants',
-    icon: Sprout
-  },
-  {
-    id: 'greenhouse',
-    label: 'Map',
-    icon: Map
-  },
-  {
-    id: 'environment',
-    label: 'Weather',
-    icon: Sun
-  },
-  {
-    id: 'alerts',
-    label: 'Alerts',
-    icon: Bell
-  },
-  {
-    id: 'runoff',
-    label: 'Runoff',
-    icon: Droplets
-  }
-] as const;
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: 'plants',      label: 'Plants',  icon: '🌱' },
+  { id: 'greenhouse',  label: 'Map',     icon: '🗺️' },
+  { id: 'environment', label: 'Weather', icon: '☀️' },
+  { id: 'alerts',      label: 'Alerts',  icon: '🔔' },
+  { id: 'runoff',      label: 'Runoff',  icon: '💧' },
+];
+
+const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (site: MapKind) => string }> = {
+  plants:      { title: 'Good morning!',   emoji: '🌤',  sub: () => 'GreenMirror Garden' },
+  greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (s) => `${SITE_INFO[s].name} layout` },
+  environment: { title: "Today's weather", emoji: '☀️',  sub: (s) => `Inside ${SITE_INFO[s].name}` },
+  alerts:      { title: 'Heads up!',       emoji: '🔔',  sub: () => 'Things to check' },
+  runoff:      { title: 'Water tracker',   emoji: '💧',  sub: () => 'Where your water goes' },
+};
 
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('plants');
   const [latestReading, setLatestReading] = useState<LatestReading | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [mapKind, setMapKind] = useState<MapKind>(loadMapKind);
+  const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
+  const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
+  const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
+  const [siteSheetOpen, setSiteSheetOpen] = useState(false);
+  const [zoneSheetZone, setZoneSheetZone] = useState<import('./zoneLayout').VisualZone | null>(null);
+  const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const fetchLatestReading = async () => {
+  // API polling
+  const fetchReading = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch(LATEST_READING_URL);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const text = await response.text();
+      const res = await fetch(LATEST_READING_URL);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
       const data = text ? JSON.parse(text) : null;
       setLatestReading(data?.zones?.length ? data : null);
       setError(null);
-    } catch (fetchError: unknown) {
+    } catch (e: unknown) {
       setLatestReading(null);
-      setError(fetchError instanceof Error ? fetchError.message : 'Unable to fetch latest reading');
+      setError(e instanceof Error ? e.message : 'Fetch failed');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchLatestReading();
-    const interval = setInterval(fetchLatestReading, 8000);
-    return () => clearInterval(interval);
   }, []);
 
-  const online = !error && Boolean(latestReading);
+  useEffect(() => {
+    fetchReading();
+    const id = setInterval(fetchReading, 8000);
+    return () => clearInterval(id);
+  }, [fetchReading]);
+
+  // Persist state
+  useEffect(() => { savePlantProfiles(plantProfiles); }, [plantProfiles]);
+  useEffect(() => { saveZoneAssignments(zoneAssignments); }, [zoneAssignments]);
+  useEffect(() => { window.localStorage.setItem(MAP_KIND_KEY, mapKind); }, [mapKind]);
+  useEffect(() => {
+    window.localStorage.setItem(LAYOUT_SETTINGS_KEY, JSON.stringify(layoutSettings));
+  }, [layoutSettings]);
+
+  // Reset scroll on tab change
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+    setScrolled(false);
+  }, [activeTab]);
+
+  const profilesById = useMemo(
+    () => new Map(plantProfiles.map((p) => [p.id, p])),
+    [plantProfiles]
+  );
+
+  const resolvedZones = useMemo((): VisualZone[] => {
+    if (mapKind === 'sydney') {
+      return mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById);
+    }
+    return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments, profilesById)
+      .rows.flatMap((r) => r.zones);
+  }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2200);
+  }, []);
+
+  // Plant profile CRUD
+  const onAddProfile = useCallback((prefill?: string) => {
+    if (prefill) {
+      setEditorProfile({
+        id: '',
+        name: prefill,
+        icon: '🌱',
+        moistureMin: 50,
+        moistureMax: 70,
+        soilTempMin: 15,
+        soilTempMax: 25
+      });
+    } else {
+      setEditorProfile('new');
+    }
+  }, []);
+
+  const onEditProfile = useCallback((p: PlantProfile) => {
+    setEditorProfile(p);
+  }, []);
+
+  const onSaveProfile = useCallback((p: PlantProfile) => {
+    setPlantProfiles((list) => {
+      const idx = list.findIndex((x) => x.id === p.id);
+      if (idx === -1) return [...list, p];
+      const next = [...list];
+      next[idx] = p;
+      return next;
+    });
+    setEditorProfile(null);
+    showToast(p.name ? `Saved ${p.name}` : 'Profile saved');
+  }, [showToast]);
+
+  const onDeleteProfile = useCallback((id: string) => {
+    const p = plantProfiles.find((x) => x.id === id);
+    setPlantProfiles((list) => list.filter((x) => x.id !== id));
+    setZoneAssignments((a) => {
+      const next = { ...a };
+      Object.keys(next).forEach((k) => { if (next[k] === id) delete next[k]; });
+      return next;
+    });
+    setEditorProfile(null);
+    showToast(`Deleted ${p?.name ?? 'profile'}`);
+  }, [plantProfiles, showToast]);
+
+  const onResetProfile = useCallback((id: string) => {
+    const def = DEFAULT_PLANT_PROFILES.find((p) => p.id === id);
+    if (!def) return;
+    setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
+    setEditorProfile(null);
+    showToast(`Reset ${def.name} to defaults`);
+  }, [showToast]);
+
+  const onAssignPlant = useCallback((zoneKey: string, plantId: string | null) => {
+    setZoneAssignments((a) => {
+      const next = { ...a };
+      if (plantId) {
+        next[zoneKey] = plantId;
+      } else {
+        delete next[zoneKey];
+      }
+      return next;
+    });
+    setZoneSheetZone((z) =>
+      z && z.visualLabel === zoneKey
+        ? {
+            ...z,
+            assignedPlant: plantId,
+            assignedPlantProfile: plantId ? profilesById.get(plantId) ?? null : null,
+            assignedPlantMissing: Boolean(plantId && !profilesById.has(plantId))
+          }
+        : z
+    );
+  }, [profilesById]);
+
+  const g = TAB_GREETINGS[activeTab];
 
   return (
-    <div className="h-[100dvh] min-h-[100dvh] overflow-hidden bg-stone-100 text-stone-900 selection:bg-emerald-100 selection:text-emerald-900">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden bg-stone-50 shadow-none lg:border-x lg:border-stone-200 lg:shadow-2xl">
-        <header className="relative z-40 shrink-0 border-b border-stone-200/70 bg-stone-50/90 px-4 pb-3 pt-[calc(env(safe-area-inset-top)+0.75rem)] backdrop-blur-xl sm:px-6">
-          <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-600">GreenMirror</p>
-              <h1 className="truncate text-xl font-extrabold tracking-tight text-stone-900 sm:text-2xl">
-                Garden Control
-              </h1>
-            </div>
+    <div className="gm-app">
+      {/* HEADER */}
+      <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
+        <div className="gm-brand">
+          <h1>
+            {g.title} <span style={{ fontSize: 20, lineHeight: 1 }}>{g.emoji}</span>
+          </h1>
+          <small>{g.sub(mapKind)}</small>
+        </div>
+        <button
+          className="gm-avatar"
+          onClick={() => setSiteSheetOpen(true)}
+          aria-label="Switch greenhouse site"
+        >
+          👩‍🌾
+        </button>
+      </header>
 
-            <div
-              className={`flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-extrabold ${
-                online
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                  : error
-                  ? 'border-rose-200 bg-rose-50 text-rose-700'
-                  : 'border-stone-200 bg-white text-stone-500'
-              }`}
-            >
-              {online ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-              <span>{online ? 'Live' : loading ? 'Syncing' : 'Offline'}</span>
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto overscroll-contain px-3 py-4 pb-[calc(6.75rem+env(safe-area-inset-bottom))] sm:px-6">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18 }}
-              className="min-w-0"
-            >
-              {activeTab === 'plants' && (
-                <PlantCare latestReading={latestReading} loading={loading} error={error} />
-              )}
-              {activeTab === 'greenhouse' && (
-                <GreenhouseView latestReading={latestReading} loading={loading} error={error} />
-              )}
-              {activeTab === 'environment' && <EnvironmentView />}
-              {activeTab === 'alerts' && (
-                <AlertsView latestReading={latestReading} loading={loading} error={error} />
-              )}
-              {activeTab === 'runoff' && <SimpleRunoff />}
-            </motion.div>
-          </AnimatePresence>
-        </main>
-
-        <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-50 px-0 sm:px-4" aria-label="Primary navigation">
-          <div className="pointer-events-auto mx-auto w-full max-w-6xl border-t border-stone-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_30px_rgba(41,37,36,0.08)] backdrop-blur-xl sm:mb-3 sm:rounded-[1.5rem] sm:border">
-            <div className="mx-auto grid h-[72px] max-w-2xl grid-cols-5 items-center gap-1 px-2">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`relative flex h-14 min-w-0 flex-col items-center justify-center rounded-2xl transition-all duration-200 ${
-                    isActive ? 'text-emerald-700' : 'text-stone-500 hover:bg-stone-50'
-                  }`}
-                >
-                  <div
-                    className={`mb-0.5 rounded-xl p-2 transition-colors duration-200 ${
-                      isActive ? 'bg-emerald-100 text-emerald-600' : 'text-stone-400'
-                    }`}
-                  >
-                    <Icon className="h-5 w-5" strokeWidth={isActive ? 2.5 : 2} />
-                  </div>
-                  <span className="truncate text-[10px] font-bold">{tab.label}</span>
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeMobileTab"
-                      className="absolute -top-2 left-1/2 h-1 w-8 -translate-x-1/2 rounded-full bg-emerald-500"
-                    />
-                  )}
-                </button>
-              );
-            })}
-            </div>
-          </div>
-        </nav>
+      {/* SCROLL BODY */}
+      <div
+        className="gm-scroll"
+        ref={scrollRef}
+        onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
+      >
+        {activeTab === 'plants' && (
+          <PlantCare
+            zones={resolvedZones}
+            loading={loading}
+            error={error}
+            plantProfiles={plantProfiles}
+            profilesById={profilesById}
+            onOpenZone={setZoneSheetZone}
+            onAddProfile={onAddProfile}
+            onEditProfile={onEditProfile}
+            onToast={showToast}
+          />
+        )}
+        {activeTab === 'greenhouse' && (
+          <GreenhouseView
+            latestReading={latestReading}
+            loading={loading}
+            error={error}
+            mapKind={mapKind}
+            setMapKind={setMapKind}
+            profilesById={profilesById}
+            zoneAssignments={zoneAssignments}
+            onAssignPlant={onAssignPlant}
+            onOpenZone={setZoneSheetZone}
+            onToast={showToast}
+            layoutSettings={layoutSettings}
+            setLayoutSettings={setLayoutSettings}
+          />
+        )}
+        {activeTab === 'environment' && <EnvironmentView site={mapKind} />}
+        {activeTab === 'alerts' && (
+          <AlertsView
+            zones={resolvedZones}
+            loading={loading}
+            error={error}
+            plantProfiles={plantProfiles}
+            profilesById={profilesById}
+            onOpenZone={setZoneSheetZone}
+          />
+        )}
+        {activeTab === 'runoff' && <SimpleRunoff />}
       </div>
+
+      {/* BOTTOM NAV */}
+      <nav className="gm-tabbar" aria-label="Primary navigation">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            className={`gm-tab${activeTab === tab.id ? ' active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <span className="gm-tab-glyph" style={{ fontSize: 20 }}>{tab.icon}</span>
+            <span>{tab.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* TOAST */}
+      <div className={`gm-toast${toast ? ' show' : ''}`} aria-live="polite">
+        <span style={{ fontSize: 16 }}>✓</span>
+        <span>{toast}</span>
+      </div>
+
+      {/* SHEETS */}
+      <SiteSwitcherSheet
+        open={siteSheetOpen}
+        onClose={() => setSiteSheetOpen(false)}
+        site={mapKind}
+        setSite={(s) => { setMapKind(s); setSiteSheetOpen(false); }}
+      />
+
+      <ZoneDetailSheet
+        zone={zoneSheetZone}
+        plantProfiles={plantProfiles}
+        profilesById={profilesById}
+        zoneAssignments={zoneAssignments}
+        onAssignPlant={onAssignPlant}
+        onClose={() => setZoneSheetZone(null)}
+        onToast={showToast}
+      />
+
+      <PlantEditorSheet
+        open={editorProfile !== null}
+        profile={editorProfile === 'new' ? null : editorProfile}
+        isDefault={editorProfile !== null && editorProfile !== 'new' && isDefaultPlantProfile((editorProfile as PlantProfile).id)}
+        onClose={() => setEditorProfile(null)}
+        onSave={onSaveProfile}
+        onDelete={onDeleteProfile}
+        onReset={onResetProfile}
+      />
     </div>
   );
 }

@@ -1,180 +1,465 @@
-import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, Leaf, X } from 'lucide-react';
-import { PlantProfile, getPlantStatusMessages } from '../plantProfiles';
+import { useState } from 'react';
+import { PlantProfile, ZoneAssignments, evaluateZoneAgainstPlant } from '../plantProfiles';
 import { VisualZone } from '../zoneLayout';
 
 interface ZoneDetailSheetProps {
   zone: VisualZone | null;
   plantProfiles: PlantProfile[];
-  assignedPlant: PlantProfile | null;
-  onAssignPlant: (visualLabel: string, plantId: string | null) => void;
+  profilesById: Map<string, PlantProfile>;
+  zoneAssignments: ZoneAssignments;
+  onAssignPlant: (zoneKey: string, plantId: string | null) => void;
   onClose: () => void;
+  onToast: (msg: string) => void;
 }
 
-function formatValue(value: string | number | null | undefined, fallback = 'No data') {
-  if (value === null || value === undefined || value === '') return fallback;
-  return String(value);
-}
+type Tone = 'good' | 'dry' | 'wet' | 'alert' | 'nodata';
 
-export function ZoneDetailSheet({
-  zone,
-  plantProfiles,
-  assignedPlant,
-  onAssignPlant,
-  onClose
-}: ZoneDetailSheetProps) {
-  const statusMessages = zone ? getPlantStatusMessages(zone, assignedPlant) : [];
+const STATUS_COLOR: Record<Tone, string> = {
+  good:   'var(--good)',
+  dry:    'var(--dry)',
+  wet:    'var(--wet)',
+  alert:  'var(--alert)',
+  nodata: 'var(--nodata)',
+};
+
+const STATUS_LABEL: Record<Tone, string> = {
+  good:   'Good',
+  dry:    'Getting dry',
+  wet:    'Too wet',
+  alert:  'Alert',
+  nodata: 'No data',
+};
+
+// SVG donut ring gauge
+const RING_R = 34;
+const RING_STROKE = 9;
+const RING_CIRC = 2 * Math.PI * RING_R;
+
+function Ring({ value, tone, size = 88 }: { value: number | null; tone: Tone; size?: number }) {
+  const pct = value != null ? Math.max(0, Math.min(100, value)) : 0;
+  const offset = RING_CIRC * (1 - pct / 100);
+  const color = STATUS_COLOR[tone];
 
   return (
-    <AnimatePresence>
-      {zone && (
-        <>
-          <motion.button
-            type="button"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 z-[70] bg-stone-950/35 backdrop-blur-[2px]"
-            aria-label="Close zone details"
+    <div className="gm-ring-wrap" style={{ width: size, height: size, position: 'relative', flexShrink: 0 }}>
+      <svg width={size} height={size} viewBox="0 0 88 88" style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx="44" cy="44" r={RING_R} fill="none" stroke="var(--line)" strokeWidth={RING_STROKE} />
+        {value != null && (
+          <circle
+            cx="44" cy="44" r={RING_R}
+            fill="none"
+            stroke={color}
+            strokeWidth={RING_STROKE}
+            strokeLinecap="round"
+            strokeDasharray={RING_CIRC}
+            strokeDashoffset={offset}
+            style={{ transition: 'stroke-dashoffset .5s ease' }}
           />
-          <motion.div
-            initial={{ y: 28, opacity: 0.96 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 28, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 260, damping: 28 }}
-            className="fixed inset-x-0 bottom-0 z-[80] mx-auto flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-t-[28px] border border-stone-200 bg-white shadow-2xl sm:inset-y-8 sm:bottom-auto sm:rounded-[28px]"
-          >
-            <div className="border-b border-stone-100 bg-white/95 px-4 py-3 backdrop-blur">
-              <div className="mx-auto mb-2 h-1.5 w-12 rounded-full bg-stone-200 sm:hidden" />
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-600">
-                    Visual Zone {zone.visualLabel}
-                  </p>
-                  <h3 className="truncate text-xl font-extrabold text-stone-900">
-                    {assignedPlant?.name ?? zone.displayLabel ?? zone.backendZoneId ?? zone.visualLabel}
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-stone-200 bg-stone-50 text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-800"
-                  aria-label="Close zone details"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="overflow-y-auto px-4 py-4">
-              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-                <InfoTile label="Backend" value={formatValue(zone.backendZoneId)} />
-                <InfoTile label="Node" value={formatValue(zone.nodeId)} />
-                <InfoTile label="Position" value={`${zone.rowLabel}-${zone.section}`} />
-                <InfoTile
-                  label="Reference Crop"
-                  value={zone.referenceCrop ? `${zone.referenceCrop} hint` : 'None'}
-                />
-                <InfoTile label="Moisture" value={zone.soilMoisturePct !== null ? `${zone.soilMoisturePct}%` : 'No data'} />
-                <InfoTile label="Soil Temp" value={zone.soilTempC !== null ? `${zone.soilTempC.toFixed(1)}C` : 'No data'} />
-                <InfoTile label="Raw" value={formatValue(zone.soilMoistureRaw)} />
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="grid h-8 w-8 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm">
-                      <Leaf className="h-4 w-4" />
-                    </span>
-                    <div>
-                      <p className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700">
-                        Assigned Plant
-                      </p>
-                      <p className="text-sm font-extrabold text-stone-900">
-                        {assignedPlant?.name ?? 'No plant assigned'}
-                      </p>
-                    </div>
-                  </div>
-                  {assignedPlant && (
-                    <button
-                      type="button"
-                      onClick={() => onAssignPlant(zone.visualLabel, null)}
-                      className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-extrabold text-emerald-700"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-
-                <label className="relative block">
-                  <select
-                    value={assignedPlant?.id ?? ''}
-                    onChange={(event) => onAssignPlant(zone.visualLabel, event.target.value || null)}
-                    className="h-11 w-full appearance-none rounded-2xl border border-emerald-200 bg-white px-3 pr-10 text-sm font-extrabold text-stone-800 outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="">Choose a plant profile</option>
-                    {plantProfiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-emerald-700" />
-                </label>
-
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <InfoTile
-                    label="Water Range"
-                    value={assignedPlant ? `${assignedPlant.moistureMin}-${assignedPlant.moistureMax}%` : 'No plant'}
-                  />
-                  <InfoTile
-                    label="Temp Range"
-                    value={assignedPlant ? `${assignedPlant.soilTempMin}-${assignedPlant.soilTempMax}C` : 'No plant'}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50 p-3">
-                <p className="text-[10px] font-extrabold uppercase tracking-wider text-stone-400">
-                  {assignedPlant ? 'Recommendation' : 'Backend Alerts'}
-                </p>
-                {statusMessages.length > 0 ? (
-                  <div className="mt-2 grid gap-2">
-                    {statusMessages.map((message, index) => (
-                      <p
-                        key={`${zone.id}-message-${index}`}
-                        className={`rounded-2xl px-3 py-2 text-sm font-bold ${
-                          assignedPlant ? 'bg-white text-emerald-800' : 'bg-rose-50 text-rose-700'
-                        }`}
-                      >
-                        {message}
-                      </p>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-2 rounded-2xl bg-white px-3 py-2 text-sm font-bold text-emerald-700">
-                    No alerts for this zone.
-                  </p>
-                )}
-              </div>
-
-              <p className="mt-3 rounded-2xl bg-stone-50 px-3 py-2 text-xs font-bold text-stone-500">
-                Last updated: {formatValue(zone.timestamp, 'No timestamp')}
-              </p>
-            </div>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+        )}
+      </svg>
+      <div className="gm-ring-center">
+        <div style={{
+          fontFamily: "'Baloo 2', system-ui", fontSize: 18, fontWeight: 800, lineHeight: 1,
+          color: value != null ? color : 'var(--ink-3)',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {value != null ? `${value}%` : '—'}
+        </div>
+        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-3)' }}>
+          MOISTURE
+        </div>
+      </div>
+    </div>
   );
 }
 
-function InfoTile({ label, value }: { label: string; value: string | number }) {
+// Horizontal range bar with marker dot
+function RangeBlock({
+  label, min, max, value, unit, tone,
+}: {
+  label: string; min: number; max: number; value: number | null; unit: string; tone: Tone;
+}) {
+  const lo = Math.min(0, min);
+  const hi = Math.max(value ?? 0, max);
+  const span = Math.max(20, hi - lo);
+  const barLeft = ((min - lo) / span) * 100;
+  const barWidth = ((max - min) / span) * 100;
+  const markerPos = value != null ? ((value - lo) / span) * 100 : null;
+
   return (
-    <div className="rounded-2xl bg-white p-3 ring-1 ring-stone-200">
-      <p className="text-[10px] font-extrabold uppercase tracking-wider text-stone-400">{label}</p>
-      <p className="mt-0.5 break-words text-sm font-extrabold text-stone-800">{value}</p>
+    <div style={{ padding: '10px 12px', background: 'var(--bg-sub)', borderRadius: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>
+          {label}
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' }}>
+          {min}–{max}{unit}
+        </span>
+      </div>
+      <div style={{
+        fontFamily: "'Baloo 2', system-ui", fontSize: 22, lineHeight: 1.1, marginTop: 2,
+        color: value == null ? 'var(--ink-3)' : STATUS_COLOR[tone],
+        fontVariantNumeric: 'tabular-nums',
+      }}>
+        {value == null ? '—' : value}
+        <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{unit}</span>
+      </div>
+      <div style={{ position: 'relative', height: 4, background: 'var(--line)', borderRadius: 99, marginTop: 8 }}>
+        <div style={{
+          position: 'absolute', left: `${barLeft}%`, width: `${barWidth}%`,
+          top: 0, bottom: 0, background: 'var(--primary)', borderRadius: 99, opacity: 0.45,
+        }} />
+        {markerPos != null && (
+          <div style={{
+            position: 'absolute', left: `calc(${markerPos}% - 5px)`, top: -3,
+            width: 10, height: 10, borderRadius: '50%',
+            background: 'white', border: `2px solid ${STATUS_COLOR[tone]}`,
+          }} />
+        )}
+      </div>
     </div>
+  );
+}
+
+// Plant picker sub-sheet
+function PlantPickerSheet({
+  open, onClose, currentId, plantProfiles, onPick,
+}: {
+  open: boolean;
+  onClose: () => void;
+  currentId: string | null;
+  plantProfiles: PlantProfile[];
+  onPick: (id: string | null) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const filtered = plantProfiles.filter((p) =>
+    p.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <>
+      <div className={`gm-scrim${open ? ' open' : ''}`} onClick={onClose} />
+      <div className={`gm-sheet${open ? ' open' : ''}`}>
+        <div className="gm-grab" />
+        <div className="gm-sheet-body" style={{ paddingBottom: 32 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 22, fontWeight: 800, color: 'var(--ink)' }}>
+              Choose a plant
+            </div>
+            <button className="gm-icon-btn" onClick={onClose} aria-label="Close">✕</button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginBottom: 14 }}>
+            Pick a profile or clear the assignment.
+          </div>
+
+          <div style={{ position: 'relative', marginBottom: 12 }}>
+            <div style={{ position: 'absolute', top: '50%', transform: 'translateY(-50%)', left: 12, color: 'var(--ink-3)', fontSize: 15 }}>
+              🔍
+            </div>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search plants…"
+              style={{
+                width: '100%', padding: '11px 12px 11px 38px', boxSizing: 'border-box',
+                background: 'var(--bg-sub)', border: '1px solid var(--line)',
+                borderRadius: 12, fontSize: 14, outline: 'none', color: 'var(--ink)',
+              }}
+            />
+          </div>
+
+          <button
+            onClick={() => onPick(null)}
+            className="gm-row"
+            style={{ width: '100%', textAlign: 'left', marginBottom: 10, cursor: 'pointer' }}
+          >
+            <div style={{
+              width: 36, height: 36, borderRadius: 10, background: 'var(--bg-sub)',
+              display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0,
+            }}>
+              ✕
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>Clear assignment</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>Leave the bed unplanted</div>
+            </div>
+          </button>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {filtered.map((p) => {
+              const active = p.id === currentId;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => onPick(p.id)}
+                  className="gm-card"
+                  style={{
+                    width: '100%', textAlign: 'left', cursor: 'pointer', padding: 12,
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    borderColor: active ? 'var(--primary)' : 'var(--line)',
+                    background: active ? 'var(--primary-soft)' : 'var(--card)',
+                  }}
+                >
+                  <div style={{
+                    width: 40, height: 40, borderRadius: 12, flexShrink: 0,
+                    background: active ? 'white' : 'var(--bg-sub)',
+                    display: 'grid', placeItems: 'center', fontSize: 20,
+                  }}>
+                    {p.icon ?? '🌱'}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{p.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' }}>
+                      💧 {p.moistureMin}–{p.moistureMax}%  ·  🌡 {p.soilTempMin}–{p.soilTempMax}°C
+                    </div>
+                  </div>
+                  {active && <span style={{ color: 'var(--primary)', fontSize: 18 }}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export function ZoneDetailSheet({
+  zone, plantProfiles, profilesById, onAssignPlant, onClose, onToast,
+}: ZoneDetailSheetProps) {
+  const [showPicker, setShowPicker] = useState(false);
+  const open = zone !== null;
+
+  const profile = zone?.assignedPlantProfile ?? (zone?.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null);
+  const evaluation = zone ? evaluateZoneAgainstPlant(zone, profile) : null;
+  const tone: Tone = (evaluation?.tone === 'no-data' ? 'nodata' : evaluation?.tone) ?? 'nodata';
+  const tempTone = evaluation?.temperatureStatus === 'too-cold' || evaluation?.temperatureStatus === 'too-hot' ? 'alert' : 'good';
+  const hasReading = Boolean(zone?.hasReading);
+  const siteName = zone?.visualLabel.startsWith('SYD-') ? 'Sydney' : 'Truro';
+
+  function handlePick(plantId: string | null) {
+    if (!zone) return;
+    onAssignPlant(zone.visualLabel, plantId);
+    setShowPicker(false);
+    if (plantId) {
+      const p = profilesById.get(plantId);
+      onToast(p ? `${p.icon ?? '🌱'} ${p.name} assigned to ${zone.displayLabel ?? zone.visualLabel}` : 'Plant assigned');
+    } else {
+      onToast(`Cleared plant for ${zone.displayLabel ?? zone.visualLabel}`);
+    }
+  }
+
+  return (
+    <>
+      {/* Main zone sheet */}
+      <div className={`gm-scrim${open && !showPicker ? ' open' : ''}`} onClick={onClose} />
+      <div className={`gm-sheet${open && !showPicker ? ' open' : ''}`}>
+        <div className="gm-grab" />
+        {zone && (
+          <div className="gm-sheet-body" style={{ paddingBottom: 32 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--primary)' }}>
+                  {zone.backendZoneId ?? zone.visualLabel}
+                </div>
+                <div style={{
+                  fontFamily: "'Baloo 2', system-ui", fontSize: 26, fontWeight: 800,
+                  color: 'var(--ink)', lineHeight: 1.05, marginTop: 2,
+                }}>
+                  {zone.displayLabel ?? zone.visualLabel}
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {hasReading && (
+                    <span className={`gm-chip ${tone}`}>
+                      <span style={{
+                        display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+                        background: STATUS_COLOR[tone], marginRight: 4, flexShrink: 0,
+                      }} />
+                      {STATUS_LABEL[tone]}
+                    </span>
+                  )}
+                  {profile && (
+                    <span className="gm-chip primary">
+                      {profile.icon ?? '🌱'} {profile.name}
+                    </span>
+                  )}
+                  {zone.assignedPlant && !profile && (
+                    <span className="gm-chip alert">Assigned plant missing</span>
+                  )}
+                </div>
+              </div>
+              <button className="gm-icon-btn" onClick={onClose} aria-label="Close">✕</button>
+            </div>
+
+            {/* Sensor reading */}
+            {hasReading ? (
+              <div className="gm-card" style={{ padding: 18, display: 'flex', alignItems: 'center', gap: 16 }}>
+                <Ring value={zone.soilMoisturePct} tone={tone} />
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.1em' }}>SOIL TEMP</div>
+                    <div style={{
+                      fontFamily: "'Baloo 2', system-ui", fontSize: 26, color: 'var(--ink)',
+                      lineHeight: 1, fontVariantNumeric: 'tabular-nums', fontWeight: 800,
+                    }}>
+                      {zone.soilTempC != null ? zone.soilTempC.toFixed(1) : '—'}
+                      <span style={{ fontSize: 14, color: 'var(--ink-3)' }}>°C</span>
+                    </div>
+                  </div>
+                  {profile && zone.soilTempC != null && (
+                    <span className={`gm-chip ${tempTone}`} style={{ alignSelf: 'flex-start' }}>
+                      🌡{' '}
+                      {zone.soilTempC < profile.soilTempMin
+                        ? `Too cold for ${profile.name}`
+                        : zone.soilTempC > profile.soilTempMax
+                          ? `Too warm for ${profile.name}`
+                          : `Ideal for ${profile.name}`}
+                    </span>
+                  )}
+                  {zone.soilMoistureRaw != null && (
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums' }}>
+                      raw {zone.soilMoistureRaw}
+                      {zone.nodeId ? ` · ${zone.nodeId}` : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="gm-card" style={{ padding: 20, textAlign: 'center', color: 'var(--ink-3)' }}>
+                <div style={{ fontSize: 28, marginBottom: 6 }}>🌱</div>
+                <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>No live reading yet</div>
+                <div style={{ fontSize: 12, marginTop: 2 }}>This bed isn't reporting from a sensor.</div>
+              </div>
+            )}
+
+            {/* Quick actions */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+              <button
+                className="gm-btn water"
+                onClick={() => onToast(`💧 Watering ${zone.displayLabel ?? zone.visualLabel} (200ml)`)}
+              >
+                💧 Water 200ml
+              </button>
+              <button className="gm-btn soft" onClick={() => setShowPicker(true)}>
+                🌱 Assign plant
+              </button>
+            </div>
+
+            {evaluation && (
+              <div className="gm-card" style={{ padding: 14, marginTop: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', marginBottom: 8 }}>
+                  Recommendation
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {evaluation.messages.map((message) => (
+                    <div
+                      key={message}
+                      className={`gm-chip ${tone}`}
+                      style={{ justifyContent: 'flex-start', whiteSpace: 'normal', lineHeight: 1.35 }}
+                    >
+                      {message}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Plant range blocks */}
+            {profile && hasReading && (
+              <div className="gm-card" style={{ padding: 14, marginTop: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <div style={{
+                    width: 38, height: 38, borderRadius: 10,
+                    background: 'var(--primary-soft)',
+                    display: 'grid', placeItems: 'center', fontSize: 20, flexShrink: 0,
+                  }}>
+                    {profile.icon ?? '🌱'}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--ink)' }}>{profile.name}</div>
+                    {profile.notes && (
+                      <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{profile.notes}</div>
+                    )}
+                  </div>
+                  <button className="gm-icon-btn" onClick={() => setShowPicker(true)} aria-label="Change plant">✏️</button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <RangeBlock
+                    label="Moisture"
+                    min={profile.moistureMin} max={profile.moistureMax}
+                    value={zone.soilMoisturePct}
+                    unit="%" tone={tone}
+                  />
+                  <RangeBlock
+                    label="Soil temp"
+                    min={profile.soilTempMin} max={profile.soilTempMax}
+                    value={zone.soilTempC != null ? Math.round(zone.soilTempC) : null}
+                    unit="°C" tone={tempTone}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Sensor metadata */}
+            <div style={{ margin: '16px 0 8px', fontSize: 14, fontWeight: 700, color: 'var(--ink-2)' }}>
+              Sensor
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {[
+                { label: 'Backend', value: zone.backendZoneId ?? '—' },
+                { label: 'Node',    value: zone.nodeId ?? '—' },
+                { label: 'Zone ID', value: zone.visualLabel },
+                { label: 'Site',    value: siteName },
+                { label: 'Area',    value: zone.rowLabel ?? '—' },
+                { label: 'Reference', value: zone.referenceCrop ? `${zone.referenceCrop} hint` : '—' },
+                { label: 'Temp status', value: zone.soilTempStatus ?? '—' },
+              ].map((kv) => (
+                <div key={kv.label} className="gm-kv">
+                  <label>{kv.label}</label>
+                  <span>{kv.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Backend alerts */}
+            {zone.alerts.length > 0 && (
+              <>
+                <div style={{ margin: '16px 0 8px', fontSize: 14, fontWeight: 700, color: 'var(--ink-2)' }}>
+                  Backend alerts
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {zone.alerts.map((a) => (
+                    <div key={a} style={{
+                      padding: '10px 14px', borderRadius: 12,
+                      background: 'var(--alert-soft)', color: 'var(--alert)',
+                      fontSize: 13, fontWeight: 600,
+                      display: 'flex', alignItems: 'center', gap: 8,
+                    }}>
+                      ⚠️ {a}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 16, textAlign: 'center' }}>
+              {zone.timestamp
+                ? `Last updated · ${zone.timestamp}`
+                : `Last updated · ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Plant picker sub-sheet */}
+      <PlantPickerSheet
+        open={open && showPicker}
+        onClose={() => setShowPicker(false)}
+        currentId={zone?.assignedPlant ?? null}
+        plantProfiles={plantProfiles}
+        onPick={handlePick}
+      />
+    </>
   );
 }

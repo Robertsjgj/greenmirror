@@ -1,156 +1,141 @@
-import React from 'react';
-import { motion } from 'framer-motion';
-import { Thermometer, Droplets, Sun, Leaf } from 'lucide-react';
-export function EnvironmentView() {
+import { MapKind } from '../App';
+
+interface EnvironmentViewProps {
+  site: MapKind;
+}
+
+const CLIMATE: Record<MapKind, {
+  insideTemp: number; outsideTemp: number; humidity: number;
+  light: string; soilOverall: string;
+  forecast: { t: string; kind: 'sun' | 'cloud' | 'rain'; temp: number }[];
+  tip: string;
+}> = {
+  sydney: {
+    insideTemp: 26, outsideTemp: 21, humidity: 68,
+    light: 'Bright', soilOverall: 'Moist',
+    forecast: [
+      { t: 'MON', kind: 'sun',   temp: 26 },
+      { t: 'TUE', kind: 'sun',   temp: 27 },
+      { t: 'WED', kind: 'cloud', temp: 22 },
+      { t: 'THU', kind: 'rain',  temp: 19 },
+      { t: 'FRI', kind: 'sun',   temp: 24 },
+    ],
+    tip: "It's warm and sunny today! Your plants might drink more water than usual. Keep an eye on the tomatoes 🍅",
+  },
+  truro: {
+    insideTemp: 18, outsideTemp: 12, humidity: 75,
+    light: 'Moderate', soilOverall: 'Good',
+    forecast: [
+      { t: 'MON', kind: 'cloud', temp: 14 },
+      { t: 'TUE', kind: 'rain',  temp: 11 },
+      { t: 'WED', kind: 'rain',  temp: 10 },
+      { t: 'THU', kind: 'cloud', temp: 13 },
+      { t: 'FRI', kind: 'sun',   temp: 16 },
+    ],
+    tip: "Cooler temperatures this week. Your leafy greens will love it — check soil moisture before watering 🥬",
+  },
+};
+
+function WeatherIcon({ kind, size = 18 }: { kind: 'sun' | 'cloud' | 'rain'; size?: number }) {
+  if (kind === 'sun')  return <span style={{ fontSize: size }}>☀️</span>;
+  if (kind === 'rain') return <span style={{ fontSize: size }}>🌧</span>;
+  return <span style={{ fontSize: size }}>☁️</span>;
+}
+
+export function EnvironmentView({ site }: EnvironmentViewProps) {
+  const c = CLIMATE[site];
+
   return (
-    <div className="space-y-6 pb-6">
-      {/* Big Weather Display */}
-      <motion.div
-        initial={{
-          opacity: 0,
-          y: 20
-        }}
-        animate={{
-          opacity: 1,
-          y: 0
-        }}
-        className="bg-gradient-to-br from-blue-400 to-blue-500 rounded-3xl p-6 text-white shadow-md relative overflow-hidden">
-        
-        {/* Decorative background elements */}
-        <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/3 blur-2xl"></div>
-        <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/10 rounded-full translate-y-1/3 -translate-x-1/4 blur-xl"></div>
+    <div style={{ padding: '12px 16px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-        <div className="relative z-10 flex items-center justify-between">
+      {/* Hero weather card */}
+      <div style={{
+        position: 'relative',
+        borderRadius: 24,
+        padding: 20,
+        color: 'white',
+        background:
+          'radial-gradient(ellipse 80% 100% at 100% 0%, oklch(0.78 0.16 80 / 0.55), transparent 60%),' +
+          'linear-gradient(155deg, oklch(0.55 0.13 230), oklch(0.4 0.12 240))',
+        overflow: 'hidden',
+        boxShadow: 'var(--shadow-md)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <p className="text-blue-100 font-medium mb-1">Inside Greenhouse</p>
-            <div className="flex items-baseline gap-2">
-              <h1 className="text-6xl font-extrabold tracking-tighter">24°</h1>
-              <span className="text-2xl font-bold text-blue-100">C</span>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', opacity: 0.85 }}>
+              INSIDE · {site.toUpperCase()}
             </div>
-            <p className="text-lg font-medium mt-1">Warm & Sunny</p>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 64, lineHeight: 1, marginTop: 6, fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+              {c.insideTemp}<span style={{ fontSize: 28, opacity: 0.8 }}>°c</span>
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.92, marginTop: 6 }}>Warm &amp; sunny inside</div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>
+              Outside · <span style={{ fontVariantNumeric: 'tabular-nums' }}>{c.outsideTemp}°</span>
+            </div>
           </div>
-          <div
-            className="text-7xl drop-shadow-lg animate-pulse"
-            style={{
-              animationDuration: '3s'
-            }}>
-            
-            ☀️
-          </div>
+          <div style={{ opacity: 0.85, fontSize: 64 }}>☀️</div>
         </div>
-      </motion.div>
 
-      {/* Condition Cards Grid */}
-      <div className="grid grid-cols-2 gap-4">
-        <motion.div
-          initial={{
-            opacity: 0,
-            scale: 0.9
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1
-          }}
-          transition={{
-            delay: 0.1
-          }}
-          className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm flex flex-col items-center text-center">
-          
-          <div className="w-12 h-12 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mb-3">
-            <Thermometer className="w-6 h-6" />
-          </div>
-          <h3 className="text-2xl font-bold text-stone-800">24°C</h3>
-          <p className="text-sm font-medium text-stone-500">Temperature</p>
-        </motion.div>
-
-        <motion.div
-          initial={{
-            opacity: 0,
-            scale: 0.9
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1
-          }}
-          transition={{
-            delay: 0.2
-          }}
-          className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm flex flex-col items-center text-center">
-          
-          <div className="w-12 h-12 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mb-3">
-            <Droplets className="w-6 h-6" />
-          </div>
-          <h3 className="text-2xl font-bold text-stone-800">65%</h3>
-          <p className="text-sm font-medium text-stone-500">Humidity</p>
-        </motion.div>
-
-        <motion.div
-          initial={{
-            opacity: 0,
-            scale: 0.9
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1
-          }}
-          transition={{
-            delay: 0.3
-          }}
-          className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm flex flex-col items-center text-center">
-          
-          <div className="w-12 h-12 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mb-3">
-            <Sun className="w-6 h-6" />
-          </div>
-          <h3 className="text-2xl font-bold text-stone-800">Bright</h3>
-          <p className="text-sm font-medium text-stone-500">Light Level</p>
-        </motion.div>
-
-        <motion.div
-          initial={{
-            opacity: 0,
-            scale: 0.9
-          }}
-          animate={{
-            opacity: 1,
-            scale: 1
-          }}
-          transition={{
-            delay: 0.4
-          }}
-          className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm flex flex-col items-center text-center">
-          
-          <div className="w-12 h-12 bg-emerald-100 text-emerald-500 rounded-full flex items-center justify-center mb-3">
-            <Leaf className="w-6 h-6" />
-          </div>
-          <h3 className="text-2xl font-bold text-stone-800">Moist</h3>
-          <p className="text-sm font-medium text-stone-500">Soil Overall</p>
-        </motion.div>
+        {/* Forecast strip */}
+        <div style={{
+          marginTop: 18, paddingTop: 14,
+          borderTop: '1px solid rgba(255,255,255,0.15)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          {c.forecast.map((f) => (
+            <div key={f.t} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, opacity: 0.92 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em' }}>{f.t}</span>
+              <WeatherIcon kind={f.kind} size={16} />
+              <span style={{ fontSize: 12, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{f.temp}°</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Tip Card */}
-      <motion.div
-        initial={{
-          opacity: 0,
-          y: 20
-        }}
-        animate={{
-          opacity: 1,
-          y: 0
-        }}
-        transition={{
-          delay: 0.5
-        }}
-        className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-4 items-start">
-        
-        <div className="text-2xl shrink-0">💡</div>
-        <div>
-          <h4 className="font-bold text-amber-900 mb-1">Today's Tip</h4>
-          <p className="text-sm text-amber-800 font-medium leading-relaxed">
-            It's warm and sunny today! Your plants might drink more water than
-            usual. Keep an eye on the tomatoes! 🍅
-          </p>
-        </div>
-      </motion.div>
-    </div>);
+      {/* Metric tiles 2×2 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {[
+          { emoji: '🌡', label: 'Temperature', big: `${c.insideTemp}°C`, sub: 'Greenhouse air' },
+          { emoji: '💧', label: 'Humidity',    big: `${c.humidity}%`,    sub: 'Relative' },
+          { emoji: '☀️', label: 'Light',       big: c.light,             sub: 'Above canopy' },
+          { emoji: '🌱', label: 'Soil overall', big: c.soilOverall,      sub: 'Averaged across zones' },
+        ].map((m) => (
+          <div key={m.label} className="gm-card" style={{ padding: 14 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 10,
+              background: 'var(--primary-soft)',
+              display: 'grid', placeItems: 'center', fontSize: 18,
+            }}>
+              {m.emoji}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-3)', marginTop: 10, textTransform: 'uppercase' }}>
+              {m.label}
+            </div>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 24, color: 'var(--ink)', marginTop: 2, lineHeight: 1.1, fontWeight: 800 }}>
+              {m.big}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.sub}</div>
+          </div>
+        ))}
+      </div>
 
+      {/* Tip card */}
+      <div className="gm-card" style={{ padding: 14, background: 'var(--clay-soft)', borderColor: 'oklch(0.85 0.08 60)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: 10,
+            background: 'var(--clay)', color: 'white',
+            display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 16,
+          }}>
+            ✨
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--clay-ink)' }}>Today's tip</div>
+            <div style={{ fontSize: 13, color: 'var(--clay-ink)', marginTop: 4, lineHeight: 1.45 }}>{c.tip}</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
 }

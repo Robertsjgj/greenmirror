@@ -1,3 +1,5 @@
+import type { PlantProfile } from './plantProfiles';
+
 export interface ZoneReading {
   zone_id: string;
   node_id?: string;
@@ -50,6 +52,8 @@ export interface VisualZone {
   timestamp?: string;
   hasReading: boolean;
   assignedPlant?: string | null;
+  assignedPlantProfile?: PlantProfile | null;
+  assignedPlantMissing?: boolean;
 }
 
 export interface LayoutResult {
@@ -148,7 +152,8 @@ function createVisualZone(slot: LayoutSlot, zone: ZoneReading, timestamp?: strin
 export function mapZonesToLayout(
   latestReading: LatestReading | null,
   settings: LayoutSettings,
-  zoneAssignments: Record<string, string> = {}
+  zoneAssignments: Record<string, string> = {},
+  profilesById?: Map<string, PlantProfile>
 ): LayoutResult {
   const slots = buildLayoutSlots(settings);
   const zones = latestReading?.zones ?? [];
@@ -164,7 +169,7 @@ export function mapZonesToLayout(
     if (matchingSlot && !usedLabels.has(matchingSlot.visualLabel)) {
       assignedByLabel.set(
         matchingSlot.visualLabel,
-        withAssignment(createVisualZone(matchingSlot, zone, latestReading?.timestamp), zoneAssignments)
+        withAssignment(createVisualZone(matchingSlot, zone, latestReading?.timestamp), zoneAssignments, profilesById)
       );
       usedLabels.add(matchingSlot.visualLabel);
       return;
@@ -183,7 +188,7 @@ export function mapZonesToLayout(
 
     assignedByLabel.set(
       slot.visualLabel,
-      withAssignment(createVisualZone(slot, zone, latestReading?.timestamp), zoneAssignments)
+      withAssignment(createVisualZone(slot, zone, latestReading?.timestamp), zoneAssignments, profilesById)
     );
     unmatchedIndex += 1;
   });
@@ -192,7 +197,7 @@ export function mapZonesToLayout(
     const rowLabel = ROW_LETTERS[rowIndex] ?? `R${rowIndex + 1}`;
     const zonesForRow = Array.from({ length: settings.sectionsPerRow }, (__, sectionIndex) => {
       const slot = slots[rowIndex * settings.sectionsPerRow + sectionIndex];
-      return assignedByLabel.get(slot.visualLabel) ?? withAssignment(createEmptyVisualZone(slot), zoneAssignments);
+      return assignedByLabel.get(slot.visualLabel) ?? withAssignment(createEmptyVisualZone(slot), zoneAssignments, profilesById);
     });
 
     return {
@@ -223,7 +228,8 @@ export function mapZonesToLayout(
           hasReading: true,
           assignedPlant: null
         },
-        zoneAssignments
+        zoneAssignments,
+        profilesById
       )
     );
 
@@ -234,10 +240,19 @@ export function mapZonesToLayout(
   };
 }
 
-function withAssignment(zone: VisualZone, zoneAssignments: Record<string, string>): VisualZone {
+function withAssignment(
+  zone: VisualZone,
+  zoneAssignments: Record<string, string>,
+  profilesById?: Map<string, PlantProfile>
+): VisualZone {
+  const assignedPlant = zoneAssignments[zone.visualLabel] ?? null;
+  const assignedPlantProfile = assignedPlant && profilesById ? profilesById.get(assignedPlant) ?? null : null;
+
   return {
     ...zone,
-    assignedPlant: zoneAssignments[zone.visualLabel] ?? null
+    assignedPlant,
+    assignedPlantProfile,
+    assignedPlantMissing: Boolean(assignedPlant && profilesById && !assignedPlantProfile)
   };
 }
 

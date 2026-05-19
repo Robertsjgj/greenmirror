@@ -1,6 +1,5 @@
-import { PlantProfile, getPlantTone } from '../plantProfiles';
+import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import { SydneyVisualZone } from '../sydneyLayout';
-import { getZoneStatus } from '../zoneLayout';
 
 interface SydneyMapViewProps {
   zones: SydneyVisualZone[];
@@ -8,82 +7,346 @@ interface SydneyMapViewProps {
   onSelect: (zone: SydneyVisualZone) => void;
 }
 
-const TONE_STYLES = {
-  good: 'border-emerald-700 bg-emerald-100 text-emerald-900',
-  dry: 'border-amber-700 bg-amber-100 text-amber-900',
-  wet: 'border-sky-700 bg-sky-100 text-sky-900',
-  alert: 'border-rose-700 bg-rose-100 text-rose-900',
-  'no-data': 'border-stone-300 bg-stone-100 text-stone-500'
-} as const;
+const REF_EMOJI: Record<string, string> = {
+  Watermelon: '🍉', Squash: '🥒', Zucchini: '🥒', Eggplants: '🍆',
+  Garlic: '🌿', Veggies: '🥬', Beans: '🌿', Peppers: '🌶️',
+  Carrots: '🥕', Onions: '🧅', Strawberries: '🍓', Broccoli: '🥦',
+  Radishes: '🌱', Cucumbers: '🌿', Corn: '🌽', 'Pumpkin Patch': '🎃',
+};
 
-const LAYOUT_HEIGHT_UNITS = 112;
+// Virtual coordinate space: 100 wide × 190 tall.
+// Gap between beds: 8 units throughout.
+// Landscape=22×7, portrait=7×22, square=10×10, circle=7×7
+const Y = 1.90;
+
+const SYD_LAYOUT: Record<string, { x: number; y: number; w: number; h: number; shape: 'rect' | 'circle' }> = {
+  // ── Left outdoor – squares at top ────────────────────────
+  'SYD-OUTDOOR-01': { x: 1,  y: 2,   w: 10, h: 10, shape: 'rect' },
+  'SYD-OUTDOOR-02': { x: 13, y: 2,   w: 10, h: 10, shape: 'rect' },
+  // ── Left outdoor – landscape beds (gap=8) ────────────────
+  'SYD-OUTDOOR-03': { x: 1,  y: 20,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTDOOR-04': { x: 1,  y: 35,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTDOOR-05': { x: 1,  y: 50,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTDOOR-06': { x: 1,  y: 65,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTDOOR-07': { x: 1,  y: 80,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTDOOR-08': { x: 1,  y: 95,  w: 22, h: 7,  shape: 'rect' },
+  // ── Left outdoor – portrait beds at bottom ────────────────
+  'SYD-OUTDOOR-09': { x: 1,  y: 110, w: 7,  h: 22, shape: 'rect' },
+  'SYD-OUTDOOR-10': { x: 16, y: 110, w: 7,  h: 22, shape: 'rect' },
+
+  // ── Greenhouse left – VEGGIES circles ────────────────────
+  'SYD-GH-LEFT-01': { x: 28, y: 3,   w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-LEFT-02': { x: 36, y: 3,   w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-LEFT-03': { x: 28, y: 14,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-LEFT-04': { x: 36, y: 14,  w: 7,  h: 7,  shape: 'circle' },
+  // ── Greenhouse left – landscape beds (gap=8) ─────────────
+  'SYD-GH-LEFT-05': { x: 27, y: 33,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-06': { x: 27, y: 48,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-07': { x: 27, y: 63,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-08': { x: 27, y: 78,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-09': { x: 27, y: 93,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-10': { x: 27, y: 108, w: 22, h: 7,  shape: 'rect' },
+  'SYD-GH-LEFT-11': { x: 27, y: 123, w: 22, h: 7,  shape: 'rect' },
+
+  // ── Greenhouse mid – CUCUMBERS circles ───────────────────
+  'SYD-GH-MID-01':  { x: 58, y: 43,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-MID-02':  { x: 66, y: 43,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-MID-03':  { x: 58, y: 54,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-MID-04':  { x: 66, y: 54,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-MID-05':  { x: 58, y: 65,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-GH-MID-06':  { x: 66, y: 65,  w: 7,  h: 7,  shape: 'circle' },
+
+  // ── Greenhouse right – portrait beds (gap=8) ─────────────
+  'SYD-GH-RIGHT-01':{ x: 88, y: 3,   w: 7,  h: 22, shape: 'rect' },
+  'SYD-GH-RIGHT-02':{ x: 88, y: 33,  w: 7,  h: 22, shape: 'rect' },
+  'SYD-GH-RIGHT-03':{ x: 88, y: 63,  w: 7,  h: 22, shape: 'rect' },
+
+  // ── Corn – touching GH bottom, right side ────────────────
+  'SYD-CORN-01':    { x: 78, y: 135, w: 20, h: 7,  shape: 'rect' },
+
+  // ── Pumpkin patches around shed ──────────────────────────
+  'SYD-PUMPKIN-01': { x: 34, y: 155, w: 22, h: 7,  shape: 'rect' },
+  'SYD-PUMPKIN-02': { x: 10, y: 162, w: 7,  h: 20, shape: 'rect' },
+};
+
+const CLUSTER_VEGGIES = new Set(['SYD-GH-LEFT-01','SYD-GH-LEFT-02','SYD-GH-LEFT-03','SYD-GH-LEFT-04']);
+const CLUSTER_CUKES   = new Set(['SYD-GH-MID-01','SYD-GH-MID-02','SYD-GH-MID-03','SYD-GH-MID-04','SYD-GH-MID-05','SYD-GH-MID-06']);
+
+// Small square beds have no room for labels.
+// All other beds (including portrait and pumpkin) get labels via the bed-level renderer.
+const NO_LABEL_BEDS = new Set([
+  ...CLUSTER_VEGGIES, ...CLUSTER_CUKES,
+]);
+
+function bedBg(zone: SydneyVisualZone, profile: PlantProfile | null): string {
+  const tone = evaluateZoneAgainstPlant(zone, profile).tone;
+  if (tone === 'no-data') return '#b5a898';
+  if (tone === 'alert') return '#7d3a2b';
+  if (tone === 'wet') return '#48556B';
+  if (tone === 'dry') return '#7a5128';
+  return '#5a6B3F';
+}
+
+function emojiCount(w: number): number {
+  if (w >= 20) return 5;
+  if (w >= 12) return 2;
+  return 1;
+}
+
+const MAP_LABEL: React.CSSProperties = {
+  position: 'absolute',
+  fontWeight: 800,
+  fontSize: 8,
+  letterSpacing: '0.06em',
+  color: '#2a2a2a',
+  pointerEvents: 'none',
+  fontFamily: "'Nunito', system-ui",
+  textTransform: 'uppercase',
+  textAlign: 'center',
+  lineHeight: 1.1,
+};
+
+const HORIZ_LABEL: React.CSSProperties = {
+  position: 'absolute',
+  fontSize: 7.5,
+  fontWeight: 800,
+  textAlign: 'center',
+  letterSpacing: '0.03em',
+  color: '#2a2a2a',
+  pointerEvents: 'none',
+  fontFamily: "'Nunito', system-ui",
+  textTransform: 'uppercase',
+  lineHeight: 1.1,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+};
 
 export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewProps) {
   return (
-    <div className="rounded-[1.35rem] border border-stone-200 bg-white p-3 shadow-sm sm:p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Reference Layout</p>
-          <h3 className="text-base font-extrabold text-stone-800 sm:text-lg">Sydney greenhouse map</h3>
-          <p className="mt-1 text-xs font-bold text-stone-500">
-            Crop names are editable reference hints. Assignments come from plant profiles.
-          </p>
-        </div>
-        <p className="shrink-0 rounded-full bg-stone-100 px-2.5 py-1 text-xs font-extrabold uppercase tracking-wider text-stone-500">
-          {zones.length} zones
-        </p>
-      </div>
+    <div className="gm-map-wrap" style={{ background: '#EFEFEF', padding: 8 }}>
+      <style>{`
+        @keyframes gm-marquee {
+          0%   { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+      `}</style>
+      {/* paddingTop creates the 100:190 aspect ratio */}
+      <div style={{ paddingTop: '190%', position: 'relative' }}>
+        <div style={{ position: 'absolute', inset: 0 }}>
 
-      <div className="-mx-1 overflow-x-auto px-1 pb-1">
-        <div className="relative h-[720px] w-[590px] overflow-hidden rounded-[1.25rem] bg-stone-100 ring-1 ring-stone-200 sm:h-[820px] sm:w-[670px]">
-          <div className="absolute left-[34%] top-[5%] h-[70%] w-[62%] rounded-xl bg-rose-200/80 shadow-inner ring-1 ring-rose-200">
-            <span className="absolute bottom-8 right-8 text-3xl font-extrabold text-stone-950">GreenHouse</span>
+          {/* ── Greenhouse pink area (y 0–135) ───────────────── */}
+          <div style={{
+            position: 'absolute',
+            left: '25%', top: '0%', width: '73%', height: `${135 / Y}%`,
+            background: '#F4C4C4',
+            borderRadius: 10,
+          }}>
+            <div style={{
+              position: 'absolute', right: 8, bottom: 8,
+              fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 14,
+              color: '#3a2020', lineHeight: 1,
+            }}>
+              GreenHouse
+            </div>
           </div>
-          <div className="absolute bottom-[2%] left-[24%] h-[8%] w-[30%] rounded-xl bg-rose-200/80 shadow-inner ring-1 ring-rose-200">
-            <span className="grid h-full place-items-center text-2xl font-extrabold">SHED</span>
+
+          {/* ── Shed pink area ───────────────────────────────── */}
+          <div style={{
+            position: 'absolute',
+            left: '17%', top: `${162 / Y}%`, width: '39%', height: `${20 / Y}%`,
+            background: '#F4C4C4',
+            borderRadius: 10,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 13, color: '#3a2020' }}>
+              SHED
+            </div>
           </div>
-          <div className="absolute bottom-[14%] left-[58%] rounded-md border border-stone-400 bg-white px-3 py-2 text-sm font-extrabold">
+
+          {/* ── Cluster labels ────────────────────────────────── */}
+          {/* VEGGIES: centered in the gap between circle rows (y=10–18, mid=14) */}
+          <div style={{ ...MAP_LABEL, left: '27%', width: '17%', top: `${22 / Y}%` }}>
+            VEGGIES
+          </div>
+          {/* CUCUMBERS: below last circle row (GH-MID-05/06 bottom=100) */}
+          <div style={{ ...MAP_LABEL, left: '57%', width: '17%', top: `${73 / Y}%` }}>
+            CUCUMBERS
+          </div>
+
+          {/* ── Beds ──────────────────────────────────────────── */}
+          {zones.map((zone) => {
+            const pos = SYD_LAYOUT[zone.visualLabel];
+            if (!pos) return null;
+            const profile = zone.assignedPlantProfile ?? (zone.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null);
+            const bg = bedBg(zone, profile);
+            const isCircle = pos.shape === 'circle';
+            const isPortrait = !isCircle && pos.h > pos.w;
+            const emoji = zone.referenceCrop ? REF_EMOJI[zone.referenceCrop] : null;
+            const displayEmoji = profile?.icon ?? emoji;
+            const count = emojiCount(pos.w);
+            const showLabel = !NO_LABEL_BEDS.has(zone.visualLabel);
+            const label = profile?.name ?? (zone.assignedPlant ? 'Missing plant' : 'Unassigned');
+            const referenceLabel = zone.referenceCrop ? `ref: ${zone.referenceCrop}` : '';
+
+            return (
+              <span key={zone.visualLabel}>
+                <button
+                  onClick={() => onSelect(zone)}
+                  aria-label={`${zone.displayLabel ?? zone.visualLabel}, ${label}`}
+                  style={{
+                    position: 'absolute',
+                    left: `${pos.x}%`,
+                    top: `${pos.y / Y}%`,
+                    width: `${pos.w}%`,
+                    height: `${pos.h / Y}%`,
+                    background: bg,
+                    borderRadius: isCircle ? '50%' : 6,
+                    border: 'none',
+                    padding: 0,
+                    cursor: 'pointer',
+                    overflow: 'hidden',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'filter .15s',
+                  }}
+                >
+                  {displayEmoji ? (
+                    <div style={{
+                      display: 'flex', gap: 1,
+                      flexDirection: isPortrait ? 'column' : 'row',
+                      alignItems: 'center', justifyContent: 'center',
+                      fontSize: isCircle ? 9 : (isPortrait ? 11 : 10),
+                      lineHeight: 1,
+                    }}>
+                      {Array.from({ length: isPortrait ? Math.min(3, count + 1) : count }, (_, i) => (
+                        <span key={i}>{displayEmoji}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{
+                      fontSize: isCircle ? 10 : 12,
+                      color: 'rgba(254,243,199,0.73)',
+                      fontWeight: 800,
+                      fontFamily: "'Baloo 2', system-ui",
+                    }}>
+                      ?
+                    </span>
+                  )}
+                </button>
+
+                {showLabel && (
+                  isPortrait && pos.x < 10 ? (
+                    // Portrait beds too close to left edge: vertical label on RIGHT side
+                    <div style={{
+                      position: 'absolute',
+                      left: `calc(${pos.x + pos.w}% - 2px)`,
+                      top: `${pos.y / Y}%`,
+                      height: `${pos.h / Y}%`,
+                      width: 13,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 6.5,
+                      fontWeight: 800,
+                      letterSpacing: '0.06em',
+                      color: '#2a2a2a',
+                      pointerEvents: 'none',
+                      fontFamily: "'Nunito', system-ui",
+                      textTransform: 'uppercase',
+                      lineHeight: 1,
+                      overflow: 'hidden',
+                      whiteSpace: 'nowrap',
+                      writingMode: 'vertical-rl',
+                    }}>
+                      {label}
+                    </div>
+                  ) : isPortrait ? (
+                    // Portrait beds with room: vertical label on LEFT side
+                    <div style={{
+                      position: 'absolute',
+                      left: `calc(${pos.x}% - 12px)`,
+                      top: `${pos.y / Y}%`,
+                      height: `${pos.h / Y}%`,
+                      width: 13,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 6.5,
+                      fontWeight: 800,
+                      letterSpacing: '0.06em',
+                      color: '#2a2a2a',
+                      pointerEvents: 'none',
+                      fontFamily: "'Nunito', system-ui",
+                      textTransform: 'uppercase',
+                      lineHeight: 1,
+                      overflow: 'hidden',
+                      whiteSpace: 'nowrap',
+                      writingMode: 'vertical-rl',
+                      transform: 'rotate(180deg)',
+                    }}>
+                      {label}
+                    </div>
+                  ) : zone.visualLabel === 'SYD-PUMPKIN-01' ? (
+                    // Pumpkin-01 (top-right of shed): label ABOVE the bed
+                    <div style={{
+                      ...HORIZ_LABEL,
+                      left: `${pos.x}%`,
+                      top: `calc(${pos.y / Y}% - 11px)`,
+                      width: `${pos.w}%`,
+                    }}>
+                      {label}
+                    </div>
+                  ) : (zone.visualLabel === 'SYD-OUTDOOR-01' || zone.visualLabel === 'SYD-OUTDOOR-02') ? (
+                    // Narrow square beds: continuous right-to-left marquee
+                    <div style={{
+                      ...HORIZ_LABEL,
+                      left: `${pos.x}%`,
+                      top: `calc(${(pos.y + pos.h) / Y}% + 2px)`,
+                      width: `${pos.w}%`,
+                      textAlign: 'left',
+                    }}>
+                      <span style={{
+                        display: 'inline-block',
+                        whiteSpace: 'nowrap',
+                        animation: 'gm-marquee 3s linear infinite',
+                      }}>
+                        {label}&nbsp;&nbsp;&nbsp;{label}
+                      </span>
+                      {referenceLabel && (
+                        <span style={{ display: 'block', fontSize: 5.5, opacity: 0.72 }}>{referenceLabel}</span>
+                      )}
+                    </div>
+                  ) : (
+                    // Horizontal label below all other beds
+                    <div style={{
+                      ...HORIZ_LABEL,
+                      left: `${pos.x}%`,
+                      top: `calc(${(pos.y + pos.h) / Y}% + 2px)`,
+                      width: `${pos.w}%`,
+                    }}>
+                      {label}
+                      {referenceLabel && (
+                        <span style={{ display: 'block', fontSize: 5.5, opacity: 0.72 }}>{referenceLabel}</span>
+                      )}
+                    </div>
+                  )
+                )}
+              </span>
+            );
+          })}
+
+          {/* ── Entrance pill (below GH, between corn and shed) ── */}
+          <div style={{
+            position: 'absolute',
+            left: '61%', top: `${135 / Y}%`, transform: 'translateX(-50%)',
+            background: 'white', border: '1.5px solid #ccc',
+            padding: '3px 10px', borderRadius: 8,
+            fontFamily: "'Nunito', system-ui", fontWeight: 800, fontSize: 9,
+            color: '#2a2a2a', letterSpacing: '0.04em',
+            boxShadow: '0 1px 3px rgba(0,0,0,.1)',
+          }}>
             ENTRANCE
           </div>
 
-          {zones.map((zone) => {
-            const assignedPlant = zone.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null;
-            const plantTone = getPlantTone(zone, assignedPlant);
-            const status = getZoneStatus(zone);
-            const tone = TONE_STYLES[plantTone ?? status.tone];
-            const top = (zone.y / LAYOUT_HEIGHT_UNITS) * 100;
-            const height = (zone.height / LAYOUT_HEIGHT_UNITS) * 100;
-
-            return (
-              <button
-                key={zone.visualLabel}
-                type="button"
-                onClick={() => onSelect(zone)}
-                className={`absolute flex flex-col items-center justify-center border-[3px] p-1 text-center shadow-md transition-transform hover:scale-105 active:scale-95 ${
-                  zone.shape === 'circle' ? 'rounded-full' : 'rounded-lg'
-                } ${tone}`}
-                style={{
-                  left: `${zone.x}%`,
-                  top: `${top}%`,
-                  width: `${zone.width}%`,
-                  height: `${height}%`
-                }}
-                aria-label={`${zone.displayLabel ?? zone.visualLabel}, ${assignedPlant?.name ?? 'unassigned'}`}
-              >
-                <span className="max-w-full truncate text-[9px] font-extrabold leading-tight">
-                  {zone.displayLabel ?? zone.visualLabel}
-                </span>
-                <span className="max-w-full truncate text-[8px] font-bold leading-tight opacity-90">
-                  {assignedPlant?.name ?? 'Unassigned'}
-                </span>
-                {zone.referenceCrop && (
-                  <span className="mt-0.5 max-w-full truncate text-[7px] font-bold leading-tight opacity-75">
-                    ref: {zone.referenceCrop}
-                  </span>
-                )}
-              </button>
-            );
-          })}
         </div>
       </div>
     </div>

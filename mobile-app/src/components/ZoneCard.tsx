@@ -1,6 +1,6 @@
 import { Droplets, Thermometer } from 'lucide-react';
-import { VisualZone, getZoneStatus } from '../zoneLayout';
-import { PlantProfile, getPlantTone } from '../plantProfiles';
+import { VisualZone } from '../zoneLayout';
+import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 
 interface ZoneCardProps {
   zone: VisualZone;
@@ -37,9 +37,9 @@ const TONE_STYLES = {
 } as const;
 
 export function ZoneCard({ zone, assignedPlant, onSelect }: ZoneCardProps) {
-  const status = getZoneStatus(zone);
-  const plantTone = getPlantTone(zone, assignedPlant);
-  const tone = TONE_STYLES[plantTone ?? status.tone];
+  const evaluation = evaluateZoneAgainstPlant(zone, assignedPlant);
+  const tone = TONE_STYLES[evaluation.tone];
+  const displayName = assignedPlant?.name ?? (zone.assignedPlant ? 'Assigned plant missing' : 'Unassigned');
 
   return (
     <button
@@ -49,9 +49,9 @@ export function ZoneCard({ zone, assignedPlant, onSelect }: ZoneCardProps) {
     >
       <div className="flex items-start justify-between gap-1">
         <div className="min-w-0">
-          <p className="text-[11px] font-extrabold leading-tight text-stone-800">{zone.visualLabel}</p>
+          <p className="text-[11px] font-extrabold leading-tight text-stone-800">{zone.displayLabel ?? zone.visualLabel}</p>
           <p className="truncate text-[9px] font-bold uppercase tracking-wider text-stone-400">
-            {assignedPlant ? assignedPlant.name : zone.hasReading ? zone.nodeId ?? 'Live zone' : 'No reading'}
+            {displayName}
           </p>
         </div>
         <span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white ${tone.dot}`} />
@@ -69,7 +69,7 @@ export function ZoneCard({ zone, assignedPlant, onSelect }: ZoneCardProps) {
       </div>
 
       <p className={`mt-1.5 truncate text-[9px] font-extrabold uppercase tracking-wider ${tone.text}`}>
-        {plantTone ? assignedPlant?.name ?? status.label : status.label}
+        {evaluation.label}
       </p>
     </button>
   );
