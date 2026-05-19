@@ -272,20 +272,20 @@ export function evaluateZoneAgainstPlant(zone: VisualZone, profile: PlantProfile
       messages.push(`${profile.name} may be too wet in ${zone.displayLabel ?? zone.visualLabel}.`);
     } else {
       moistureStatus = 'good';
-      messages.push(`${profile.name} moisture is good.`);
+      // Good moisture — no actionable message needed
     }
   }
 
   if (zone.soilTempC !== null) {
     if (zone.soilTempC < profile.soilTempMin) {
       temperatureStatus = 'too-cold';
-      messages.push(`${profile.name} soil is too cold.`);
+      messages.push(`${profile.name} soil is too cold (${zone.soilTempC.toFixed(1)}°C).`);
     } else if (zone.soilTempC > profile.soilTempMax) {
       temperatureStatus = 'too-hot';
-      messages.push(`${profile.name} soil is too warm.`);
+      messages.push(`${profile.name} soil is too warm (${zone.soilTempC.toFixed(1)}°C).`);
     } else {
       temperatureStatus = 'good';
-      messages.push(`${profile.name} soil temperature is good.`);
+      // Good temperature — no actionable message needed
     }
   }
 
@@ -294,7 +294,7 @@ export function evaluateZoneAgainstPlant(zone: VisualZone, profile: PlantProfile
 
   return {
     overallStatus,
-    messages: messages.length > 0 ? messages : [`Waiting for live sensor data for ${profile.name}.`],
+    messages,
     moistureStatus,
     temperatureStatus,
     tone,

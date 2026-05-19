@@ -7,6 +7,7 @@ import { PlantEditorSheet } from './components/PlantEditorSheet';
 import { SimpleRunoff } from './components/SimpleRunoff';
 import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
+import { ActivityEntry, loadActivity, logActivity } from './activityLog';
 import { LATEST_READING_URL } from './config';
 import {
   PlantProfile,
@@ -81,6 +82,7 @@ export function App() {
   const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>(loadActivity);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
@@ -199,6 +201,22 @@ export function App() {
     showToast(`Reset ${def.name} to defaults`);
   }, [showToast]);
 
+  const onWaterZone = useCallback((zone: VisualZone, amountMl: number) => {
+    const plantName = zone.assignedPlant ? profilesById.get(zone.assignedPlant)?.name : undefined;
+    const zoneName = zone.displayLabel ?? zone.visualLabel;
+    logActivity({
+      type: 'watering',
+      visualZoneId: zone.visualLabel,
+      backendZoneId: zone.backendZoneId,
+      nodeId: zone.nodeId,
+      plantName,
+      amountMl,
+      message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
+    });
+    setActivityLog(loadActivity());
+    showToast(`💧 Watered ${zoneName} (${amountMl}ml)`);
+  }, [profilesById, showToast]);
+
   const onAssignPlant = useCallback((zoneKey: string, plantId: string | null) => {
     setZoneAssignments((a) => {
       const next = { ...a };
@@ -219,6 +237,22 @@ export function App() {
           }
         : z
     );
+    const plantName = plantId ? profilesById.get(plantId)?.name : undefined;
+    if (plantId) {
+      logActivity({
+        type: 'assignment',
+        visualZoneId: zoneKey,
+        plantName,
+        message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
+      });
+    } else {
+      logActivity({
+        type: 'cleared',
+        visualZoneId: zoneKey,
+        message: `Cleared plant from ${zoneKey}`,
+      });
+    }
+    setActivityLog(loadActivity());
   }, [profilesById]);
 
   const g = TAB_GREETINGS[activeTab];
@@ -259,6 +293,8 @@ export function App() {
             onAddProfile={onAddProfile}
             onEditProfile={onEditProfile}
             onToast={showToast}
+            activityLog={activityLog}
+            onWaterZone={onWaterZone}
           />
         )}
         {activeTab === 'greenhouse' && (
@@ -322,10 +358,10 @@ export function App() {
         zone={zoneSheetZone}
         plantProfiles={plantProfiles}
         profilesById={profilesById}
-        zoneAssignments={zoneAssignments}
         onAssignPlant={onAssignPlant}
         onClose={() => setZoneSheetZone(null)}
         onToast={showToast}
+        onWaterZone={onWaterZone}
       />
 
       <PlantEditorSheet

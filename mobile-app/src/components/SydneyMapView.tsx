@@ -7,13 +7,6 @@ interface SydneyMapViewProps {
   onSelect: (zone: SydneyVisualZone) => void;
 }
 
-const REF_EMOJI: Record<string, string> = {
-  Watermelon: '🍉', Squash: '🥒', Zucchini: '🥒', Eggplants: '🍆',
-  Garlic: '🌿', Veggies: '🥬', Beans: '🌿', Peppers: '🌶️',
-  Carrots: '🥕', Onions: '🧅', Strawberries: '🍓', Broccoli: '🥦',
-  Radishes: '🌱', Cucumbers: '🌿', Corn: '🌽', 'Pumpkin Patch': '🎃',
-};
-
 // Virtual coordinate space: 100 wide × 190 tall.
 // Gap between beds: 8 units throughout.
 // Landscape=22×7, portrait=7×22, square=10×10, circle=7×7
@@ -181,12 +174,10 @@ export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewPr
             const bg = bedBg(zone, profile);
             const isCircle = pos.shape === 'circle';
             const isPortrait = !isCircle && pos.h > pos.w;
-            const emoji = zone.referenceCrop ? REF_EMOJI[zone.referenceCrop] : null;
-            const displayEmoji = profile?.icon ?? emoji;
+            const displayEmoji = profile?.icon ?? null;
             const count = emojiCount(pos.w);
             const showLabel = !NO_LABEL_BEDS.has(zone.visualLabel);
             const label = profile?.name ?? (zone.assignedPlant ? 'Missing plant' : 'Unassigned');
-            const referenceLabel = zone.referenceCrop ? `ref: ${zone.referenceCrop}` : '';
 
             return (
               <span key={zone.visualLabel}>
@@ -311,9 +302,6 @@ export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewPr
                       }}>
                         {label}&nbsp;&nbsp;&nbsp;{label}
                       </span>
-                      {referenceLabel && (
-                        <span style={{ display: 'block', fontSize: 5.5, opacity: 0.72 }}>{referenceLabel}</span>
-                      )}
                     </div>
                   ) : (
                     // Horizontal label below all other beds
@@ -324,9 +312,6 @@ export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewPr
                       width: `${pos.w}%`,
                     }}>
                       {label}
-                      {referenceLabel && (
-                        <span style={{ display: 'block', fontSize: 5.5, opacity: 0.72 }}>{referenceLabel}</span>
-                      )}
                     </div>
                   )
                 )}

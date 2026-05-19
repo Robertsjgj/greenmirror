@@ -429,8 +429,13 @@ body, #root { height: 100%; overflow: hidden; }
 .gm-ring-wrap svg { display: block; }
 .gm-ring-center {
   position: absolute; inset: 0;
-  display: grid; place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   text-align: center;
+  pointer-events: none;
 }
 
 /* ── Moisture bar ──────────────────────────────────────────── */

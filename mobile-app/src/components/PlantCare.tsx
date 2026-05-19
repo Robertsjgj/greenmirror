@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { ActivityEntry, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import type { VisualZone } from '../zoneLayout';
 
@@ -12,6 +13,8 @@ interface PlantCareProps {
   onAddProfile: (prefill?: string) => void;
   onEditProfile: (p: PlantProfile) => void;
   onToast: (msg: string) => void;
+  activityLog: ActivityEntry[];
+  onWaterZone?: (zone: VisualZone, amountMl: number) => void;
 }
 
 type TaskKind = 'water' | 'check';
@@ -26,16 +29,20 @@ interface Task {
 }
 
 function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
-  const evaluation = evaluateZoneAgainstPlant(z, profile);
-  if (evaluation.tone === 'good' || evaluation.tone === 'no-data') return null;
+  // Only build tasks for zones with an assigned and resolved plant profile
+  if (!z.assignedPlant || !profile) return null;
 
-  const name = profile?.name ?? (z.displayLabel ?? z.visualLabel);
-  if (evaluation.overallStatus === 'needs-water') {
+  const evaluation = evaluateZoneAgainstPlant(z, profile);
+  const status = evaluation.overallStatus;
+  if (!['needs-water', 'too-wet', 'too-cold', 'too-hot'].includes(status)) return null;
+
+  const name = profile.name;
+  if (status === 'needs-water') {
     return {
       zoneId: z.visualLabel,
       kind: 'water',
       label: `Water the ${name.toLowerCase()}`,
-      detail: 'Give it about 200ml of water',
+      detail: `${z.displayLabel ?? z.visualLabel} · Give it about 200ml`,
       actionLabel: 'Water',
       zone: z,
     };
@@ -53,7 +60,8 @@ function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
 export function PlantCare({
   zones, loading, error,
   plantProfiles, profilesById,
-  onOpenZone, onAddProfile, onEditProfile, onToast
+  onOpenZone, onAddProfile, onEditProfile, onToast,
+  activityLog, onWaterZone,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
 
@@ -140,9 +148,15 @@ export function PlantCare({
               <TaskCard
                 key={task.zoneId}
                 task={task}
-                profile={task.zone.assignedPlantProfile ?? (task.zone.assignedPlant ? profilesById.get(task.zone.assignedPlant) ?? null : null)}
+                profile={task.zone.assignedPlant ? profilesById.get(task.zone.assignedPlant) ?? null : null}
                 onOpen={() => onOpenZone(task.zone)}
-                onAction={() => onToast(`${task.actionLabel}: ${task.label} 💧`)}
+                onAction={() => {
+                  if (task.kind === 'water' && onWaterZone) {
+                    onWaterZone(task.zone, 200);
+                  } else {
+                    onOpenZone(task.zone);
+                  }
+                }}
               />
             ))}
             {tasks.length > 3 && (
@@ -208,6 +222,35 @@ export function PlantCare({
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 16px 0', lineHeight: 1.55, fontWeight: 600 }}>
           Profiles say what each plant likes. Drop one onto a spot in the map — change it any time! 🪴
         </div>
+      </div>
+
+      {/* Activity / Watering Log */}
+      <div>
+        <div style={{ padding: '0 2px 10px' }}>
+          <h2 className="gm-h2">Activity log 📋</h2>
+          <div className="gm-sub">Recent watering and plant changes</div>
+        </div>
+        {activityLog.length === 0 ? (
+          <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
+            <div style={{ fontSize: 28, marginBottom: 6 }}>📋</div>
+            <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
+              No activity yet
+            </div>
+            <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
+              Water a bed or assign a plant to get started.
+            </div>
+          </div>
+        ) : (
+          <div className="gm-card" style={{ padding: '0 14px' }}>
+            {activityLog.slice(0, 8).map((entry, i) => (
+              <ActivityItem
+                key={entry.id}
+                entry={entry}
+                last={i === Math.min(activityLog.length, 8) - 1}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -314,5 +357,38 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
         </div>
       )}
     </button>
+  );
+}
+
+const ACTIVITY_ICON: Record<string, string> = {
+  watering: '💧',
+  assignment: '🌱',
+  cleared: '✕',
+  'profile-update': '📋',
+};
+
+function ActivityItem({ entry, last }: { entry: ActivityEntry; last: boolean }) {
+  const icon = ACTIVITY_ICON[entry.type] ?? '📋';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '11px 0',
+      borderBottom: last ? 'none' : '1px solid var(--line)',
+    }}>
+      <div style={{
+        width: 36, height: 36, borderRadius: 10, background: 'var(--bg-sub)',
+        display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0,
+      }}>
+        {icon}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink)', lineHeight: 1.3 }}>
+          {entry.message}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 1, fontWeight: 600 }}>
+          {formatActivityTime(entry.timestamp)}
+        </div>
+      </div>
+    </div>
   );
 }

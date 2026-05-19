@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { PlantProfile, ZoneAssignments, evaluateZoneAgainstPlant } from '../plantProfiles';
+import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import { VisualZone } from '../zoneLayout';
 
 interface ZoneDetailSheetProps {
   zone: VisualZone | null;
   plantProfiles: PlantProfile[];
   profilesById: Map<string, PlantProfile>;
-  zoneAssignments: ZoneAssignments;
   onAssignPlant: (zoneKey: string, plantId: string | null) => void;
   onClose: () => void;
   onToast: (msg: string) => void;
+  onWaterZone: (zone: VisualZone, amountMl: number) => void;
 }
 
 type Tone = 'good' | 'dry' | 'wet' | 'alert' | 'nodata';
@@ -29,6 +29,11 @@ const STATUS_LABEL: Record<Tone, string> = {
   alert:  'Alert',
   nodata: 'No data',
 };
+
+// Strip site prefix for compact display: "SYD-GH-LEFT-05" → "GH-LEFT-05"
+function shortId(visualLabel: string): string {
+  return visualLabel.startsWith('SYD-') ? visualLabel.slice(4) : visualLabel;
+}
 
 // SVG donut ring gauge
 const RING_R = 34;
@@ -65,7 +70,7 @@ function Ring({ value, tone, size = 88 }: { value: number | null; tone: Tone; si
         }}>
           {value != null ? `${value}%` : '—'}
         </div>
-        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-3)' }}>
+        <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--ink-3)', lineHeight: 1 }}>
           MOISTURE
         </div>
       </div>
@@ -225,17 +230,32 @@ function PlantPickerSheet({
 }
 
 export function ZoneDetailSheet({
-  zone, plantProfiles, profilesById, onAssignPlant, onClose, onToast,
+  zone, plantProfiles, profilesById, onAssignPlant, onClose, onToast, onWaterZone,
 }: ZoneDetailSheetProps) {
   const [showPicker, setShowPicker] = useState(false);
   const open = zone !== null;
 
-  const profile = zone?.assignedPlantProfile ?? (zone?.assignedPlant ? profilesById.get(zone.assignedPlant) ?? null : null);
+  const profile = zone?.assignedPlant ? (profilesById.get(zone.assignedPlant) ?? null) : null;
   const evaluation = zone ? evaluateZoneAgainstPlant(zone, profile) : null;
   const tone: Tone = (evaluation?.tone === 'no-data' ? 'nodata' : evaluation?.tone) ?? 'nodata';
-  const tempTone = evaluation?.temperatureStatus === 'too-cold' || evaluation?.temperatureStatus === 'too-hot' ? 'alert' : 'good';
+  const tempTone: Tone = evaluation?.temperatureStatus === 'too-cold' || evaluation?.temperatureStatus === 'too-hot' ? 'alert' : 'good';
   const hasReading = Boolean(zone?.hasReading);
   const siteName = zone?.visualLabel.startsWith('SYD-') ? 'Sydney' : 'Truro';
+
+  // Label model:
+  // - physicalId: short physical zone identifier (e.g. "GH-LEFT-05")
+  // - techLabel: physical + backend ID for debug context
+  // - mainTitle: plant name if assigned, else display label or "Unassigned zone"
+  const physicalId = zone ? shortId(zone.visualLabel) : '';
+  const techLabel = zone
+    ? zone.backendZoneId
+      ? `${physicalId} (${zone.backendZoneId})`
+      : physicalId
+    : '';
+  const mainTitle = profile
+    ? profile.name
+    : (zone?.displayLabel ?? 'Unassigned zone');
+  const locationSubtitle = profile ? (zone?.displayLabel ?? physicalId) : null;
 
   function handlePick(plantId: string | null) {
     if (!zone) return;
@@ -249,6 +269,11 @@ export function ZoneDetailSheet({
     }
   }
 
+  // Only show actionable recommendations (not "good" state messages)
+  const actionableMessages = evaluation?.messages.filter(
+    (m) => !m.includes('moisture is good') && !m.includes('temperature is good') && !m.includes('conditions are')
+  ) ?? [];
+
   return (
     <>
       {/* Main zone sheet */}
@@ -260,15 +285,24 @@ export function ZoneDetailSheet({
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--primary)' }}>
-                  {zone.backendZoneId ?? zone.visualLabel}
+                {/* Technical zone reference (small, muted) */}
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>
+                  {techLabel}
                 </div>
+                {/* Main title: plant name or zone name */}
                 <div style={{
                   fontFamily: "'Baloo 2', system-ui", fontSize: 26, fontWeight: 800,
                   color: 'var(--ink)', lineHeight: 1.05, marginTop: 2,
                 }}>
-                  {zone.displayLabel ?? zone.visualLabel}
+                  {mainTitle}
                 </div>
+                {/* Location subtitle when plant is the title */}
+                {locationSubtitle && (
+                  <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1, fontWeight: 600 }}>
+                    {locationSubtitle}
+                  </div>
+                )}
+                {/* Status badges */}
                 <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {hasReading && (
                     <span className={`gm-chip ${tone}`}>
@@ -279,10 +313,8 @@ export function ZoneDetailSheet({
                       {STATUS_LABEL[tone]}
                     </span>
                   )}
-                  {profile && (
-                    <span className="gm-chip primary">
-                      {profile.icon ?? '🌱'} {profile.name}
-                    </span>
+                  {!profile && (
+                    <span className="gm-chip outline">No plant assigned</span>
                   )}
                   {zone.assignedPlant && !profile && (
                     <span className="gm-chip alert">Assigned plant missing</span>
@@ -337,7 +369,7 @@ export function ZoneDetailSheet({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
               <button
                 className="gm-btn water"
-                onClick={() => onToast(`💧 Watering ${zone.displayLabel ?? zone.visualLabel} (200ml)`)}
+                onClick={() => onWaterZone(zone, 200)}
               >
                 💧 Water 200ml
               </button>
@@ -346,13 +378,14 @@ export function ZoneDetailSheet({
               </button>
             </div>
 
-            {evaluation && (
+            {/* Actionable recommendations only */}
+            {actionableMessages.length > 0 && (
               <div className="gm-card" style={{ padding: 14, marginTop: 12 }}>
                 <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', marginBottom: 8 }}>
                   Recommendation
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {evaluation.messages.map((message) => (
+                  {actionableMessages.map((message) => (
                     <div
                       key={message}
                       className={`gm-chip ${tone}`}
@@ -401,19 +434,18 @@ export function ZoneDetailSheet({
               </div>
             )}
 
-            {/* Sensor metadata */}
-            <div style={{ margin: '16px 0 8px', fontSize: 14, fontWeight: 700, color: 'var(--ink-2)' }}>
-              Sensor
+            {/* Sensor metadata (debug context, secondary) */}
+            <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>
+              Zone info
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {[
-                { label: 'Backend', value: zone.backendZoneId ?? '—' },
-                { label: 'Node',    value: zone.nodeId ?? '—' },
-                { label: 'Zone ID', value: zone.visualLabel },
-                { label: 'Site',    value: siteName },
-                { label: 'Area',    value: zone.rowLabel ?? '—' },
-                { label: 'Reference', value: zone.referenceCrop ? `${zone.referenceCrop} hint` : '—' },
-                { label: 'Temp status', value: zone.soilTempStatus ?? '—' },
+                { label: 'Physical zone', value: physicalId },
+                { label: 'Site',          value: siteName },
+                { label: 'Backend zone',  value: zone.backendZoneId ?? '—' },
+                { label: 'Node',          value: zone.nodeId ?? '—' },
+                { label: 'Area',          value: zone.rowLabel ?? '—' },
+                { label: 'Temp status',   value: zone.soilTempStatus ?? '—' },
               ].map((kv) => (
                 <div key={kv.label} className="gm-kv">
                   <label>{kv.label}</label>
@@ -425,8 +457,8 @@ export function ZoneDetailSheet({
             {/* Backend alerts */}
             {zone.alerts.length > 0 && (
               <>
-                <div style={{ margin: '16px 0 8px', fontSize: 14, fontWeight: 700, color: 'var(--ink-2)' }}>
-                  Backend alerts
+                <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--ink-2)' }}>
+                  Sensor alerts
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {zone.alerts.map((a) => (
