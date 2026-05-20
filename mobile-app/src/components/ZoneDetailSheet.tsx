@@ -252,9 +252,8 @@ export function ZoneDetailSheet({
       ? `${physicalId} (${zone.backendZoneId})`
       : physicalId
     : '';
-  const mainTitle = profile
-    ? profile.name
-    : (zone?.displayLabel ?? 'Unassigned zone');
+  const isUnassigned = !zone?.assignedPlant;
+  const mainTitle = profile ? profile.name : 'Unassigned';
   const locationSubtitle = profile ? (zone?.displayLabel ?? physicalId) : null;
 
   function handlePick(plantId: string | null) {
@@ -269,10 +268,15 @@ export function ZoneDetailSheet({
     }
   }
 
-  // Only show actionable recommendations (not "good" state messages)
-  const actionableMessages = evaluation?.messages.filter(
-    (m) => !m.includes('moisture is good') && !m.includes('temperature is good') && !m.includes('conditions are')
-  ) ?? [];
+  // Plant-care recommendations only apply to assigned zones with a resolved profile
+  const actionableMessages = (profile && !isUnassigned)
+    ? (evaluation?.messages.filter(
+        (m) => !m.includes('moisture is good') && !m.includes('temperature is good') && !m.includes('conditions are')
+      ) ?? [])
+    : [];
+
+  // For unassigned zones with a live reading and no hardware alerts, show a calm prompt
+  const showAssignmentPrompt = isUnassigned && hasReading && (zone?.alerts?.length ?? 0) === 0;
 
   return (
     <>
@@ -378,7 +382,23 @@ export function ZoneDetailSheet({
               </button>
             </div>
 
-            {/* Actionable recommendations only */}
+            {/* Assignment prompt — unassigned zone with good sensor data */}
+            {showAssignmentPrompt && (
+              <div className="gm-card" style={{ padding: 16, marginTop: 12, textAlign: 'center' }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                  Assign a plant profile to start receiving care recommendations for this zone.
+                </div>
+                <button
+                  className="gm-btn soft"
+                  style={{ marginTop: 10 }}
+                  onClick={() => setShowPicker(true)}
+                >
+                  🌱 Choose a plant
+                </button>
+              </div>
+            )}
+
+            {/* Actionable recommendations only — assigned zones */}
             {actionableMessages.length > 0 && (
               <div className="gm-card" style={{ padding: 14, marginTop: 12 }}>
                 <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', marginBottom: 8 }}>

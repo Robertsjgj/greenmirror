@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityEntry, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import type { VisualZone } from '../zoneLayout';
+
+// ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface PlantCareProps {
   zones: VisualZone[];
@@ -20,6 +22,7 @@ interface PlantCareProps {
 type TaskKind = 'water' | 'check';
 
 interface Task {
+  id: string;
   zoneId: string;
   kind: TaskKind;
   label: string;
@@ -28,17 +31,51 @@ interface Task {
   zone: VisualZone;
 }
 
-function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
-  // Only build tasks for zones with an assigned and resolved plant profile
-  if (!z.assignedPlant || !profile) return null;
+// ─── Task completion storage ─────────────────────────────────────────────────
 
+const COMPLETED_TASKS_KEY = 'greenmirror-completed-tasks';
+// Module-scoped date string — valid for the lifetime of this page session.
+const SESSION_DATE = new Date().toISOString().slice(0, 10);
+
+function loadCompletedTaskIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(COMPLETED_TASKS_KEY);
+    const data: Record<string, string[]> = raw ? JSON.parse(raw) : {};
+    return new Set<string>(Array.isArray(data[SESSION_DATE]) ? data[SESSION_DATE] : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function persistCompletedTask(taskId: string): void {
+  try {
+    const raw = window.localStorage.getItem(COMPLETED_TASKS_KEY);
+    const data: Record<string, string[]> = raw ? JSON.parse(raw) : {};
+    const todaySet = new Set<string>(Array.isArray(data[SESSION_DATE]) ? data[SESSION_DATE] : []);
+    todaySet.add(taskId);
+    // Prune entries older than 7 days
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 7);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const pruned: Record<string, string[]> = {};
+    Object.entries(data).forEach(([d, ids]) => { if (d >= cutoffStr) pruned[d] = ids; });
+    pruned[SESSION_DATE] = [...todaySet];
+    window.localStorage.setItem(COMPLETED_TASKS_KEY, JSON.stringify(pruned));
+  } catch { /* storage unavailable */ }
+}
+
+// ─── Task building ───────────────────────────────────────────────────────────
+
+function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
+  if (!z.assignedPlant || !profile) return null;
   const evaluation = evaluateZoneAgainstPlant(z, profile);
   const status = evaluation.overallStatus;
   if (!['needs-water', 'too-wet', 'too-cold', 'too-hot'].includes(status)) return null;
-
   const name = profile.name;
+  const id = `${status}-${z.visualLabel}-${z.assignedPlant}`;
   if (status === 'needs-water') {
     return {
+      id,
       zoneId: z.visualLabel,
       kind: 'water',
       label: `Water the ${name.toLowerCase()}`,
@@ -48,6 +85,7 @@ function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
     };
   }
   return {
+    id,
     zoneId: z.visualLabel,
     kind: 'check',
     label: `Check ${name}`,
@@ -57,6 +95,58 @@ function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
   };
 }
 
+// ─── Trend computation ───────────────────────────────────────────────────────
+
+interface DayStats {
+  date: string;
+  label: string;
+  count: number;
+  ml: number;
+}
+
+interface Trends {
+  last7Days: DayStats[];
+  topZones: Array<{ zoneId: string; count: number }>;
+  totalWaterings: number;
+  totalMl: number;
+}
+
+function computeTrends(entries: ActivityEntry[]): Trends {
+  const waterings = entries.filter((e) => e.type === 'watering');
+  const dayMap = new Map<string, DayStats>();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const label = d.toLocaleDateString('en', { weekday: 'short' });
+    dayMap.set(dateStr, { date: dateStr, label, count: 0, ml: 0 });
+  }
+  const zoneCounts = new Map<string, number>();
+  for (const e of waterings) {
+    const date = e.timestamp.slice(0, 10);
+    const day = dayMap.get(date);
+    if (day) { day.count++; day.ml += e.amountMl ?? 0; }
+    if (e.visualZoneId) zoneCounts.set(e.visualZoneId, (zoneCounts.get(e.visualZoneId) ?? 0) + 1);
+  }
+  const topZones = [...zoneCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([zoneId, count]) => ({ zoneId, count }));
+  return {
+    last7Days: [...dayMap.values()],
+    topZones,
+    totalWaterings: waterings.length,
+    totalMl: waterings.reduce((sum, e) => sum + (e.amountMl ?? 0), 0),
+  };
+}
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const TASKS_DEFAULT_VISIBLE = 3;
+const PROFILES_PER_PAGE = 5;
+
+// ─── Main component ──────────────────────────────────────────────────────────
+
 export function PlantCare({
   zones, loading, error,
   plantProfiles, profilesById,
@@ -64,41 +154,73 @@ export function PlantCare({
   activityLog, onWaterZone,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
+  const [profilePage, setProfilePage] = useState(0);
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const [completedIds, setCompletedIds] = useState<Set<string>>(loadCompletedTaskIds);
 
-  const tasks = useMemo(() => {
-    return zones
+  useEffect(() => { setProfilePage(0); }, [query]);
+
+  const allTasks = useMemo(
+    () => zones
       .map((z) => buildTask(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null))
-      .filter((t): t is Task => t !== null);
-  }, [zones, profilesById]);
+      .filter((t): t is Task => t !== null),
+    [zones, profilesById]
+  );
+
+  const { incompleteTasks, completedTasks } = useMemo(() => {
+    const incomplete: Task[] = [], complete: Task[] = [];
+    allTasks.forEach((t) => (completedIds.has(t.id) ? complete : incomplete).push(t));
+    return { incompleteTasks: incomplete, completedTasks: complete };
+  }, [allTasks, completedIds]);
+
+  function handleComplete(task: Task) {
+    persistCompletedTask(task.id);
+    setCompletedIds((prev) => { const next = new Set(prev); next.add(task.id); return next; });
+    if (task.kind === 'water' && onWaterZone) {
+      onWaterZone(task.zone, 200);
+    } else {
+      onToast(`✓ ${task.label}`);
+    }
+  }
+
+  const visibleIncompleteTasks = showAllTasks
+    ? incompleteTasks
+    : incompleteTasks.slice(0, TASKS_DEFAULT_VISIBLE);
+  const hasHiddenTasks = incompleteTasks.length > TASKS_DEFAULT_VISIBLE;
 
   const summary = useMemo(() => {
     let good = 0, attention = 0;
     zones.forEach((z) => {
-      const evaluation = evaluateZoneAgainstPlant(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
-      if (evaluation.tone === 'good') good++;
-      else if (evaluation.tone !== 'no-data') attention++;
+      const ev = evaluateZoneAgainstPlant(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null);
+      if (ev.tone === 'good') good++;
+      else if (ev.tone !== 'no-data') attention++;
     });
     return { good, attention, total: zones.length };
   }, [zones, profilesById]);
 
   const assignedZonesByPlant = useMemo(() => {
     const m: Record<string, VisualZone[]> = {};
-    zones.forEach((z) => {
-      if (z.assignedPlant) m[z.assignedPlant] = [...(m[z.assignedPlant] ?? []), z];
-    });
+    zones.forEach((z) => { if (z.assignedPlant) m[z.assignedPlant] = [...(m[z.assignedPlant] ?? []), z]; });
     return m;
   }, [zones]);
 
-  const filteredProfiles = useMemo(() =>
-    plantProfiles.filter((p) =>
+  const filteredProfiles = useMemo(
+    () => plantProfiles.filter((p) =>
       p.name.toLowerCase().includes(query.toLowerCase()) ||
       (p.notes ?? '').toLowerCase().includes(query.toLowerCase())
     ),
     [plantProfiles, query]
   );
 
+  const totalPages = Math.max(1, Math.ceil(filteredProfiles.length / PROFILES_PER_PAGE));
+  const safePage = Math.min(profilePage, totalPages - 1);
+  const pagedProfiles = filteredProfiles.slice(safePage * PROFILES_PER_PAGE, (safePage + 1) * PROFILES_PER_PAGE);
+
+  const trends = useMemo(() => computeTrends(activityLog), [activityLog]);
+  const hasActivity = activityLog.length > 0;
+
   const needsAttention = summary.attention;
-  const total = summary.total;
+  const totalIncompleteTasks = incompleteTasks.length;
 
   return (
     <div style={{ padding: '12px 16px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -110,7 +232,7 @@ export function PlantCare({
             <div className="gm-callout-emoji">🌱</div>
             <div>
               <h3>Everything's happy today!</h3>
-              <p>All {total || 'your'} sections in the greenhouse are doing great.</p>
+              <p>All {summary.total || 'your'} sections are doing great.</p>
             </div>
           </div>
         ) : (
@@ -118,58 +240,184 @@ export function PlantCare({
             <div className="gm-callout-emoji">🏡</div>
             <div>
               <h3>Greenhouse: {needsAttention} section{needsAttention !== 1 ? 's' : ''} need attention</h3>
-              <p>Check your tasks below for what to do.</p>
+              <p>Check your tasks below.</p>
             </div>
           </div>
         )
       )}
-
       {error && (
         <div className="gm-callout alert">
           <div className="gm-callout-emoji">⚠️</div>
-          <div>
-            <h3>Backend offline</h3>
-            <p>{error}</p>
-          </div>
+          <div><h3>Backend offline</h3><p>{error}</p></div>
         </div>
       )}
 
-      {/* Tasks */}
-      {tasks.length > 0 && (
-        <div>
-          <div style={{ padding: '0 2px 10px' }}>
-            <h2 className="gm-h2">Today's Tasks</h2>
-            <div className="gm-sub">
-              You have {tasks.length} thing{tasks.length !== 1 ? 's' : ''} to do today! 🌱
+      {/* ── SECTION 1: Today's Tasks ──────────────────────────────────── */}
+      <div>
+        <div style={{ padding: '0 2px 10px' }}>
+          <h2 className="gm-h2">Today's Tasks</h2>
+          <div className="gm-sub">
+            {totalIncompleteTasks === 0 && completedTasks.length === 0
+              ? 'Nothing to do · assign plants in the Map to get tasks'
+              : totalIncompleteTasks === 0
+                ? `All ${completedTasks.length} task${completedTasks.length !== 1 ? 's' : ''} done today 🎉`
+                : `${totalIncompleteTasks} to do${completedTasks.length > 0 ? ` · ${completedTasks.length} done` : ''}`}
+          </div>
+        </div>
+        {totalIncompleteTasks === 0 && completedTasks.length === 0 ? (
+          <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
+            <div style={{ fontSize: 28, marginBottom: 6 }}>🌿</div>
+            <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
+              No tasks yet
+            </div>
+            <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
+              Assign plant profiles in the Map to get personalised care tasks.
             </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {tasks.slice(0, 3).map((task) => (
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {/* Incomplete tasks */}
+            {visibleIncompleteTasks.map((task) => (
               <TaskCard
-                key={task.zoneId}
+                key={task.id}
                 task={task}
                 profile={task.zone.assignedPlant ? profilesById.get(task.zone.assignedPlant) ?? null : null}
+                completed={false}
                 onOpen={() => onOpenZone(task.zone)}
-                onAction={() => {
-                  if (task.kind === 'water' && onWaterZone) {
-                    onWaterZone(task.zone, 200);
-                  } else {
-                    onOpenZone(task.zone);
-                  }
-                }}
+                onAction={() => handleComplete(task)}
               />
             ))}
-            {tasks.length > 3 && (
-              <div className="gm-row" style={{ justifyContent: 'space-between' }}>
-                <span style={{ fontWeight: 800, fontSize: 14 }}>Show {tasks.length - 3} more</span>
-                <span style={{ fontSize: 18 }}>›</span>
-              </div>
+
+            {/* Show more / show less toggle */}
+            {hasHiddenTasks && (
+              <button
+                className="gm-card"
+                onClick={() => setShowAllTasks((v) => !v)}
+                style={{
+                  padding: '12px 14px', display: 'flex', justifyContent: 'space-between',
+                  alignItems: 'center', cursor: 'pointer', width: '100%', textAlign: 'left',
+                  border: '1.5px dashed var(--line)',
+                }}
+              >
+                <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--primary)' }}>
+                  {showAllTasks
+                    ? 'Show less'
+                    : `Show ${incompleteTasks.length - TASKS_DEFAULT_VISIBLE} more task${incompleteTasks.length - TASKS_DEFAULT_VISIBLE !== 1 ? 's' : ''}`}
+                </span>
+                <span style={{
+                  fontSize: 18, color: 'var(--primary)',
+                  transform: showAllTasks ? 'rotate(90deg)' : 'none',
+                  transition: 'transform 0.2s',
+                  display: 'inline-block',
+                }}>
+                  ›
+                </span>
+              </button>
+            )}
+
+            {/* Completed tasks */}
+            {completedTasks.length > 0 && (
+              <>
+                <div style={{
+                  fontSize: 10, fontWeight: 800, color: 'var(--ink-3)',
+                  letterSpacing: '0.1em', padding: '6px 2px 2px', textTransform: 'uppercase',
+                }}>
+                  Completed today
+                </div>
+                {completedTasks.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    profile={task.zone.assignedPlant ? profilesById.get(task.zone.assignedPlant) ?? null : null}
+                    completed={true}
+                    onOpen={() => onOpenZone(task.zone)}
+                    onAction={() => {}}
+                  />
+                ))}
+              </>
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Plant library */}
+      {/* ── SECTION 2: Activity / Watering Log + Trends ──────────────── */}
+      <div>
+        <div style={{ padding: '0 2px 10px' }}>
+          <h2 className="gm-h2">Activity & Trends 📋</h2>
+          <div className="gm-sub">Watering history and plant changes</div>
+        </div>
+        {!hasActivity ? (
+          <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
+            <div style={{ fontSize: 28, marginBottom: 6 }}>💧</div>
+            <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
+              No watering activity logged yet
+            </div>
+            <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
+              Water a bed from Today's Tasks or a Zone to get started.
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Watering frequency trend */}
+            {trends.totalWaterings > 0 && (
+              <div className="gm-card" style={{ padding: 14, marginBottom: 10 }}>
+                <div style={{
+                  fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
+                  color: 'var(--ink-3)', marginBottom: 10, textTransform: 'uppercase',
+                }}>
+                  Watering · last 7 days
+                </div>
+                <MiniBarChart days={trends.last7Days} />
+                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                  <StatChip label="Total waterings" value={String(trends.totalWaterings)} />
+                  {trends.totalMl > 0 && <StatChip label="Total water" value={`${trends.totalMl}ml`} />}
+                </div>
+                {trends.topZones.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--ink-3)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                      Most watered spots
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                      {trends.topZones.map(({ zoneId, count }, i) => {
+                        const pct = Math.round((count / trends.totalWaterings) * 100);
+                        return (
+                          <div key={zoneId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', width: 14 }}>
+                              {i + 1}.
+                            </span>
+                            <div style={{ flex: 1, background: 'var(--line)', borderRadius: 99, height: 6, overflow: 'hidden' }}>
+                              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--wet)', borderRadius: 99 }} />
+                            </div>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', minWidth: 0, maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {zoneId}
+                            </span>
+                            <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--wet)', flexShrink: 0 }}>
+                              {count}×
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Activity list */}
+            <div className="gm-card" style={{ padding: '0 14px' }}>
+              {activityLog.slice(0, 8).map((entry, i) => (
+                <ActivityItem
+                  key={entry.id}
+                  entry={entry}
+                  last={i === Math.min(activityLog.length, 8) - 1}
+                />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── SECTION 3: Your Plants / Plant Profiles ───────────────────── */}
       <div>
         <div style={{ padding: '0 2px 10px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <div>
@@ -190,7 +438,7 @@ export function PlantCare({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Find a plant…"
             style={{
-              width: '100%', padding: '13px 14px 13px 42px',
+              width: '100%', padding: '13px 14px 13px 42px', boxSizing: 'border-box',
               background: 'var(--card)', border: '1.5px solid var(--line)',
               borderRadius: 16, fontSize: 14, outline: 'none', color: 'var(--ink)',
               fontFamily: 'inherit', fontWeight: 600,
@@ -209,87 +457,100 @@ export function PlantCare({
                 + Add "{query}" to my plants
               </button>
             </div>
-          ) : filteredProfiles.map((p) => (
-            <ProfileCard
-              key={p.id}
-              profile={p}
-              assignedZones={assignedZonesByPlant[p.id] ?? []}
-              onEdit={() => onEditProfile(p)}
-            />
-          ))}
+          ) : (
+            <>
+              {pagedProfiles.map((p) => (
+                <ProfileCard
+                  key={p.id}
+                  profile={p}
+                  assignedZones={assignedZonesByPlant[p.id] ?? []}
+                  onEdit={() => onEditProfile(p)}
+                />
+              ))}
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 2px', gap: 8 }}>
+                  <button
+                    className="gm-btn soft"
+                    style={{ padding: '8px 18px', fontSize: 13 }}
+                    disabled={safePage === 0}
+                    onClick={() => setProfilePage((p) => Math.max(0, p - 1))}
+                  >
+                    ‹ Prev
+                  </button>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)' }}>
+                    Page {safePage + 1} of {totalPages}
+                  </span>
+                  <button
+                    className="gm-btn soft"
+                    style={{ padding: '8px 18px', fontSize: 13 }}
+                    disabled={safePage >= totalPages - 1}
+                    onClick={() => setProfilePage((p) => Math.min(totalPages - 1, p + 1))}
+                  >
+                    Next ›
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <div style={{ fontSize: 12, color: 'var(--ink-3)', textAlign: 'center', padding: '14px 16px 0', lineHeight: 1.55, fontWeight: 600 }}>
-          Profiles say what each plant likes. Drop one onto a spot in the map — change it any time! 🪴
+          Profiles say what each plant likes. Assign one in the Map — change it any time! 🪴
         </div>
-      </div>
-
-      {/* Activity / Watering Log */}
-      <div>
-        <div style={{ padding: '0 2px 10px' }}>
-          <h2 className="gm-h2">Activity log 📋</h2>
-          <div className="gm-sub">Recent watering and plant changes</div>
-        </div>
-        {activityLog.length === 0 ? (
-          <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
-            <div style={{ fontSize: 28, marginBottom: 6 }}>📋</div>
-            <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
-              No activity yet
-            </div>
-            <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
-              Water a bed or assign a plant to get started.
-            </div>
-          </div>
-        ) : (
-          <div className="gm-card" style={{ padding: '0 14px' }}>
-            {activityLog.slice(0, 8).map((entry, i) => (
-              <ActivityItem
-                key={entry.id}
-                entry={entry}
-                last={i === Math.min(activityLog.length, 8) - 1}
-              />
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-function TaskCard({ task, profile, onOpen, onAction }: {
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function TaskCard({
+  task, profile, completed, onOpen, onAction,
+}: {
   task: Task; profile: PlantProfile | null;
-  onOpen: () => void; onAction: () => void;
+  completed: boolean; onOpen: () => void; onAction: () => void;
 }) {
   return (
     <div
-      onClick={onOpen}
+      onClick={completed ? undefined : onOpen}
       role="button"
       tabIndex={0}
       className="gm-card"
-      style={{ width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: 12, padding: 14, cursor: 'pointer' }}
+      style={{
+        width: '100%', textAlign: 'left',
+        display: 'flex', alignItems: 'center', gap: 12, padding: 14,
+        cursor: completed ? 'default' : 'pointer',
+        opacity: completed ? 0.55 : 1,
+        transition: 'opacity 0.25s',
+      }}
     >
       <div style={{
-        width: 50, height: 50, borderRadius: 16,
-        background: profile ? 'var(--primary-soft)' : 'var(--bg-sub)',
-        display: 'grid', placeItems: 'center', fontSize: 26, flexShrink: 0,
+        width: 50, height: 50, borderRadius: 16, flexShrink: 0,
+        background: completed ? 'var(--good-soft, #e9fbe9)' : profile ? 'var(--primary-soft)' : 'var(--bg-sub)',
+        display: 'grid', placeItems: 'center', fontSize: 26,
       }}>
-        {profile?.icon ?? '🌱'}
+        {completed ? '✅' : (profile?.icon ?? '🌱')}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>
+        <div style={{
+          fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)',
+          textDecoration: completed ? 'line-through' : 'none',
+        }}>
           {task.label}
         </div>
         <div style={{ fontSize: 13, color: 'var(--ink-3)', marginTop: 1, fontWeight: 600 }}>
-          {task.detail}
+          {completed ? 'Done today ✓' : task.detail}
         </div>
       </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onAction(); }}
-        className={`gm-btn ${task.kind === 'water' ? 'water' : 'check'}`}
-        style={{ padding: '10px 18px', flexShrink: 0, fontSize: 14 }}
-      >
-        {task.actionLabel}
-      </button>
+      {!completed && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onAction(); }}
+          className={`gm-btn ${task.kind === 'water' ? 'water' : 'check'}`}
+          style={{ padding: '10px 18px', flexShrink: 0, fontSize: 14 }}
+        >
+          {task.actionLabel}
+        </button>
+      )}
     </div>
   );
 }
@@ -300,9 +561,8 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
   const zoneCount = assignedZones.length;
   const assignedLabels = assignedZones
     .slice(0, 4)
-    .map((zone) => zone.displayLabel ?? zone.visualLabel)
+    .map((z) => z.displayLabel ?? z.visualLabel)
     .join(', ');
-
   return (
     <button
       onClick={onEdit}
@@ -311,18 +571,15 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{
-          width: 50, height: 50, borderRadius: 16,
-          background: 'var(--primary-soft)',
+          width: 50, height: 50, borderRadius: 16, background: 'var(--primary-soft)',
           display: 'grid', placeItems: 'center', fontSize: 26, flexShrink: 0,
         }}>
           {profile.icon ?? '🌱'}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 17, fontWeight: 800, color: 'var(--ink)' }}>
-              {profile.name}
-            </span>
-          </div>
+          <span style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 17, fontWeight: 800, color: 'var(--ink)' }}>
+            {profile.name}
+          </span>
           {profile.notes && (
             <div style={{
               fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1, lineHeight: 1.4,
@@ -335,7 +592,6 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
         </div>
         <span style={{ fontSize: 18, color: 'var(--ink-3)' }}>›</span>
       </div>
-
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         <span className="gm-chip wet" style={{ background: 'var(--wet-soft)', color: 'var(--wet)' }}>
           💧 {profile.moistureMin}–{profile.moistureMax}%
@@ -344,9 +600,7 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
           🌡 {profile.soilTempMin}–{profile.soilTempMax}°C
         </span>
         {zoneCount > 0 ? (
-          <span className="gm-chip primary">
-            🌱 {zoneCount} {zoneCount === 1 ? 'spot' : 'spots'}
-          </span>
+          <span className="gm-chip primary">🌱 {zoneCount} {zoneCount === 1 ? 'spot' : 'spots'}</span>
         ) : (
           <span className="gm-chip outline">resting</span>
         )}
@@ -357,6 +611,43 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
         </div>
       )}
     </button>
+  );
+}
+
+function MiniBarChart({ days }: { days: DayStats[] }) {
+  const max = Math.max(...days.map((d) => d.count), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 52 }}>
+      {days.map((d) => (
+        <div key={d.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+          <div style={{
+            width: '100%', borderRadius: '4px 4px 2px 2px',
+            background: d.count > 0 ? 'var(--wet)' : 'var(--line)',
+            height: `${Math.max(3, Math.round((d.count / max) * 38))}px`,
+            transition: 'height 0.4s ease',
+          }} />
+          <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700, lineHeight: 1 }}>
+            {d.label.slice(0, 2)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StatChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ flex: 1, background: 'var(--bg-sub)', borderRadius: 10, padding: '8px 10px' }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        {label}
+      </div>
+      <div style={{
+        fontFamily: "'Baloo 2', system-ui", fontSize: 18, fontWeight: 800,
+        color: 'var(--ink)', lineHeight: 1.2, marginTop: 2, fontVariantNumeric: 'tabular-nums',
+      }}>
+        {value}
+      </div>
+    </div>
   );
 }
 
