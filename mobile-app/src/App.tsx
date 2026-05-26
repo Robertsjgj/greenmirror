@@ -9,6 +9,8 @@ import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
 import { ActivityEntry, loadActivity, logActivity } from './activityLog';
 import { LATEST_READING_URL } from './config';
+import { firebaseEnabled } from './services/firebase';
+import { subscribeToLatestReading } from './services/readingsService';
 import {
   PlantProfile,
   ZoneAssignments,
@@ -73,11 +75,27 @@ const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (site: Map
   runoff:      { title: 'Water tracker',   emoji: '💧',  sub: () => 'Where your water goes' },
 };
 
+// Greenhouse ID used as the Firestore document key for latestReadings.
+// The backend writes `latestReadings/{reading.greenhouse_id || 'primary'}`.
+const FIRESTORE_GH_ID = 'primary';
+
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('plants');
-  const [latestReading, setLatestReading] = useState<LatestReading | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+
+  // ── Data sources (kept separate so priority logic stays explicit) ──────────
+  // Firestore real-time reading — set by the onSnapshot listener below.
+  const [firestoreReading, setFirestoreReading] = useState<LatestReading | null>(null);
+  // API polling reading — set by fetchReading().
+  const [apiReading, setApiReading] = useState<LatestReading | null>(null);
+  const [apiLoading, setApiLoading] = useState(true);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  // ── Derived reading state (Firestore wins when present) ────────────────────
+  // These are what every downstream component receives — same interface as before.
+  const latestReading: LatestReading | null = firestoreReading ?? apiReading;
+  const loading: boolean = latestReading === null && apiLoading;
+  const error: string | null = latestReading === null ? apiError : null;
+
   const [mapKind, setMapKind] = useState<MapKind>(loadMapKind);
   const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
@@ -91,29 +109,84 @@ export function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // API polling
+  // ── API polling (always runs; primary source when Firestore is absent) ──────
   const fetchReading = useCallback(async () => {
-    setLoading(true);
+    setApiLoading(true);
     try {
       const res = await fetch(LATEST_READING_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
       const data = text ? JSON.parse(text) : null;
-      setLatestReading(data?.zones?.length ? data : null);
-      setError(null);
+      const reading: LatestReading | null = data?.zones?.length ? data : null;
+      setApiReading(reading);
+      setApiError(null);
+      if (reading) {
+        console.info(
+          '[GreenMirror] API reading · zones:', reading.zones.length,
+          '· ts:', reading.timestamp,
+          firestoreReading ? '(Firestore active — API as heartbeat)' : '(API is primary source)',
+        );
+      }
     } catch (e: unknown) {
-      setLatestReading(null);
-      setError(e instanceof Error ? e.message : 'Fetch failed');
+      const msg = e instanceof Error ? e.message : 'Fetch failed';
+      setApiReading(null);
+      setApiError(msg);
+      console.warn('[GreenMirror] API polling failed:', msg,
+        firestoreReading ? '— Firestore data still active' : '— no data available',
+      );
     } finally {
-      setLoading(false);
+      setApiLoading(false);
     }
-  }, []);
+  }, [firestoreReading]);
 
   useEffect(() => {
     fetchReading();
     const id = setInterval(fetchReading, 8000);
     return () => clearInterval(id);
   }, [fetchReading]);
+
+  // ── Firestore real-time listener ────────────────────────────────────────────
+  useEffect(() => {
+    if (!firebaseEnabled) {
+      console.info(
+        '[GreenMirror] Firestore disabled — API polling is the only data source.',
+        '\n  To enable Firestore: set VITE_FIREBASE_* env vars in mobile-app/.env.local',
+      );
+      return;
+    }
+
+    console.info('[GreenMirror] Firestore listener starting for greenhouse "' + FIRESTORE_GH_ID + '"');
+
+    const unsub = subscribeToLatestReading(
+      FIRESTORE_GH_ID,
+      (reading) => {
+        console.info(
+          '[GreenMirror] Firestore reading received · zones:', reading.zones?.length,
+          '· ts:', reading.timestamp,
+        );
+        setFirestoreReading(reading);
+      },
+      (err) => {
+        console.warn('[GreenMirror] Firestore listener error:', err.message,
+          '— falling back to API polling',
+        );
+        // Don't touch firestoreReading — let it go stale naturally;
+        // API polling keeps latestReading alive through apiReading.
+      },
+    );
+
+    return () => { unsub?.(); };
+  }, []); // Single subscription for the session — FIRESTORE_GH_ID is stable
+
+  // ── Data source logging (fires only when source changes) ───────────────────
+  const prevSourceRef = useRef<string>('offline');
+  useEffect(() => {
+    const src = firestoreReading ? 'firestore' : apiReading ? 'api' : 'offline';
+    if (src !== prevSourceRef.current) {
+      console.info('[GreenMirror] Active data source:', prevSourceRef.current, '→', src);
+      prevSourceRef.current = src;
+    }
+  }, [firestoreReading, apiReading]);
 
   // Persist state
   useEffect(() => { savePlantProfiles(plantProfiles); }, [plantProfiles]);
