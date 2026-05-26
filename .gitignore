@@ -29,3 +29,14 @@ venv/
 # =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.local
+.env.*.local
+# Firebase service account key files (never commit)
+firebase-service-account.json
+*-service-account.json
+serviceAccountKey.json

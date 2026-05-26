@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const os = require("os");
 const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
+const { saveReading, firestoreEnabled } = require("./firestore");
 
 function getLanIp() {
   for (const nets of Object.values(os.networkInterfaces())) {
@@ -70,6 +71,9 @@ app.post("/api/readings", (req, res) => {
 
   readingsHistory.push(latestReading);
 
+  // Write to Firestore if configured (non-blocking, non-fatal)
+  if (firestoreEnabled) saveReading(latestReading);
+
   res.status(200).json({ status: "ok" });
 });
 
@@ -94,6 +98,7 @@ if (USE_SIMULATION) {
       // Simulated ticks behave like incoming ESP readings and are kept in history.
       latestSystemState = systemState;
       readingsHistory.push(systemState);
+      if (firestoreEnabled) saveReading(systemState);
       console.log(
         `Simulated ${systemState.node_count} nodes / ${systemState.zone_count} zones at ${systemState.timestamp}`
       );
