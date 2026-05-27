@@ -76,8 +76,9 @@ const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (site: Map
 };
 
 // Greenhouse ID used as the Firestore document key for latestReadings.
-// The backend writes `latestReadings/{reading.greenhouse_id || 'primary'}`.
-const FIRESTORE_GH_ID = 'primary';
+// Must match GREENHOUSE_ID in raspberry-pi/simulator.js ("greenmirror-demo").
+// Real ESP readings fall back to reading.greenhouse_id || 'primary'.
+const FIRESTORE_GH_ID = 'greenmirror-demo';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('plants');

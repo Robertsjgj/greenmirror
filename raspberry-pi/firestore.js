@@ -3,101 +3,164 @@
 /**
  * Firestore writer — raspberry-pi backend (optional).
  *
- * The server starts and operates normally without this module being
- * fully initialised.  All failures are caught and logged; they never
- * crash the server.
+ * Credential loading priority (first match wins):
  *
- * Configuration via environment variables (set in .env or system env):
+ *   1. firebase-service-account.json in the same directory as this file
+ *      → Drop the JSON file there and it just works. No env vars needed.
  *
- *   Option A — explicit service account credentials:
- *     FIREBASE_PROJECT_ID     your-project-id
- *     FIREBASE_CLIENT_EMAIL   firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
- *     FIREBASE_PRIVATE_KEY    -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
+ *   2. Inline env vars in .env:
+ *        FIREBASE_PROJECT_ID     your-project-id
+ *        FIREBASE_CLIENT_EMAIL   firebase-adminsdk-xxx@...iam.gserviceaccount.com
+ *        FIREBASE_PRIVATE_KEY    -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
+ *        (the \n sequences are expanded automatically)
  *
- *   Option B — service account JSON file:
- *     GOOGLE_APPLICATION_CREDENTIALS   /path/to/service-account.json
- *     FIREBASE_PROJECT_ID              your-project-id
+ *   3. GOOGLE_APPLICATION_CREDENTIALS path + FIREBASE_PROJECT_ID
+ *      → Points to any service account JSON file.
  *
- * If none of the above are present, Firestore writes are silently skipped.
+ * If none of the above are found, Firestore writes are silently skipped
+ * and the server continues normally.
+ *
+ * dotenv must be loaded BEFORE this module (done in server.js line 1).
  */
 
-let _saveReading = async () => {};
+const path = require('path');
+const fs   = require('fs');
+
+let _saveReading    = async () => {};
 let _firestoreEnabled = false;
 
-try {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+// ─── Debug helpers ────────────────────────────────────────────────────────────
 
-  if (!projectId) {
-    console.log(
-      '[Firestore] FIREBASE_PROJECT_ID not set — Firestore writes disabled. Set env vars to enable.'
-    );
+function present(val, label) {
+  if (val) {
+    console.log(`[Firestore]   ✅ ${label}: set (${String(val).slice(0, 40)}${String(val).length > 40 ? '...' : ''})`);
   } else {
-    // require() inside try/catch: if firebase-admin is not installed,
-    // we get MODULE_NOT_FOUND which is caught below — server keeps running.
-    const admin = require('firebase-admin');
-
-    if (!admin.apps.length) {
-      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-      const rawKey      = process.env.FIREBASE_PRIVATE_KEY;
-      const privateKey  = rawKey ? rawKey.replace(/\\n/g, '\n') : undefined;
-
-      const credential = clientEmail && privateKey
-        ? admin.credential.cert({ projectId, clientEmail, privateKey })
-        : admin.credential.applicationDefault();   // uses GOOGLE_APPLICATION_CREDENTIALS
-
-      admin.initializeApp({ credential, projectId });
-    }
-
-    const db = admin.firestore();
-    _firestoreEnabled = true;
-    console.log(`[Firestore] Admin SDK connected (project: ${projectId})`);
-
-    /**
-     * Write one reading to:
-     *   - readings/{auto-id}            (append history)
-     *   - latestReadings/{greenhouse_id} (overwrite for real-time listeners)
-     */
-    _saveReading = async (reading) => {
-      try {
-        const ghId = reading.greenhouse_id || 'primary';
-
-        const batch = db.batch();
-
-        const histRef = db.collection('readings').doc();
-        batch.set(histRef, {
-          ...reading,
-          _savedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        const latestRef = db.collection('latestReadings').doc(ghId);
-        batch.set(latestRef, {
-          ...reading,
-          _savedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        await batch.commit();
-        // Verbose log only in debug mode
-        if (process.env.FIRESTORE_VERBOSE === 'true') {
-          console.log(`[Firestore] Saved reading for greenhouse "${ghId}"`);
-        }
-      } catch (err) {
-        console.error('[Firestore] Write failed (non-fatal):', err.message);
-      }
-    };
-  }
-} catch (err) {
-  if (err.code === 'MODULE_NOT_FOUND') {
-    console.warn(
-      '[Firestore] firebase-admin not installed — run `npm install firebase-admin` in raspberry-pi/ to enable.'
-    );
-  } else {
-    console.warn('[Firestore] Initialisation failed (non-fatal):', err.message);
+    console.log(`[Firestore]   ❌ ${label}: NOT SET`);
   }
 }
 
+// ─── Initialisation ───────────────────────────────────────────────────────────
+
+try {
+  console.log('[Firestore] Initialising — checking credentials...');
+
+  const admin = require('firebase-admin');
+
+  if (admin.apps.length) {
+    // Already initialised (e.g. during hot-reload in dev)
+    const db = admin.firestore();
+    _firestoreEnabled = true;
+    console.log('[Firestore] Re-used existing Admin SDK instance.');
+    attachSaveReading(admin, db);
+  } else {
+    // ── Option 1: service account JSON file in same directory ──────────────
+    const saFilePath = path.join(__dirname, 'firebase-service-account.json');
+    const saFileExists = fs.existsSync(saFilePath);
+
+    console.log(`[Firestore]   JSON file (${saFilePath}): ${saFileExists ? '✅ found' : '❌ not found'}`);
+
+    // ── Option 2: inline env vars ───────────────────────────────────────────
+    const projectIdEnv    = process.env.FIREBASE_PROJECT_ID;
+    const clientEmailEnv  = process.env.FIREBASE_CLIENT_EMAIL;
+    const rawKeyEnv       = process.env.FIREBASE_PRIVATE_KEY;
+    const privateKeyEnv   = rawKeyEnv ? rawKeyEnv.replace(/\\n/g, '\n') : undefined;
+
+    console.log('[Firestore]   Env vars:');
+    present(projectIdEnv,   'FIREBASE_PROJECT_ID');
+    present(clientEmailEnv, 'FIREBASE_CLIENT_EMAIL');
+    if (rawKeyEnv) {
+      console.log(`[Firestore]   ✅ FIREBASE_PRIVATE_KEY: set (${rawKeyEnv.length} chars, starts: ${rawKeyEnv.slice(0, 27)}...)`);
+    } else {
+      console.log('[Firestore]   ❌ FIREBASE_PRIVATE_KEY: NOT SET');
+    }
+
+    // ── Option 3: GOOGLE_APPLICATION_CREDENTIALS ────────────────────────────
+    const gacEnv = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    console.log(`[Firestore]   GOOGLE_APPLICATION_CREDENTIALS: ${gacEnv || '❌ not set'}`);
+
+    // ── Pick credential ─────────────────────────────────────────────────────
+    let credential;
+    let projectId;
+
+    if (saFileExists) {
+      console.log('[Firestore] Using credential: JSON file');
+      const sa = JSON.parse(fs.readFileSync(saFilePath, 'utf8'));
+      credential = admin.credential.cert(sa);
+      projectId  = sa.project_id;
+    } else if (projectIdEnv && clientEmailEnv && privateKeyEnv) {
+      console.log('[Firestore] Using credential: inline env vars');
+      credential = admin.credential.cert({
+        projectId:   projectIdEnv,
+        clientEmail: clientEmailEnv,
+        privateKey:  privateKeyEnv,
+      });
+      projectId = projectIdEnv;
+    } else if (gacEnv && projectIdEnv) {
+      console.log('[Firestore] Using credential: GOOGLE_APPLICATION_CREDENTIALS');
+      credential = admin.credential.applicationDefault();
+      projectId  = projectIdEnv;
+    } else {
+      console.log(
+        '[Firestore] ⚠️  No credentials found — Firestore disabled.\n' +
+        '[Firestore]    Fix: drop firebase-service-account.json into raspberry-pi/\n' +
+        '[Firestore]    OR set FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY in .env',
+      );
+      // Fall through — _firestoreEnabled stays false
+      projectId = null;
+    }
+
+    if (credential && projectId) {
+      admin.initializeApp({ credential, projectId });
+      const db = admin.firestore();
+      _firestoreEnabled = true;
+      console.log(`[Firestore] ✅ Admin SDK connected (project: ${projectId})`);
+      attachSaveReading(admin, db);
+    }
+  }
+} catch (err) {
+  if (err.code === 'MODULE_NOT_FOUND') {
+    console.warn('[Firestore] ⚠️  firebase-admin not installed — run `npm install firebase-admin`');
+  } else {
+    console.warn('[Firestore] ⚠️  Initialisation failed (non-fatal):', err.message);
+    if (process.env.FIRESTORE_VERBOSE === 'true') console.error(err);
+  }
+}
+
+// ─── Write helper ─────────────────────────────────────────────────────────────
+
+function attachSaveReading(admin, db) {
+  _saveReading = async (reading) => {
+    try {
+      const ghId = reading.greenhouse_id || 'primary';
+      const batch = db.batch();
+
+      const histRef   = db.collection('readings').doc();
+      const latestRef = db.collection('latestReadings').doc(ghId);
+
+      const payload = {
+        ...reading,
+        _savedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      batch.set(histRef, payload);
+      batch.set(latestRef, payload);
+
+      await batch.commit();
+
+      if (process.env.FIRESTORE_VERBOSE === 'true') {
+        console.log(`[Firestore] ✅ Wrote latestReadings/${ghId} + readings history`);
+      }
+    } catch (err) {
+      console.error('[Firestore] ❌ Write failed (non-fatal):', err.message);
+    }
+  };
+}
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
 module.exports = {
-  /** Save a sensor reading to Firestore (no-op if not configured). */
+  /** Save a reading to Firestore (no-op when not configured). */
   saveReading: _saveReading,
-  /** True when Firestore Admin SDK initialised successfully. */
+  /** True when Admin SDK initialised successfully. */
   firestoreEnabled: _firestoreEnabled,
 };

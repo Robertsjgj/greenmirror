@@ -1,3 +1,6 @@
+// Load .env FIRST — must happen before any other require() reads process.env
+require('dotenv').config();
+
 const express = require("express");
 const cors = require("cors");
 const os = require("os");
