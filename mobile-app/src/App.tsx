@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsView } from './components/AlertsView';
 import { EnvironmentView } from './components/EnvironmentView';
+import { GreenhouseSelector } from './components/GreenhouseSelector';
 import { GreenhouseView } from './components/GreenhouseView';
 import { PlantCare } from './components/PlantCare';
 import { PlantEditorSheet } from './components/PlantEditorSheet';
@@ -9,12 +10,7 @@ import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
 import { ActivityEntry, loadActivity, logActivity } from './activityLog';
 import { LATEST_READING_URL } from './config';
-import {
-  type MapKind,
-  GREENHOUSES,
-  DEFAULT_MAP_KIND,
-  mapKindToGreenhouseId,
-} from './greenhouses';
+import { useGreenhouse } from './context/GreenhouseContext';
 import { firebaseEnabled } from './services/firebase';
 import { subscribeToLatestReading } from './services/readingsService';
 import {
@@ -54,15 +50,6 @@ function loadStoredLayoutSettings(): LayoutSettings {
 
 type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 
-const MAP_KIND_KEY = 'greenmirror-map-kind';
-
-function loadMapKind(): MapKind {
-  if (typeof window === 'undefined') return DEFAULT_MAP_KIND;
-  const stored = window.localStorage.getItem(MAP_KIND_KEY);
-  if (stored === 'truro' || stored === 'sydney') return stored;
-  return DEFAULT_MAP_KIND;
-}
-
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'plants',      label: 'Plants',  icon: '🌱' },
   { id: 'greenhouse',  label: 'Map',     icon: '🗺️' },
@@ -71,33 +58,34 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'runoff',      label: 'Runoff',  icon: '💧' },
 ];
 
-const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (site: MapKind) => string }> = {
-  plants:      { title: 'Good morning!',   emoji: '🌤',  sub: () => 'GreenMirror Garden' },
-  greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (s) => `${GREENHOUSES[s].name} layout` },
-  environment: { title: "Today's weather", emoji: '☀️',  sub: (s) => `Inside ${GREENHOUSES[s].name}` },
+const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (name: string) => string }> = {
+  plants:      { title: 'Good morning!',   emoji: '🌤',  sub: (n) => `${n} Greenhouse` },
+  greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (n) => `${n} layout` },
+  environment: { title: "Today's weather", emoji: '☀️',  sub: (n) => `Inside ${n}` },
   alerts:      { title: 'Heads up!',       emoji: '🔔',  sub: () => 'Things to check' },
   runoff:      { title: 'Water tracker',   emoji: '💧',  sub: () => 'Where your water goes' },
 };
 
-
 export function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('plants');
+  // ── Greenhouse context ──────────────────────────────────────────────────────
+  const { greenhouse, setGreenhouse } = useGreenhouse();
+
+  // Derived helpers — safe to use once we've gated on greenhouse !== null below.
+  const mapKind = greenhouse?.mapKind ?? 'sydney';
+  const ghId    = greenhouse?.id     ?? null;
 
   // ── Data sources (kept separate so priority logic stays explicit) ──────────
-  // Firestore real-time reading — set by the onSnapshot listener below.
   const [firestoreReading, setFirestoreReading] = useState<LatestReading | null>(null);
-  // API polling reading — set by fetchReading().
   const [apiReading, setApiReading] = useState<LatestReading | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
   // ── Derived reading state (Firestore wins when present) ────────────────────
-  // These are what every downstream component receives — same interface as before.
   const latestReading: LatestReading | null = firestoreReading ?? apiReading;
   const loading: boolean = latestReading === null && apiLoading;
   const error: string | null = latestReading === null ? apiError : null;
 
-  const [mapKind, setMapKind] = useState<MapKind>(loadMapKind);
+  const [activeTab, setActiveTab] = useState<Tab>('plants');
   const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
@@ -146,8 +134,10 @@ export function App() {
     return () => clearInterval(id);
   }, [fetchReading]);
 
-  // ── Firestore real-time listener — re-subscribes when site changes ──────────
+  // ── Firestore real-time listener — re-subscribes when greenhouse changes ────
   useEffect(() => {
+    if (!ghId) return; // no greenhouse selected yet
+
     if (!firebaseEnabled) {
       console.info(
         '[GreenMirror] Firestore disabled — API polling is the only data source.',
@@ -156,9 +146,8 @@ export function App() {
       return;
     }
 
-    const ghId = mapKindToGreenhouseId(mapKind);
     console.info('[GreenMirror] Firestore listener starting for greenhouse "' + ghId + '"');
-    setFirestoreReading(null); // clear previous site's reading immediately on switch
+    setFirestoreReading(null); // clear previous site's reading on switch
 
     const unsub = subscribeToLatestReading(
       ghId,
@@ -173,13 +162,11 @@ export function App() {
         console.warn('[GreenMirror] Firestore listener error:', err.message,
           '— falling back to API polling',
         );
-        // Don't touch firestoreReading — let it go stale naturally;
-        // API polling keeps latestReading alive through apiReading.
       },
     );
 
     return () => { unsub?.(); };
-  }, [mapKind]); // Re-subscribe when the active greenhouse site changes
+  }, [ghId]); // Re-subscribe whenever the active greenhouse changes
 
   // ── Data source logging (fires only when source changes) ───────────────────
   const prevSourceRef = useRef<string>('offline');
@@ -194,7 +181,6 @@ export function App() {
   // Persist state
   useEffect(() => { savePlantProfiles(plantProfiles); }, [plantProfiles]);
   useEffect(() => { saveZoneAssignments(zoneAssignments); }, [zoneAssignments]);
-  useEffect(() => { window.localStorage.setItem(MAP_KIND_KEY, mapKind); }, [mapKind]);
   useEffect(() => {
     window.localStorage.setItem(LAYOUT_SETTINGS_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
@@ -331,6 +317,13 @@ export function App() {
     setActivityLog(loadActivity());
   }, [profilesById]);
 
+  // ── ALL HOOKS ABOVE THIS LINE ───────────────────────────────────────────────
+  // Gate: show onboarding if no greenhouse selected yet.
+  if (!greenhouse) {
+    return <GreenhouseSelector onSelect={setGreenhouse} />;
+  }
+
+  const ghName = greenhouse.name;
   const g = TAB_GREETINGS[activeTab];
 
   return (
@@ -341,12 +334,12 @@ export function App() {
           <h1>
             {g.title} <span style={{ fontSize: 20, lineHeight: 1 }}>{g.emoji}</span>
           </h1>
-          <small>{g.sub(mapKind)}</small>
+          <small>{g.sub(ghName)}</small>
         </div>
         <button
           className="gm-avatar"
           onClick={() => setSiteSheetOpen(true)}
-          aria-label="Switch greenhouse site"
+          aria-label="Switch greenhouse"
         >
           👩‍🌾
         </button>
@@ -379,7 +372,7 @@ export function App() {
             loading={loading}
             error={error}
             mapKind={mapKind}
-            setMapKind={setMapKind}
+            setMapKind={setGreenhouse}
             profilesById={profilesById}
             zoneAssignments={zoneAssignments}
             onAssignPlant={onAssignPlant}
@@ -426,8 +419,6 @@ export function App() {
       <SiteSwitcherSheet
         open={siteSheetOpen}
         onClose={() => setSiteSheetOpen(false)}
-        site={mapKind}
-        setSite={(s) => { setMapKind(s); setSiteSheetOpen(false); }}
       />
 
       <ZoneDetailSheet

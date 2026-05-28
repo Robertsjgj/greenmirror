@@ -1,8 +1,14 @@
 import './index.css';
 import { render } from 'react-dom';
 import { App } from './App';
+import { GreenhouseProvider } from './context/GreenhouseContext';
 
-render(<App />, document.getElementById('root'));
+render(
+  <GreenhouseProvider>
+    <App />
+  </GreenhouseProvider>,
+  document.getElementById('root'),
+);
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
