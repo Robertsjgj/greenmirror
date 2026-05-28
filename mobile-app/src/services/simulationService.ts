@@ -122,6 +122,23 @@ export function buildReading(
   };
 }
 
+// ─── Manual zone watering ─────────────────────────────────────────────────────
+
+/**
+ * Immediately boost a zone's moisture as if manually watered.
+ * Called by SimulationContext.waterSimZone when a user waters in sim mode.
+ */
+export function waterZoneState(
+  states: Map<string, ZoneSimState>,
+  zoneId: string,
+  targetMoisture = 68,
+): void {
+  const s = states.get(zoneId);
+  if (s) {
+    s.moisture = Math.min(100, targetMoisture + Math.random() * 8);
+  }
+}
+
 // ─── History seed ─────────────────────────────────────────────────────────────
 
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes between readings

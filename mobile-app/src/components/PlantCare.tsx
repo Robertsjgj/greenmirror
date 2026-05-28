@@ -348,7 +348,12 @@ export function PlantCare({
       </div>
 
       {/* ── SECTION 3: Sensor Trends ──────────────────────────────────── */}
-      <TrendsSection greenhouseId={greenhouseId} simHistory={simHistory} />
+      <TrendsSection
+        greenhouseId={greenhouseId}
+        simHistory={simHistory}
+        zones={zones}
+        profilesById={profilesById}
+      />
 
       {/* ── SECTION 4: Your Plants / Plant Profiles ───────────────────── */}
       <div>

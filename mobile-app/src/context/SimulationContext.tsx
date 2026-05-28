@@ -31,6 +31,7 @@ import {
   tickStates,
   buildReading,
   generateHistory,
+  waterZoneState,
   type ZoneSimState,
 } from '../services/simulationService';
 
@@ -47,6 +48,8 @@ export interface SimulationContextValue {
   simReading: LatestReading | null;
   /** Pre-seeded 25-hour history for the trend charts. */
   simHistory: LatestReading[];
+  /** Manually water a simulated zone — immediately boosts its moisture. */
+  waterSimZone: (zoneId: string) => void;
 }
 
 const SimulationContext = createContext<SimulationContextValue>({
@@ -55,6 +58,7 @@ const SimulationContext = createContext<SimulationContextValue>({
   stopSimulation: () => {},
   simReading: null,
   simHistory: [],
+  waterSimZone: () => {},
 });
 
 // ─── Provider ─────────────────────────────────────────────────────────────────
@@ -135,9 +139,23 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
     clearSim();
   }, [clearSim]);
 
+  const waterSimZone = useCallback((zoneId: string) => {
+    if (!isSimulating || !greenhouse) return;
+    waterZoneState(statesRef.current, zoneId);
+    const zoneIds = getSimZoneIds(greenhouse.mapKind);
+    const ts = new Date();
+    const reading = buildReading(greenhouse.id, zoneIds, statesRef.current, ts);
+    setSimReading(reading);
+    setSimHistory((prev) => {
+      const next = [...prev, reading];
+      return next.length > MAX_HIST_LEN ? next.slice(-MAX_HIST_LEN) : next;
+    });
+    console.info(`[Simulation] Manually watered ${zoneId}`);
+  }, [isSimulating, greenhouse]);
+
   const value = useMemo<SimulationContextValue>(
-    () => ({ isSimulating, startSimulation, stopSimulation, simReading, simHistory }),
-    [isSimulating, startSimulation, stopSimulation, simReading, simHistory],
+    () => ({ isSimulating, startSimulation, stopSimulation, simReading, simHistory, waterSimZone }),
+    [isSimulating, startSimulation, stopSimulation, simReading, simHistory, waterSimZone],
   );
 
   return (

@@ -21,6 +21,11 @@ import { firebaseEnabled } from './services/firebase';
 import { subscribeToActivityLog, writeWateringEvent } from './services/activityService';
 import { subscribeToLatestReading } from './services/readingsService';
 import {
+  subscribeToZoneAssignments,
+  writeZoneAssignment,
+  clearZoneAssignment,
+} from './services/zoneAssignmentsService';
+import {
   PlantProfile,
   ZoneAssignments,
   DEFAULT_PLANT_PROFILES,
@@ -87,7 +92,7 @@ export function App() {
   ghIdRef.current = ghId;
 
   // ── Simulation context ──────────────────────────────────────────────────────
-  const { isSimulating, simReading, simHistory } = useSimulation();
+  const { isSimulating, simReading, simHistory, waterSimZone } = useSimulation();
 
   // ── Data sources (kept separate so priority logic stays explicit) ──────────
   const [firestoreReading, setFirestoreReading] = useState<LatestReading | null>(null);
@@ -167,6 +172,17 @@ export function App() {
     setActivityLog(loadActivityForGh(ghId));
     setFirestoreActivity([]);   // cleared until new subscription delivers
     setFirestoreReading(null);  // clear previous site's reading
+  }, [ghId]);
+
+  // ── Firestore zone assignments — cross-device sync ───────────────────────────
+  useEffect(() => {
+    if (!ghId) return;
+    const currentGhId = ghId;
+    const unsub = subscribeToZoneAssignments(currentGhId, (assignments) => {
+      setZoneAssignments(assignments);
+      saveZoneAssignmentsForGh(currentGhId, assignments); // keep localStorage in sync
+    });
+    return () => { unsub?.(); };
   }, [ghId]);
 
   // ── Firestore activity log listener ─────────────────────────────────────────
@@ -320,29 +336,45 @@ export function App() {
   const onWaterZone = useCallback((zone: VisualZone, amountMl: number) => {
     const plantName = zone.assignedPlant ? profilesById.get(zone.assignedPlant)?.name : undefined;
     const zoneName  = zone.displayLabel ?? zone.visualLabel;
-    if (ghId) {
-      logActivityForGh(ghId, {
-        type: 'watering',
-        visualZoneId: zone.visualLabel,
-        backendZoneId: zone.backendZoneId,
-        nodeId: zone.nodeId,
-        plantName,
-        amountMl,
-        message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
-        source: 'manual',
-      });
-      setActivityLog(loadActivityForGh(ghId));
-      writeWateringEvent({
-        greenhouseId: ghId,
-        visualZoneId: zone.visualLabel,
-        amountMl,
-        plantName,
-        nodeId: zone.nodeId ?? undefined,
-        source: 'manual',
-      });
+    if (isSimulating) {
+      // In simulation mode: update physics immediately, skip Firestore
+      waterSimZone(zone.backendZoneId ?? zone.visualLabel);
+      if (ghId) {
+        logActivityForGh(ghId, {
+          type: 'watering',
+          visualZoneId: zone.visualLabel,
+          plantName,
+          amountMl,
+          message: `[Sim] Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
+          source: 'manual',
+        });
+        setActivityLog(loadActivityForGh(ghId));
+      }
+    } else {
+      if (ghId) {
+        logActivityForGh(ghId, {
+          type: 'watering',
+          visualZoneId: zone.visualLabel,
+          backendZoneId: zone.backendZoneId,
+          nodeId: zone.nodeId,
+          plantName,
+          amountMl,
+          message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
+          source: 'manual',
+        });
+        setActivityLog(loadActivityForGh(ghId));
+        writeWateringEvent({
+          greenhouseId: ghId,
+          visualZoneId: zone.visualLabel,
+          amountMl,
+          plantName,
+          nodeId: zone.nodeId ?? undefined,
+          source: 'manual',
+        });
+      }
     }
     showToast(`💧 Watered ${zoneName} (${amountMl}ml)`);
-  }, [ghId, profilesById, showToast]);
+  }, [ghId, isSimulating, waterSimZone, profilesById, showToast]);
 
   const onAssignPlant = useCallback((zoneKey: string, plantId: string | null) => {
     setZoneAssignments((a) => {
@@ -366,7 +398,9 @@ export function App() {
     );
     const plantName = plantId ? profilesById.get(plantId)?.name : undefined;
     if (ghId) {
+      // Firestore write for cross-device sync
       if (plantId) {
+        writeZoneAssignment(ghId, zoneKey, plantId);
         logActivityForGh(ghId, {
           type: 'assignment',
           visualZoneId: zoneKey,
@@ -374,6 +408,7 @@ export function App() {
           message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
         });
       } else {
+        clearZoneAssignment(ghId, zoneKey);
         logActivityForGh(ghId, {
           type: 'cleared',
           visualZoneId: zoneKey,
