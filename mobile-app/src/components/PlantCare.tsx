@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityEntry, formatActivityTime } from '../activityLog';
+import { ActivityEntry, filterUsefulActivity, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import type { VisualZone } from '../zoneLayout';
+import { TrendsSection } from './TrendsSection';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -17,6 +18,10 @@ interface PlantCareProps {
   onToast: (msg: string) => void;
   activityLog: ActivityEntry[];
   onWaterZone?: (zone: VisualZone, amountMl: number) => void;
+  /** Greenhouse ID used for sensor-trend charts */
+  greenhouseId: string;
+  /** Real-time Firestore activity feed — greenhouse-scoped, newest first */
+  firestoreActivity?: ActivityEntry[];
 }
 
 type TaskKind = 'water' | 'check';
@@ -95,50 +100,7 @@ function buildTask(z: VisualZone, profile: PlantProfile | null): Task | null {
   };
 }
 
-// ─── Trend computation ───────────────────────────────────────────────────────
 
-interface DayStats {
-  date: string;
-  label: string;
-  count: number;
-  ml: number;
-}
-
-interface Trends {
-  last7Days: DayStats[];
-  topZones: Array<{ zoneId: string; count: number }>;
-  totalWaterings: number;
-  totalMl: number;
-}
-
-function computeTrends(entries: ActivityEntry[]): Trends {
-  const waterings = entries.filter((e) => e.type === 'watering');
-  const dayMap = new Map<string, DayStats>();
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
-    const label = d.toLocaleDateString('en', { weekday: 'short' });
-    dayMap.set(dateStr, { date: dateStr, label, count: 0, ml: 0 });
-  }
-  const zoneCounts = new Map<string, number>();
-  for (const e of waterings) {
-    const date = e.timestamp.slice(0, 10);
-    const day = dayMap.get(date);
-    if (day) { day.count++; day.ml += e.amountMl ?? 0; }
-    if (e.visualZoneId) zoneCounts.set(e.visualZoneId, (zoneCounts.get(e.visualZoneId) ?? 0) + 1);
-  }
-  const topZones = [...zoneCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([zoneId, count]) => ({ zoneId, count }));
-  return {
-    last7Days: [...dayMap.values()],
-    topZones,
-    totalWaterings: waterings.length,
-    totalMl: waterings.reduce((sum, e) => sum + (e.amountMl ?? 0), 0),
-  };
-}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -152,6 +114,7 @@ export function PlantCare({
   plantProfiles, profilesById,
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
+  greenhouseId, firestoreActivity,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
@@ -216,8 +179,13 @@ export function PlantCare({
   const safePage = Math.min(profilePage, totalPages - 1);
   const pagedProfiles = filteredProfiles.slice(safePage * PROFILES_PER_PAGE, (safePage + 1) * PROFILES_PER_PAGE);
 
-  const trends = useMemo(() => computeTrends(activityLog), [activityLog]);
-  const hasActivity = activityLog.length > 0;
+  // Prefer Firestore-backed activity (greenhouse-scoped); fall back to localStorage
+  const displayActivity = useMemo(
+    () => (firestoreActivity && firestoreActivity.length > 0)
+      ? firestoreActivity
+      : filterUsefulActivity(activityLog),
+    [firestoreActivity, activityLog],
+  );
 
   const needsAttention = summary.attention;
   const totalIncompleteTasks = incompleteTasks.length;
@@ -340,84 +308,39 @@ export function PlantCare({
         )}
       </div>
 
-      {/* ── SECTION 2: Activity / Watering Log + Trends ──────────────── */}
+      {/* ── SECTION 2: Recent Activity ────────────────────────────────── */}
       <div>
         <div style={{ padding: '0 2px 10px' }}>
-          <h2 className="gm-h2">Activity & Trends 📋</h2>
-          <div className="gm-sub">Watering history and plant changes</div>
+          <h2 className="gm-h2">Recent Activity 📋</h2>
+          <div className="gm-sub">Watering, sensors, and plant changes</div>
         </div>
-        {!hasActivity ? (
+        {displayActivity.length === 0 ? (
           <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
             <div style={{ fontSize: 28, marginBottom: 6 }}>💧</div>
             <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
-              No watering activity logged yet
+              No activity logged yet
             </div>
             <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
               Water a bed from Today's Tasks or a Zone to get started.
             </div>
           </div>
         ) : (
-          <>
-            {/* Watering frequency trend */}
-            {trends.totalWaterings > 0 && (
-              <div className="gm-card" style={{ padding: 14, marginBottom: 10 }}>
-                <div style={{
-                  fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
-                  color: 'var(--ink-3)', marginBottom: 10, textTransform: 'uppercase',
-                }}>
-                  Watering · last 7 days
-                </div>
-                <MiniBarChart days={trends.last7Days} />
-                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-                  <StatChip label="Total waterings" value={String(trends.totalWaterings)} />
-                  {trends.totalMl > 0 && <StatChip label="Total water" value={`${trends.totalMl}ml`} />}
-                </div>
-                {trends.topZones.length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--ink-3)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                      Most watered spots
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {trends.topZones.map(({ zoneId, count }, i) => {
-                        const pct = Math.round((count / trends.totalWaterings) * 100);
-                        return (
-                          <div key={zoneId} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', width: 14 }}>
-                              {i + 1}.
-                            </span>
-                            <div style={{ flex: 1, background: 'var(--line)', borderRadius: 99, height: 6, overflow: 'hidden' }}>
-                              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--wet)', borderRadius: 99 }} />
-                            </div>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', minWidth: 0, maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {zoneId}
-                            </span>
-                            <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--wet)', flexShrink: 0 }}>
-                              {count}×
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Activity list */}
-            <div className="gm-card" style={{ padding: '0 14px' }}>
-              {activityLog.slice(0, 8).map((entry, i) => (
-                <ActivityItem
-                  key={entry.id}
-                  entry={entry}
-                  last={i === Math.min(activityLog.length, 8) - 1}
-                />
-              ))}
-            </div>
-          </>
+          <div className="gm-card" style={{ padding: '0 14px' }}>
+            {displayActivity.slice(0, 8).map((entry, i) => (
+              <ActivityItem
+                key={entry.id}
+                entry={entry}
+                last={i === Math.min(displayActivity.length, 8) - 1}
+              />
+            ))}
+          </div>
         )}
       </div>
 
-      {/* ── SECTION 3: Your Plants / Plant Profiles ───────────────────── */}
+      {/* ── SECTION 3: Sensor Trends ──────────────────────────────────── */}
+      <TrendsSection greenhouseId={greenhouseId} />
+
+      {/* ── SECTION 4: Your Plants / Plant Profiles ───────────────────── */}
       <div>
         <div style={{ padding: '0 2px 10px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <div>
@@ -614,48 +537,17 @@ function ProfileCard({ profile, assignedZones, onEdit }: {
   );
 }
 
-function MiniBarChart({ days }: { days: DayStats[] }) {
-  const max = Math.max(...days.map((d) => d.count), 1);
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 52 }}>
-      {days.map((d) => (
-        <div key={d.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-          <div style={{
-            width: '100%', borderRadius: '4px 4px 2px 2px',
-            background: d.count > 0 ? 'var(--wet)' : 'var(--line)',
-            height: `${Math.max(3, Math.round((d.count / max) * 38))}px`,
-            transition: 'height 0.4s ease',
-          }} />
-          <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700, lineHeight: 1 }}>
-            {d.label.slice(0, 2)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StatChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ flex: 1, background: 'var(--bg-sub)', borderRadius: 10, padding: '8px 10px' }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-        {label}
-      </div>
-      <div style={{
-        fontFamily: "'Baloo 2', system-ui", fontSize: 18, fontWeight: 800,
-        color: 'var(--ink)', lineHeight: 1.2, marginTop: 2, fontVariantNumeric: 'tabular-nums',
-      }}>
-        {value}
-      </div>
-    </div>
-  );
-}
 
 const ACTIVITY_ICON: Record<string, string> = {
-  watering: '💧',
-  assignment: '🌱',
-  cleared: '✕',
-  'profile-update': '📋',
+  watering:          '💧',
+  assignment:        '🌱',
+  cleared:           '✕',
+  'profile-update':  '📋',
+  'sensor-failure':  '⚠️',
+  'sensor-recovered':'✅',
+  'stale-node':      '📡',
+  'moisture-alert':  '🚨',
+  'greenhouse-switch': '🏡',
 };
 
 function ActivityItem({ entry, last }: { entry: ActivityEntry; last: boolean }) {

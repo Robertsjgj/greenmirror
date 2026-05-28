@@ -10,6 +10,7 @@ import {
   doc,
   collection,
   query,
+  where,
   orderBy,
   limit,
   onSnapshot,
@@ -54,28 +55,41 @@ export function subscribeToLatestReading(
 }
 
 /**
- * Subscribe to recent readings history (latest N, descending).
+ * Subscribe to recent readings history for a specific greenhouse.
+ *
+ * Filters by greenhouse_id in Firestore (requires composite index:
+ * readings / greenhouse_id ASC + timestamp DESC — Firestore will prompt
+ * with a console link to create it on first run if missing).
  *
  * @returns Firestore unsubscribe fn, or null if Firebase is not configured.
  */
 export function subscribeToReadingsHistory(
   greenhouseId: string,
   onData: (readings: LatestReading[]) => void,
-  limitCount = 20,
+  limitCount = 200,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) return null;
 
   const q = query(
     collection(db, 'readings'),
+    where('greenhouse_id', '==', greenhouseId),
     orderBy('timestamp', 'desc'),
     limit(limitCount),
   );
 
-  return onSnapshot(q, (snap) => {
-    const readings = snap.docs
-      .map((d) => d.data() as LatestReading)
-      .filter((r) => !r.greenhouse_id || r.greenhouse_id === greenhouseId);
-    onData(readings);
-  });
+  return onSnapshot(
+    q,
+    (snap) => {
+      const readings = snap.docs.map((d) => d.data() as LatestReading);
+      onData(readings);
+    },
+    (err) => {
+      console.warn(
+        '[readingsService] history listen error:', err.message,
+        '\n  If this is an index error, create the composite index in the Firebase console:',
+        '\n  Collection: readings | Fields: greenhouse_id ASC, timestamp DESC',
+      );
+    },
+  );
 }

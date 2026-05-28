@@ -12,6 +12,7 @@ import { ActivityEntry, loadActivity, logActivity } from './activityLog';
 import { LATEST_READING_URL } from './config';
 import { useGreenhouse } from './context/GreenhouseContext';
 import { firebaseEnabled } from './services/firebase';
+import { subscribeToActivityLog, writeWateringEvent } from './services/activityService';
 import { subscribeToLatestReading } from './services/readingsService';
 import {
   PlantProfile,
@@ -90,6 +91,7 @@ export function App() {
   const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>(loadActivity);
+  const [firestoreActivity, setFirestoreActivity] = useState<ActivityEntry[]>([]);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
@@ -133,6 +135,13 @@ export function App() {
     const id = setInterval(fetchReading, 8000);
     return () => clearInterval(id);
   }, [fetchReading]);
+
+  // ── Firestore activity log listener ────────────────────────────────────────
+  useEffect(() => {
+    if (!ghId) return;
+    const unsub = subscribeToActivityLog(ghId, setFirestoreActivity, 30);
+    return () => { unsub?.(); };
+  }, [ghId]);
 
   // ── Firestore real-time listener — re-subscribes when greenhouse changes ────
   useEffect(() => {
@@ -276,8 +285,18 @@ export function App() {
       message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
     });
     setActivityLog(loadActivity());
+    if (ghId) {
+      writeWateringEvent({
+        greenhouseId: ghId,
+        visualZoneId: zone.visualLabel,
+        amountMl,
+        plantName,
+        nodeId: zone.nodeId ?? undefined,
+        source: 'manual',
+      });
+    }
     showToast(`💧 Watered ${zoneName} (${amountMl}ml)`);
-  }, [profilesById, showToast]);
+  }, [ghId, profilesById, showToast]);
 
   const onAssignPlant = useCallback((zoneKey: string, plantId: string | null) => {
     setZoneAssignments((a) => {
@@ -364,6 +383,8 @@ export function App() {
             onToast={showToast}
             activityLog={activityLog}
             onWaterZone={onWaterZone}
+            greenhouseId={ghId ?? ''}
+            firestoreActivity={firestoreActivity}
           />
         )}
         {activeTab === 'greenhouse' && (
