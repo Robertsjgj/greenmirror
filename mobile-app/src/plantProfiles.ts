@@ -212,6 +212,46 @@ export function saveZoneAssignments(assignments: ZoneAssignments) {
   window.localStorage.setItem(ZONE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(assignments));
 }
 
+// ─── Greenhouse-scoped zone-assignment helpers ────────────────────────────────
+
+function scopedAssignmentsKey(ghId: string): string {
+  return `${ZONE_ASSIGNMENTS_STORAGE_KEY}-${ghId}`;
+}
+
+/**
+ * Load zone assignments for a specific greenhouse.
+ * Migrates the global key on first access so existing assignments are preserved.
+ */
+export function loadZoneAssignmentsForGh(ghId: string): ZoneAssignments {
+  if (typeof window === 'undefined') return {};
+  try {
+    const scopedRaw = window.localStorage.getItem(scopedAssignmentsKey(ghId));
+    if (scopedRaw !== null) {
+      const parsed = JSON.parse(scopedRaw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter(
+          (e): e is [string, string] => typeof e[0] === 'string' && typeof e[1] === 'string',
+        ),
+      );
+    }
+    // One-time migration from global key → scoped key
+    const global = loadZoneAssignments();
+    if (Object.keys(global).length > 0) {
+      try { window.localStorage.setItem(scopedAssignmentsKey(ghId), JSON.stringify(global)); } catch { /* storage full */ }
+      return global;
+    }
+  } catch { /* storage unavailable */ }
+  return {};
+}
+
+export function saveZoneAssignmentsForGh(ghId: string, assignments: ZoneAssignments): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(scopedAssignmentsKey(ghId), JSON.stringify(assignments));
+  } catch { /* storage full */ }
+}
+
 export function getPlantStatusMessages(zone: VisualZone, profile: PlantProfile | null) {
   return evaluateZoneAgainstPlant(zone, profile).messages;
 }

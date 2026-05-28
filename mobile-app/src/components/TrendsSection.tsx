@@ -1,14 +1,21 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   AreaChart, Area,
   LineChart, Line,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { useReadingsHistory, TIME_RANGE_LABELS } from '../hooks/useReadingsHistory';
+import {
+  useReadingsHistory,
+  buildTrendData,
+  TIME_RANGE_LABELS,
+} from '../hooks/useReadingsHistory';
 import type { TimeRange } from '../hooks/useReadingsHistory';
+import type { LatestReading } from '../zoneLayout';
 
 interface TrendsSectionProps {
   greenhouseId: string;
+  /** When provided (simulation mode), Firestore subscription is bypassed. */
+  simHistory?: LatestReading[];
 }
 
 // Static hex colours — CSS custom properties don't reliably resolve inside SVG fill/stroke
@@ -17,9 +24,20 @@ const TEMP_COLOR     = '#f59e0b'; // amber-400
 
 const RANGES: TimeRange[] = ['24h', '7d', '30d'];
 
-export function TrendsSection({ greenhouseId }: TrendsSectionProps) {
+export function TrendsSection({ greenhouseId, simHistory }: TrendsSectionProps) {
   const [range, setRange] = useState<TimeRange>('24h');
-  const { trendData, loading } = useReadingsHistory(greenhouseId, range);
+
+  // Skip Firestore when sim data is provided — pass null to suppress the subscription
+  const { trendData: firestoreTrends, loading } = useReadingsHistory(
+    simHistory ? null : greenhouseId,
+    range,
+  );
+
+  const trendData = useMemo(
+    () => simHistory ? buildTrendData(simHistory, range) : firestoreTrends,
+    [simHistory, firestoreTrends, range],
+  );
+  const isLoading = simHistory ? false : loading;
 
   const totalSamples = trendData.reduce((s, p) => s + p.sampleCount, 0);
   const bucketNoun   = range === '24h' ? 'hr' : 'day';
@@ -61,7 +79,7 @@ export function TrendsSection({ greenhouseId }: TrendsSectionProps) {
         </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="gm-card" style={{ padding: 26, textAlign: 'center', color: 'var(--ink-3)' }}>
           <div style={{ fontSize: 24 }}>⏳</div>
           <div style={{ fontSize: 13, marginTop: 6, fontWeight: 600 }}>Loading trends…</div>

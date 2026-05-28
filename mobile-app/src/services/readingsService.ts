@@ -67,9 +67,15 @@ export function subscribeToReadingsHistory(
   greenhouseId: string,
   onData: (readings: LatestReading[]) => void,
   limitCount = 200,
+  onError?: () => void,
 ): Unsubscribe | null {
   const db = getDb();
-  if (!db) return null;
+  if (!db) {
+    // Firebase not configured — signal empty result immediately so
+    // callers don't stay in a loading state forever.
+    onData([]);
+    return null;
+  }
 
   const q = query(
     collection(db, 'readings'),
@@ -82,6 +88,9 @@ export function subscribeToReadingsHistory(
     q,
     (snap) => {
       const readings = snap.docs.map((d) => d.data() as LatestReading);
+      console.info(
+        `[readingsService] history snapshot: ${readings.length} readings for ${greenhouseId}`,
+      );
       onData(readings);
     },
     (err) => {
@@ -90,6 +99,9 @@ export function subscribeToReadingsHistory(
         '\n  If this is an index error, create the composite index in the Firebase console:',
         '\n  Collection: readings | Fields: greenhouse_id ASC, timestamp DESC',
       );
+      // Signal that loading is done even on error — prevents infinite loading state.
+      onData([]);
+      onError?.();
     },
   );
 }

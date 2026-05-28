@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityEntry, filterUsefulActivity, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
-import type { VisualZone } from '../zoneLayout';
+import type { LatestReading, VisualZone } from '../zoneLayout';
 import { TrendsSection } from './TrendsSection';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -22,6 +22,8 @@ interface PlantCareProps {
   greenhouseId: string;
   /** Real-time Firestore activity feed — greenhouse-scoped, newest first */
   firestoreActivity?: ActivityEntry[];
+  /** Simulation history — when present, trends use this instead of Firestore */
+  simHistory?: LatestReading[];
 }
 
 type TaskKind = 'water' | 'check';
@@ -38,13 +40,16 @@ interface Task {
 
 // ─── Task completion storage ─────────────────────────────────────────────────
 
-const COMPLETED_TASKS_KEY = 'greenmirror-completed-tasks';
 // Module-scoped date string — valid for the lifetime of this page session.
 const SESSION_DATE = new Date().toISOString().slice(0, 10);
 
-function loadCompletedTaskIds(): Set<string> {
+function completedTasksKey(ghId: string): string {
+  return `greenmirror-completed-tasks-${ghId}`;
+}
+
+function loadCompletedTaskIds(ghId: string): Set<string> {
   try {
-    const raw = window.localStorage.getItem(COMPLETED_TASKS_KEY);
+    const raw = window.localStorage.getItem(completedTasksKey(ghId));
     const data: Record<string, string[]> = raw ? JSON.parse(raw) : {};
     return new Set<string>(Array.isArray(data[SESSION_DATE]) ? data[SESSION_DATE] : []);
   } catch {
@@ -52,9 +57,9 @@ function loadCompletedTaskIds(): Set<string> {
   }
 }
 
-function persistCompletedTask(taskId: string): void {
+function persistCompletedTask(ghId: string, taskId: string): void {
   try {
-    const raw = window.localStorage.getItem(COMPLETED_TASKS_KEY);
+    const raw = window.localStorage.getItem(completedTasksKey(ghId));
     const data: Record<string, string[]> = raw ? JSON.parse(raw) : {};
     const todaySet = new Set<string>(Array.isArray(data[SESSION_DATE]) ? data[SESSION_DATE] : []);
     todaySet.add(taskId);
@@ -65,7 +70,7 @@ function persistCompletedTask(taskId: string): void {
     const pruned: Record<string, string[]> = {};
     Object.entries(data).forEach(([d, ids]) => { if (d >= cutoffStr) pruned[d] = ids; });
     pruned[SESSION_DATE] = [...todaySet];
-    window.localStorage.setItem(COMPLETED_TASKS_KEY, JSON.stringify(pruned));
+    window.localStorage.setItem(completedTasksKey(ghId), JSON.stringify(pruned));
   } catch { /* storage unavailable */ }
 }
 
@@ -114,14 +119,19 @@ export function PlantCare({
   plantProfiles, profilesById,
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
-  greenhouseId, firestoreActivity,
+  greenhouseId, firestoreActivity, simHistory,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
   const [showAllTasks, setShowAllTasks] = useState(false);
-  const [completedIds, setCompletedIds] = useState<Set<string>>(loadCompletedTaskIds);
+  const [completedIds, setCompletedIds] = useState<Set<string>>(() => loadCompletedTaskIds(greenhouseId));
 
   useEffect(() => { setProfilePage(0); }, [query]);
+
+  // Reload completed tasks when greenhouse switches
+  useEffect(() => {
+    setCompletedIds(loadCompletedTaskIds(greenhouseId));
+  }, [greenhouseId]);
 
   const allTasks = useMemo(
     () => zones
@@ -137,7 +147,7 @@ export function PlantCare({
   }, [allTasks, completedIds]);
 
   function handleComplete(task: Task) {
-    persistCompletedTask(task.id);
+    persistCompletedTask(greenhouseId, task.id);
     setCompletedIds((prev) => { const next = new Set(prev); next.add(task.id); return next; });
     if (task.kind === 'water' && onWaterZone) {
       onWaterZone(task.zone, 200);
@@ -338,7 +348,7 @@ export function PlantCare({
       </div>
 
       {/* ── SECTION 3: Sensor Trends ──────────────────────────────────── */}
-      <TrendsSection greenhouseId={greenhouseId} />
+      <TrendsSection greenhouseId={greenhouseId} simHistory={simHistory} />
 
       {/* ── SECTION 4: Your Plants / Plant Profiles ───────────────────── */}
       <div>

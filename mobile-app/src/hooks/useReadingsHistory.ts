@@ -153,6 +153,7 @@ export function useReadingsHistory(
       greenhouseId,
       (r) => { setAllReadings(r); setLoading(false); },
       RANGE_LIMIT[range],
+      () => { setLoading(false); }, // stop loading on Firestore error / missing index
     );
 
     return () => { unsub?.(); };

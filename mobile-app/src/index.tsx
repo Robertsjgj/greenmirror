@@ -2,10 +2,13 @@ import './index.css';
 import { render } from 'react-dom';
 import { App } from './App';
 import { GreenhouseProvider } from './context/GreenhouseContext';
+import { SimulationProvider } from './context/SimulationContext';
 
 render(
   <GreenhouseProvider>
-    <App />
+    <SimulationProvider>
+      <App />
+    </SimulationProvider>
   </GreenhouseProvider>,
   document.getElementById('root'),
 );

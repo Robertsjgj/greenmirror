@@ -8,9 +8,15 @@ import { PlantEditorSheet } from './components/PlantEditorSheet';
 import { SimpleRunoff } from './components/SimpleRunoff';
 import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
-import { ActivityEntry, loadActivity, logActivity } from './activityLog';
+import {
+  ActivityEntry,
+  loadActivityForGh,
+  saveActivityForGh,
+  logActivityForGh,
+} from './activityLog';
 import { LATEST_READING_URL } from './config';
 import { useGreenhouse } from './context/GreenhouseContext';
+import { useSimulation } from './context/SimulationContext';
 import { firebaseEnabled } from './services/firebase';
 import { subscribeToActivityLog, writeWateringEvent } from './services/activityService';
 import { subscribeToLatestReading } from './services/readingsService';
@@ -20,9 +26,9 @@ import {
   DEFAULT_PLANT_PROFILES,
   isDefaultPlantProfile,
   loadPlantProfiles,
-  loadZoneAssignments,
   savePlantProfiles,
-  saveZoneAssignments
+  loadZoneAssignmentsForGh,
+  saveZoneAssignmentsForGh,
 } from './plantProfiles';
 import { mapZonesToSydneyLayout } from './sydneyLayout';
 import {
@@ -75,22 +81,39 @@ export function App() {
   const mapKind = greenhouse?.mapKind ?? 'sydney';
   const ghId    = greenhouse?.id     ?? null;
 
+  // Ref always holds the current ghId — safe to read inside save effects
+  // without adding ghId to their dependency arrays (avoids saving old data to new key).
+  const ghIdRef = useRef<string | null>(ghId);
+  ghIdRef.current = ghId;
+
+  // ── Simulation context ──────────────────────────────────────────────────────
+  const { isSimulating, simReading, simHistory } = useSimulation();
+
   // ── Data sources (kept separate so priority logic stays explicit) ──────────
   const [firestoreReading, setFirestoreReading] = useState<LatestReading | null>(null);
   const [apiReading, setApiReading] = useState<LatestReading | null>(null);
   const [apiLoading, setApiLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
 
-  // ── Derived reading state (Firestore wins when present) ────────────────────
-  const latestReading: LatestReading | null = firestoreReading ?? apiReading;
-  const loading: boolean = latestReading === null && apiLoading;
-  const error: string | null = latestReading === null ? apiError : null;
+  // ── Derived reading state ──────────────────────────────────────────────────
+  // Simulation overrides everything; otherwise Firestore wins over API.
+  const latestReading: LatestReading | null = isSimulating
+    ? simReading
+    : (firestoreReading ?? apiReading);
+  const loading: boolean = isSimulating
+    ? simReading === null
+    : (latestReading === null && apiLoading);
+  const error: string | null = isSimulating ? null : (latestReading === null ? apiError : null);
 
   const [activeTab, setActiveTab] = useState<Tab>('plants');
   const [plantProfiles, setPlantProfiles] = useState<PlantProfile[]>(loadPlantProfiles);
-  const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(loadZoneAssignments);
+  const [zoneAssignments, setZoneAssignments] = useState<ZoneAssignments>(() =>
+    ghId ? loadZoneAssignmentsForGh(ghId) : {},
+  );
   const [layoutSettings, setLayoutSettings] = useState<LayoutSettings>(loadStoredLayoutSettings);
-  const [activityLog, setActivityLog] = useState<ActivityEntry[]>(loadActivity);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>(() =>
+    ghId ? loadActivityForGh(ghId) : [],
+  );
   const [firestoreActivity, setFirestoreActivity] = useState<ActivityEntry[]>([]);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
@@ -136,7 +159,17 @@ export function App() {
     return () => clearInterval(id);
   }, [fetchReading]);
 
-  // ── Firestore activity log listener ────────────────────────────────────────
+  // ── Reload all greenhouse-scoped state when the active greenhouse changes ───
+  useEffect(() => {
+    if (!ghId) return;
+    console.info(`[GreenMirror] Greenhouse switched to "${ghId}" — reloading scoped state`);
+    setZoneAssignments(loadZoneAssignmentsForGh(ghId));
+    setActivityLog(loadActivityForGh(ghId));
+    setFirestoreActivity([]);   // cleared until new subscription delivers
+    setFirestoreReading(null);  // clear previous site's reading
+  }, [ghId]);
+
+  // ── Firestore activity log listener ─────────────────────────────────────────
   useEffect(() => {
     if (!ghId) return;
     const unsub = subscribeToActivityLog(ghId, setFirestoreActivity, 30);
@@ -187,9 +220,21 @@ export function App() {
     }
   }, [firestoreReading, apiReading]);
 
-  // Persist state
+  // ── Persist state ───────────────────────────────────────────────────────────
   useEffect(() => { savePlantProfiles(plantProfiles); }, [plantProfiles]);
-  useEffect(() => { saveZoneAssignments(zoneAssignments); }, [zoneAssignments]);
+
+  // Greenhouse-scoped saves: use ghIdRef so we always write to the current
+  // greenhouse's key even if ghId changes mid-flight.
+  useEffect(() => {
+    const id = ghIdRef.current;
+    if (id) saveZoneAssignmentsForGh(id, zoneAssignments);
+  }, [zoneAssignments]); // intentionally omits ghId — ref handles it
+
+  useEffect(() => {
+    const id = ghIdRef.current;
+    if (id) saveActivityForGh(id, activityLog);
+  }, [activityLog]); // intentionally omits ghId — ref handles it
+
   useEffect(() => {
     window.localStorage.setItem(LAYOUT_SETTINGS_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
@@ -274,18 +319,19 @@ export function App() {
 
   const onWaterZone = useCallback((zone: VisualZone, amountMl: number) => {
     const plantName = zone.assignedPlant ? profilesById.get(zone.assignedPlant)?.name : undefined;
-    const zoneName = zone.displayLabel ?? zone.visualLabel;
-    logActivity({
-      type: 'watering',
-      visualZoneId: zone.visualLabel,
-      backendZoneId: zone.backendZoneId,
-      nodeId: zone.nodeId,
-      plantName,
-      amountMl,
-      message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
-    });
-    setActivityLog(loadActivity());
+    const zoneName  = zone.displayLabel ?? zone.visualLabel;
     if (ghId) {
+      logActivityForGh(ghId, {
+        type: 'watering',
+        visualZoneId: zone.visualLabel,
+        backendZoneId: zone.backendZoneId,
+        nodeId: zone.nodeId,
+        plantName,
+        amountMl,
+        message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ''} · ${amountMl}ml`,
+        source: 'manual',
+      });
+      setActivityLog(loadActivityForGh(ghId));
       writeWateringEvent({
         greenhouseId: ghId,
         visualZoneId: zone.visualLabel,
@@ -319,22 +365,24 @@ export function App() {
         : z
     );
     const plantName = plantId ? profilesById.get(plantId)?.name : undefined;
-    if (plantId) {
-      logActivity({
-        type: 'assignment',
-        visualZoneId: zoneKey,
-        plantName,
-        message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
-      });
-    } else {
-      logActivity({
-        type: 'cleared',
-        visualZoneId: zoneKey,
-        message: `Cleared plant from ${zoneKey}`,
-      });
+    if (ghId) {
+      if (plantId) {
+        logActivityForGh(ghId, {
+          type: 'assignment',
+          visualZoneId: zoneKey,
+          plantName,
+          message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
+        });
+      } else {
+        logActivityForGh(ghId, {
+          type: 'cleared',
+          visualZoneId: zoneKey,
+          message: `Cleared plant from ${zoneKey}`,
+        });
+      }
+      setActivityLog(loadActivityForGh(ghId));
     }
-    setActivityLog(loadActivity());
-  }, [profilesById]);
+  }, [ghId, profilesById]);
 
   // ── ALL HOOKS ABOVE THIS LINE ───────────────────────────────────────────────
   // Gate: show onboarding if no greenhouse selected yet.
@@ -364,6 +412,26 @@ export function App() {
         </button>
       </header>
 
+      {/* SIMULATION BANNER */}
+      {isSimulating && (
+        <div style={{
+          background: '#fffbeb',
+          borderBottom: '2px solid #f59e0b',
+          color: '#92400e',
+          padding: '5px 16px',
+          fontSize: 11,
+          fontWeight: 800,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: 6,
+          letterSpacing: '0.07em',
+          flexShrink: 0,
+        }}>
+          ⚗️ SIMULATION MODE — tap 👩‍🌾 to disable
+        </div>
+      )}
+
       {/* SCROLL BODY */}
       <div
         className="gm-scroll"
@@ -385,6 +453,7 @@ export function App() {
             onWaterZone={onWaterZone}
             greenhouseId={ghId ?? ''}
             firestoreActivity={firestoreActivity}
+            simHistory={isSimulating ? simHistory : undefined}
           />
         )}
         {activeTab === 'greenhouse' && (
