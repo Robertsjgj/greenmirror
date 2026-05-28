@@ -1,4 +1,4 @@
-const GREENHOUSE_ID = "greenmirror-demo";
+const GREENHOUSE_ID = "sydney-greenhouse";
 const NODE_COUNT = 15;
 const UPDATE_INTERVAL_MS = 5000;
 

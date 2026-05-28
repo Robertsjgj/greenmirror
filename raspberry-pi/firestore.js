@@ -131,7 +131,7 @@ try {
 function attachSaveReading(admin, db) {
   _saveReading = async (reading) => {
     try {
-      const ghId = reading.greenhouse_id || 'primary';
+      const ghId = reading.greenhouse_id || 'sydney-greenhouse';
       const batch = db.batch();
 
       const histRef   = db.collection('readings').doc();

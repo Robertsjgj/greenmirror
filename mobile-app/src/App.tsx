@@ -9,6 +9,12 @@ import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
 import { ActivityEntry, loadActivity, logActivity } from './activityLog';
 import { LATEST_READING_URL } from './config';
+import {
+  type MapKind,
+  GREENHOUSES,
+  DEFAULT_MAP_KIND,
+  mapKindToGreenhouseId,
+} from './greenhouses';
 import { firebaseEnabled } from './services/firebase';
 import { subscribeToLatestReading } from './services/readingsService';
 import {
@@ -31,7 +37,8 @@ import {
   sanitizeSettings
 } from './zoneLayout';
 
-export type MapKind = 'truro' | 'sydney';
+// Re-exported so existing component imports (`import { MapKind } from '../App'`) keep working.
+export type { MapKind } from './greenhouses';
 
 const LAYOUT_SETTINGS_KEY = 'greenmirror-map-layout-settings';
 
@@ -50,14 +57,11 @@ type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 const MAP_KIND_KEY = 'greenmirror-map-kind';
 
 function loadMapKind(): MapKind {
-  if (typeof window === 'undefined') return 'truro';
-  return window.localStorage.getItem(MAP_KIND_KEY) === 'sydney' ? 'sydney' : 'truro';
+  if (typeof window === 'undefined') return DEFAULT_MAP_KIND;
+  const stored = window.localStorage.getItem(MAP_KIND_KEY);
+  if (stored === 'truro' || stored === 'sydney') return stored;
+  return DEFAULT_MAP_KIND;
 }
-
-const SITE_INFO: Record<MapKind, { name: string; region: string }> = {
-  sydney: { name: 'Sydney', region: 'Sydney, NSW' },
-  truro: { name: 'Truro', region: 'Truro, Cornwall' }
-};
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'plants',      label: 'Plants',  icon: '🌱' },
@@ -69,16 +73,12 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 
 const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (site: MapKind) => string }> = {
   plants:      { title: 'Good morning!',   emoji: '🌤',  sub: () => 'GreenMirror Garden' },
-  greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (s) => `${SITE_INFO[s].name} layout` },
-  environment: { title: "Today's weather", emoji: '☀️',  sub: (s) => `Inside ${SITE_INFO[s].name}` },
+  greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (s) => `${GREENHOUSES[s].name} layout` },
+  environment: { title: "Today's weather", emoji: '☀️',  sub: (s) => `Inside ${GREENHOUSES[s].name}` },
   alerts:      { title: 'Heads up!',       emoji: '🔔',  sub: () => 'Things to check' },
   runoff:      { title: 'Water tracker',   emoji: '💧',  sub: () => 'Where your water goes' },
 };
 
-// Greenhouse ID used as the Firestore document key for latestReadings.
-// Must match GREENHOUSE_ID in raspberry-pi/simulator.js ("greenmirror-demo").
-// Real ESP readings fall back to reading.greenhouse_id || 'primary'.
-const FIRESTORE_GH_ID = 'greenmirror-demo';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>('plants');
@@ -146,7 +146,7 @@ export function App() {
     return () => clearInterval(id);
   }, [fetchReading]);
 
-  // ── Firestore real-time listener ────────────────────────────────────────────
+  // ── Firestore real-time listener — re-subscribes when site changes ──────────
   useEffect(() => {
     if (!firebaseEnabled) {
       console.info(
@@ -156,10 +156,12 @@ export function App() {
       return;
     }
 
-    console.info('[GreenMirror] Firestore listener starting for greenhouse "' + FIRESTORE_GH_ID + '"');
+    const ghId = mapKindToGreenhouseId(mapKind);
+    console.info('[GreenMirror] Firestore listener starting for greenhouse "' + ghId + '"');
+    setFirestoreReading(null); // clear previous site's reading immediately on switch
 
     const unsub = subscribeToLatestReading(
-      FIRESTORE_GH_ID,
+      ghId,
       (reading) => {
         console.info(
           '[GreenMirror] Firestore reading received · zones:', reading.zones?.length,
@@ -177,7 +179,7 @@ export function App() {
     );
 
     return () => { unsub?.(); };
-  }, []); // Single subscription for the session — FIRESTORE_GH_ID is stable
+  }, [mapKind]); // Re-subscribe when the active greenhouse site changes
 
   // ── Data source logging (fires only when source changes) ───────────────────
   const prevSourceRef = useRef<string>('offline');
