@@ -52,6 +52,7 @@ export function subscribeToActivityLog(
   greenhouseId: string,
   onData: (entries: ActivityEntry[]) => void,
   limitCount = 30,
+  onError?: (err: Error) => void,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) return null;
@@ -82,6 +83,7 @@ export function subscribeToActivityLog(
           source: data.source as ActivitySource | undefined,
         };
       });
+      console.info(`[GreenMirror] Firestore activity snapshot received: ${entries.length} entries for "${greenhouseId}"`);
       onData(entries);
     },
     (err) => {
@@ -92,6 +94,7 @@ export function subscribeToActivityLog(
         '\n  If this is an index error, create the composite index in the Firebase console:',
         '\n  Collection: activityLogs | Fields: greenhouseId ASC, timestamp DESC',
       );
+      onError?.(err instanceof Error ? err : new Error(String(err)));
     },
   );
 }
@@ -102,16 +105,19 @@ export function subscribeToActivityLog(
  * Write a greenhouse-scoped activity event to Firestore.
  * Fire-and-forget — errors are logged but not thrown.
  */
-export async function writeActivityEvent(event: ActivityEventInput): Promise<void> {
+export async function writeActivityEvent(event: ActivityEventInput): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await addDoc(collection(db, 'activityLogs'), {
       ...event,
       timestamp: serverTimestamp(),
     });
+    console.info(`[GreenMirror] Firestore write success: activity ${event.type} for ${event.greenhouseId}`);
+    return true;
   } catch (err) {
-    console.warn('[activityService] writeActivityEvent failed:', err);
+    console.warn('[GreenMirror] Firestore write failure: activity', err);
+    return false;
   }
 }
 
@@ -126,9 +132,9 @@ export async function writeWateringEvent(event: {
   plantName?: string;
   nodeId?: string;
   source?: 'manual' | 'automated';
-}): Promise<void> {
+}): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     const ts = serverTimestamp();
     // watering events collection (for later research queries)
@@ -149,7 +155,10 @@ export async function writeWateringEvent(event: {
       message: `Watered ${event.visualZoneId}${event.plantName ? ` (${event.plantName})` : ''} · ${event.amountMl}ml`,
       timestamp: ts,
     });
+    console.info(`[GreenMirror] Firestore write success: watering event for ${event.greenhouseId}/${event.visualZoneId}`);
+    return true;
   } catch (err) {
-    console.warn('[activityService] writeWateringEvent failed:', err);
+    console.warn('[GreenMirror] Firestore write failure: watering event', err);
+    return false;
   }
 }

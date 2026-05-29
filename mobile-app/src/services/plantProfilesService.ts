@@ -33,6 +33,7 @@ import type { PlantProfile } from '../plantProfiles';
  */
 export function subscribeToCustomProfiles(
   onData: (profiles: PlantProfile[]) => void,
+  onError?: (err: Error) => void,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) return null;
@@ -58,6 +59,7 @@ export function subscribeToCustomProfiles(
         '\n  Ensure Firestore rules allow read/write to the plantProfiles collection.',
         '\n  Recommended rule: match /plantProfiles/{id} { allow read, write: if true; }',
       );
+      onError?.(err instanceof Error ? err : new Error(String(err)));
     },
   );
 }
@@ -67,14 +69,16 @@ export function subscribeToCustomProfiles(
  * Called when a user creates a new profile or edits an existing one.
  * Fire-and-forget — errors are logged, not thrown.
  */
-export async function writeCustomProfile(profile: PlantProfile): Promise<void> {
+export async function writeCustomProfile(profile: PlantProfile): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await setDoc(doc(db, 'plantProfiles', profile.id), { ...profile });
-    console.info(`[GreenMirror] Profile written to Firestore: "${profile.id}" (${profile.name})`);
+    console.info(`[GreenMirror] Firestore write success: profile "${profile.id}" (${profile.name})`);
+    return true;
   } catch (err) {
-    console.warn('[GreenMirror] writeCustomProfile failed:', err);
+    console.warn('[GreenMirror] Firestore write failure: profile', err);
+    return false;
   }
 }
 
@@ -84,13 +88,15 @@ export async function writeCustomProfile(profile: PlantProfile): Promise<void> {
  * (resetting removes the Firestore override, so the hardcoded default is used again).
  * Fire-and-forget — errors are logged, not thrown.
  */
-export async function deleteCustomProfile(id: string): Promise<void> {
+export async function deleteCustomProfile(id: string): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await deleteDoc(doc(db, 'plantProfiles', id));
-    console.info(`[GreenMirror] Profile deleted from Firestore: "${id}"`);
+    console.info(`[GreenMirror] Firestore write success: deleted profile "${id}"`);
+    return true;
   } catch (err) {
-    console.warn('[GreenMirror] deleteCustomProfile failed:', err);
+    console.warn('[GreenMirror] Firestore write failure: delete profile', err);
+    return false;
   }
 }

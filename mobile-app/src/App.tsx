@@ -18,7 +18,7 @@ import { LATEST_READING_URL } from './config';
 import { useGreenhouse } from './context/GreenhouseContext';
 import { useSimulation } from './context/SimulationContext';
 import { firebaseEnabled } from './services/firebase';
-import { subscribeToActivityLog, writeWateringEvent } from './services/activityService';
+import { subscribeToActivityLog, writeActivityEvent, writeWateringEvent } from './services/activityService';
 import { subscribeToLatestReading } from './services/readingsService';
 import {
   subscribeToZoneAssignments,
@@ -125,6 +125,13 @@ export function App() {
     ghId ? loadActivityForGh(ghId) : [],
   );
   const [firestoreActivity, setFirestoreActivity] = useState<ActivityEntry[]>([]);
+  const [profilesLoaded, setProfilesLoaded] = useState(!firebaseEnabled);
+  const [profilesFallback, setProfilesFallback] = useState(!firebaseEnabled);
+  const [firestoreProfileCount, setFirestoreProfileCount] = useState(0);
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(!firebaseEnabled);
+  const [assignmentsFallback, setAssignmentsFallback] = useState(!firebaseEnabled);
+  const [activityLoaded, setActivityLoaded] = useState(!firebaseEnabled);
+  const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
@@ -132,6 +139,7 @@ export function App() {
   const [scrolled, setScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const migratedActivityRef = useRef<Set<string>>(new Set());
 
   // ── API polling (always runs; primary source when Firestore is absent) ──────
   const fetchReading = useCallback(async () => {
@@ -184,12 +192,18 @@ export function App() {
     setActivityLog(loadActivityForGh(ghId));
     setFirestoreActivity([]);   // cleared until new subscription delivers
     setFirestoreReading(null);  // clear previous site's reading
+    setAssignmentsLoaded(!firebaseEnabled);
+    setAssignmentsFallback(!firebaseEnabled);
+    setActivityLoaded(!firebaseEnabled);
+    setActivityFallback(!firebaseEnabled);
   }, [ghId]);
 
   // ── Firestore zone assignments — cross-device sync ───────────────────────────
   useEffect(() => {
     if (!ghId) return;
     const currentGhId = ghId;
+    setAssignmentsLoaded(false);
+    setAssignmentsFallback(false);
     const unsub = subscribeToZoneAssignments(currentGhId, (assignments, docExists) => {
       if (!docExists) {
         // Document not yet created — migrate local assignments up to Firestore
@@ -201,7 +215,13 @@ export function App() {
           Object.entries(local).forEach(([zoneKey, plantId]) => {
             writeZoneAssignment(currentGhId, zoneKey, plantId);
           });
+          console.info(`[GreenMirror] localStorage -> Firestore assignment migration happened for "${currentGhId}"`);
+        } else {
+          setZoneAssignments({});
+          saveZoneAssignmentsForGh(currentGhId, {});
         }
+        setAssignmentsLoaded(true);
+        setAssignmentsFallback(false);
         return; // keep current local state; Firestore write above will trigger a second callback
       }
       console.info(
@@ -209,19 +229,37 @@ export function App() {
       );
       setZoneAssignments(assignments);
       saveZoneAssignmentsForGh(currentGhId, assignments);
+      setAssignmentsLoaded(true);
+      setAssignmentsFallback(false);
+    }, (err) => {
+      console.warn(`[GreenMirror] localStorage fallback used for assignments in "${currentGhId}":`, err.message);
+      setZoneAssignments(loadZoneAssignmentsForGh(currentGhId));
+      setAssignmentsLoaded(true);
+      setAssignmentsFallback(true);
     });
+    if (!unsub) {
+      console.info(`[GreenMirror] localStorage fallback used for assignments in "${currentGhId}" because Firestore is unavailable`);
+      setZoneAssignments(loadZoneAssignmentsForGh(currentGhId));
+      setAssignmentsLoaded(true);
+      setAssignmentsFallback(true);
+    }
     return () => { unsub?.(); };
   }, [ghId]);
 
   // ── Firestore plant profiles — global cross-device sync ──────────────────────
   useEffect(() => {
     const unsub = subscribeToCustomProfiles((firestoreProfiles) => {
+      setProfilesLoaded(true);
+      setProfilesFallback(false);
+      setFirestoreProfileCount(firestoreProfiles.length);
+      console.info(`[GreenMirror] Firestore profile snapshot received: ${firestoreProfiles.length} profiles`);
       if (firestoreProfiles.length === 0) {
         setPlantProfiles((current) => {
           const customLocal = current.filter((p) => !p.isDefault);
           if (customLocal.length > 0) {
             console.info(`[GreenMirror] Migrating ${customLocal.length} local custom profiles to Firestore`);
             customLocal.forEach((p) => writeCustomProfile(p));
+            console.info('[GreenMirror] localStorage -> Firestore profile migration happened');
           } else {
             console.info('[GreenMirror] Firestore plantProfiles empty — no local custom profiles to migrate');
           }
@@ -243,14 +281,68 @@ export function App() {
         );
         return merged;
       });
+    }, (err) => {
+      console.warn('[GreenMirror] localStorage fallback used for plant profiles:', err.message);
+      setProfilesLoaded(true);
+      setProfilesFallback(true);
+      setFirestoreProfileCount(0);
     });
+    if (!unsub) {
+      console.info('[GreenMirror] localStorage fallback used for plant profiles because Firestore is unavailable');
+      setProfilesLoaded(true);
+      setProfilesFallback(true);
+      setFirestoreProfileCount(0);
+    }
     return () => { unsub?.(); };
   }, []);
 
   // ── Firestore activity log listener ─────────────────────────────────────────
   useEffect(() => {
     if (!ghId) return;
-    const unsub = subscribeToActivityLog(ghId, setFirestoreActivity, 30);
+    const currentGhId = ghId;
+    setActivityLoaded(false);
+    setActivityFallback(false);
+    const unsub = subscribeToActivityLog(currentGhId, (entries) => {
+      let migratedLocalActivity = false;
+      if (entries.length === 0 && !migratedActivityRef.current.has(currentGhId)) {
+        const local = loadActivityForGh(currentGhId);
+        if (local.length > 0) {
+          migratedLocalActivity = true;
+          migratedActivityRef.current.add(currentGhId);
+          console.info(`[GreenMirror] Migrating ${local.length} local activity entries to Firestore for "${currentGhId}"`);
+          local.slice(0, 30).forEach((entry) => {
+            writeActivityEvent({
+              type: entry.type,
+              greenhouseId: currentGhId,
+              visualZoneId: entry.visualZoneId,
+              nodeId: entry.nodeId,
+              plantName: entry.plantName,
+              amountMl: entry.amountMl,
+              message: entry.message,
+              source: entry.source,
+            });
+          });
+          console.info('[GreenMirror] localStorage -> Firestore activity migration happened');
+        }
+      }
+      setFirestoreActivity(entries);
+      if (!migratedLocalActivity) saveActivityForGh(currentGhId, entries);
+      setActivityLoaded(true);
+      setActivityFallback(false);
+    }, 30, (err) => {
+      console.warn(`[GreenMirror] localStorage fallback used for activity in "${currentGhId}":`, err.message);
+      setFirestoreActivity([]);
+      setActivityLog(loadActivityForGh(currentGhId));
+      setActivityLoaded(true);
+      setActivityFallback(true);
+    });
+    if (!unsub) {
+      console.info(`[GreenMirror] localStorage fallback used for activity in "${currentGhId}" because Firestore is unavailable`);
+      setFirestoreActivity([]);
+      setActivityLog(loadActivityForGh(currentGhId));
+      setActivityLoaded(true);
+      setActivityFallback(true);
+    }
     return () => { unsub?.(); };
   }, [ghId]);
 
@@ -332,9 +424,36 @@ export function App() {
     if (mapKind === 'sydney') {
       return mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById);
     }
-    return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments)
+    return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments, profilesById)
       .rows.flatMap((r) => r.zones);
   }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
+
+  const localStorageFallbackActive = profilesFallback || assignmentsFallback || activityFallback;
+  const syncStatusLabel = localStorageFallbackActive
+    ? 'Offline fallback'
+    : (profilesLoaded && assignmentsLoaded && activityLoaded ? 'Connected' : 'Syncing');
+
+  useEffect(() => {
+    if (!ghId) return;
+    console.info('[GreenMirror] diagnostics', {
+      greenhouseId: ghId,
+      firestoreProfiles: firestoreProfileCount,
+      assignmentKeys: Object.keys(zoneAssignments).length,
+      activityLogs: activityLoaded && !activityFallback ? firestoreActivity.length : activityLog.length,
+      localStorageFallbackActive,
+      syncStatus: syncStatusLabel,
+    });
+  }, [
+    ghId,
+    firestoreProfileCount,
+    zoneAssignments,
+    activityLoaded,
+    activityFallback,
+    firestoreActivity.length,
+    activityLog.length,
+    localStorageFallbackActive,
+    syncStatusLabel,
+  ]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -372,12 +491,23 @@ export function App() {
       return next;
     });
     writeCustomProfile(p); // sync to Firestore for cross-device consistency
+    if (ghId) {
+      writeActivityEvent({
+        type: 'profile-update',
+        greenhouseId: ghId,
+        plantName: p.name,
+        message: `Saved plant profile ${p.name}`,
+      });
+    }
     setEditorProfile(null);
     showToast(p.name ? `Saved ${p.name}` : 'Profile saved');
-  }, [showToast]);
+  }, [ghId, showToast]);
 
   const onDeleteProfile = useCallback((id: string) => {
     const p = plantProfiles.find((x) => x.id === id);
+    const assignedZoneKeys = Object.entries(zoneAssignments)
+      .filter(([, plantId]) => plantId === id)
+      .map(([zoneKey]) => zoneKey);
     setPlantProfiles((list) => list.filter((x) => x.id !== id));
     setZoneAssignments((a) => {
       const next = { ...a };
@@ -385,18 +515,35 @@ export function App() {
       return next;
     });
     deleteCustomProfile(id); // remove from Firestore
+    if (ghId) {
+      assignedZoneKeys.forEach((zoneKey) => clearZoneAssignment(ghId, zoneKey));
+      writeActivityEvent({
+        type: 'profile-update',
+        greenhouseId: ghId,
+        plantName: p?.name,
+        message: `Deleted plant profile ${p?.name ?? id}`,
+      });
+    }
     setEditorProfile(null);
     showToast(`Deleted ${p?.name ?? 'profile'}`);
-  }, [plantProfiles, showToast]);
+  }, [ghId, plantProfiles, showToast, zoneAssignments]);
 
   const onResetProfile = useCallback((id: string) => {
     const def = DEFAULT_PLANT_PROFILES.find((p) => p.id === id);
     if (!def) return;
     setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
     deleteCustomProfile(id); // remove Firestore override so hardcoded default is used on all devices
+    if (ghId) {
+      writeActivityEvent({
+        type: 'profile-update',
+        greenhouseId: ghId,
+        plantName: def.name,
+        message: `Reset ${def.name} profile to defaults`,
+      });
+    }
     setEditorProfile(null);
     showToast(`Reset ${def.name} to defaults`);
-  }, [showToast]);
+  }, [ghId, showToast]);
 
   const onWaterZone = useCallback((zone: VisualZone, amountMl: number) => {
     const plantName = zone.assignedPlant ? profilesById.get(zone.assignedPlant)?.name : undefined;
@@ -472,12 +619,27 @@ export function App() {
           plantName,
           message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
         });
+        writeActivityEvent({
+          type: 'assignment',
+          greenhouseId: ghId,
+          visualZoneId: zoneKey,
+          plantName,
+          message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
+          source: 'manual',
+        });
       } else {
         clearZoneAssignment(ghId, zoneKey);
         logActivityForGh(ghId, {
           type: 'cleared',
           visualZoneId: zoneKey,
           message: `Cleared plant from ${zoneKey}`,
+        });
+        writeActivityEvent({
+          type: 'cleared',
+          greenhouseId: ghId,
+          visualZoneId: zoneKey,
+          message: `Cleared plant from ${zoneKey}`,
+          source: 'manual',
         });
       }
       setActivityLog(loadActivityForGh(ghId));
@@ -532,6 +694,26 @@ export function App() {
         </div>
       )}
 
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        padding: '6px 16px',
+        borderBottom: '1px solid var(--line)',
+        background: localStorageFallbackActive ? '#fff7ed' : '#ecfdf5',
+        color: localStorageFallbackActive ? '#9a3412' : '#166534',
+        fontSize: 10.5,
+        fontWeight: 800,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+      }}>
+        <span>Database: {syncStatusLabel}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+          {ghId} · profiles {firestoreProfileCount} · zones {Object.keys(zoneAssignments).length} · activity {activityLoaded && !activityFallback ? firestoreActivity.length : activityLog.length}
+        </span>
+      </div>
+
       {/* SCROLL BODY */}
       <div
         className="gm-scroll"
@@ -553,6 +735,9 @@ export function App() {
             onWaterZone={onWaterZone}
             greenhouseId={ghId ?? ''}
             firestoreActivity={firestoreActivity}
+            activityLoaded={activityLoaded}
+            activityFallback={activityFallback}
+            assignmentsLoaded={assignmentsLoaded}
             simHistory={isSimulating ? simHistory : undefined}
           />
         )}

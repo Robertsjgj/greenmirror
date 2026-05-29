@@ -49,8 +49,8 @@ export function GreenhouseView({
   );
 
   const truroLayout = useMemo(
-    () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments),
-    [latestReading, layoutSettings, zoneAssignments]
+    () => mapZonesToLayout(latestReading, layoutSettings, zoneAssignments, profilesById),
+    [latestReading, layoutSettings, zoneAssignments, profilesById]
   );
 
   const zones = mapKind === 'sydney'

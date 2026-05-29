@@ -10,6 +10,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteField,
   serverTimestamp,
   type DocumentData,
 } from 'firebase/firestore';
@@ -26,9 +27,8 @@ export interface GreenhouseDoc {
 
 export interface ZoneAssignmentDoc {
   greenhouseId: string;
-  visualZoneId: string;
-  plantProfileId: string;
-  assignedAt: DocumentData;
+  assignments: Record<string, string>;
+  updatedAt: DocumentData;
 }
 
 /**
@@ -59,8 +59,8 @@ export async function ensureGreenhouseDoc(
 }
 
 /**
- * Write a zone→plant assignment to Firestore.
- * Called alongside the existing localStorage write.
+ * Write a zone->plant assignment to Firestore.
+ * Uses the shared `zoneAssignments/{greenhouseId}` document shape.
  */
 export async function saveZoneAssignment(
   greenhouseId: string,
@@ -70,24 +70,17 @@ export async function saveZoneAssignment(
   const db = getDb();
   if (!db) return;
   try {
-    const id = `${greenhouseId}__${visualZoneId}`;
-    const ref = doc(db, 'zoneAssignments', id);
+    const ref = doc(db, 'zoneAssignments', greenhouseId);
     if (plantProfileId) {
       await setDoc(ref, {
-        greenhouseId,
-        visualZoneId,
-        plantProfileId,
-        assignedAt: serverTimestamp(),
-      });
-    } else {
-      // Use updateDoc with a sentinel to mark cleared rather than deleting the doc,
-      // so history is preserved.
-      await setDoc(ref, {
-        greenhouseId,
-        visualZoneId,
-        plantProfileId: null,
-        clearedAt: serverTimestamp(),
+        assignments: { [visualZoneId]: plantProfileId },
+        updatedAt: serverTimestamp(),
       }, { merge: true });
+    } else {
+      await updateDoc(ref, {
+        [`assignments.${visualZoneId}`]: deleteField(),
+        updatedAt: serverTimestamp(),
+      });
     }
   } catch (err) {
     console.warn('[greenhouseService] saveZoneAssignment failed:', err);

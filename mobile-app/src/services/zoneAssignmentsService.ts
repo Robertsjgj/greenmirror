@@ -40,6 +40,7 @@ import type { ZoneAssignments } from '../plantProfiles';
 export function subscribeToZoneAssignments(
   greenhouseId: string,
   onData: (assignments: ZoneAssignments, docExists: boolean) => void,
+  onError?: (err: Error) => void,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) return null;
@@ -75,6 +76,7 @@ export function subscribeToZoneAssignments(
         '\n  Ensure Firestore rules allow read/write to the zoneAssignments collection.',
         '\n  Recommended rule: match /zoneAssignments/{id} { allow read, write: if true; }',
       );
+      onError?.(err instanceof Error ? err : new Error(String(err)));
     },
   );
 }
@@ -87,18 +89,20 @@ export async function writeZoneAssignment(
   greenhouseId: string,
   zoneKey: string,
   plantId: string,
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await setDoc(
       doc(db, 'zoneAssignments', greenhouseId),
       { assignments: { [zoneKey]: plantId } },
       { merge: true },
     );
-    console.info(`[zoneAssignmentsService] ${zoneKey} → ${plantId} saved for ${greenhouseId}`);
+    console.info(`[GreenMirror] Firestore write success: assignment ${greenhouseId}/${zoneKey} -> ${plantId}`);
+    return true;
   } catch (err) {
-    console.warn('[zoneAssignmentsService] write failed:', err);
+    console.warn('[GreenMirror] Firestore write failure: assignment', err);
+    return false;
   }
 }
 
@@ -110,20 +114,23 @@ export async function writeZoneAssignment(
 export async function clearZoneAssignment(
   greenhouseId: string,
   zoneKey: string,
-): Promise<void> {
+): Promise<boolean> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return false;
   try {
     await updateDoc(
       doc(db, 'zoneAssignments', greenhouseId),
       { [`assignments.${zoneKey}`]: deleteField() },
     );
-    console.info(`[zoneAssignmentsService] ${zoneKey} cleared from ${greenhouseId}`);
+    console.info(`[GreenMirror] Firestore write success: cleared assignment ${greenhouseId}/${zoneKey}`);
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // "No document to update" is expected if no assignments have been written yet.
     if (!msg.includes('No document to update')) {
-      console.warn('[zoneAssignmentsService] clear failed:', msg);
+      console.warn('[GreenMirror] Firestore write failure: clear assignment', msg);
+      return false;
     }
+    return true;
   }
 }

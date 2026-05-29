@@ -34,14 +34,14 @@ One document per physical greenhouse site.
 
 | Field       | Type      | Description                              |
 |-------------|-----------|------------------------------------------|
-| `id`        | string    | Same as document ID (e.g. `sydney`)      |
+| `id`        | string    | Same as document ID (e.g. `sydney-greenhouse`) |
 | `name`      | string    | Display name (e.g. `"Sydney"`)           |
 | `region`    | string    | Human region (e.g. `"Sydney, NSW"`)      |
 | `timezone`  | string?   | IANA tz (e.g. `"Australia/Sydney"`)      |
 | `createdAt` | timestamp | Server timestamp on first write          |
 | `updatedAt` | timestamp | Server timestamp on last update          |
 
-**Known IDs:** `sydney`, `truro`
+**Known IDs:** `sydney-greenhouse`, `truro-greenhouse`
 
 ---
 
@@ -52,7 +52,7 @@ Frontend Firestore listeners subscribe to this for near-real-time updates.
 
 | Field           | Type        | Description                              |
 |-----------------|-------------|------------------------------------------|
-| `greenhouse_id` | string      | e.g. `"sydney"`                          |
+| `greenhouse_id` | string      | e.g. `"sydney-greenhouse"`               |
 | `node_id`       | string?     | ESP node that sent the reading           |
 | `node_count`    | number?     | Number of nodes in this payload          |
 | `zone_count`    | number?     | Number of zones in this payload          |
@@ -142,18 +142,25 @@ One document per plant profile. Document ID = profile `id` (e.g. `"tomato"`).
 
 ---
 
-### `zoneAssignments/{id}`
+### `zoneAssignments/{greenhouseId}`
 
-Document ID = `{greenhouseId}__{visualZoneId}`.  
-Overwritten on each assignment change.
+One document per greenhouse.
+The frontend reads this document as the source of truth and caches it in localStorage only for fallback/offline display.
 
-| Field            | Type      | Description                            |
-|------------------|-----------|----------------------------------------|
-| `greenhouseId`   | string    | Parent greenhouse                      |
-| `visualZoneId`   | string    | Zone's stable physical ID              |
-| `plantProfileId` | string?   | Profile ID, or `null` if cleared       |
-| `assignedAt`     | timestamp | When last assigned                     |
-| `clearedAt`      | timestamp?| When last cleared                      |
+| Field         | Type                | Description                                      |
+|---------------|---------------------|--------------------------------------------------|
+| `assignments` | map<string, string> | Stable visual zone ID -> plant profile ID        |
+
+Example:
+
+```json
+{
+  "assignments": {
+    "SYD-GH-LEFT-05": "tomato",
+    "SYD-GH-MID-01": "cucumber"
+  }
+}
+```
 
 ---
 

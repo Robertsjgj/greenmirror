@@ -22,6 +22,9 @@ interface PlantCareProps {
   greenhouseId: string;
   /** Real-time Firestore activity feed — greenhouse-scoped, newest first */
   firestoreActivity?: ActivityEntry[];
+  activityLoaded: boolean;
+  activityFallback: boolean;
+  assignmentsLoaded: boolean;
   /** Simulation history — when present, trends use this instead of Firestore */
   simHistory?: LatestReading[];
 }
@@ -119,7 +122,7 @@ export function PlantCare({
   plantProfiles, profilesById,
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
-  greenhouseId, firestoreActivity, simHistory,
+  greenhouseId, firestoreActivity, activityLoaded, activityFallback, assignmentsLoaded, simHistory,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
@@ -134,10 +137,13 @@ export function PlantCare({
   }, [greenhouseId]);
 
   const allTasks = useMemo(
-    () => zones
-      .map((z) => buildTask(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null))
-      .filter((t): t is Task => t !== null),
-    [zones, profilesById]
+    () => {
+      if (!assignmentsLoaded) return [];
+      return zones
+        .map((z) => buildTask(z, z.assignedPlant ? profilesById.get(z.assignedPlant) ?? null : null))
+        .filter((t): t is Task => t !== null);
+    },
+    [assignmentsLoaded, zones, profilesById]
   );
 
   const { incompleteTasks, completedTasks } = useMemo(() => {
@@ -191,14 +197,18 @@ export function PlantCare({
 
   // Prefer Firestore-backed activity (greenhouse-scoped); fall back to localStorage
   const displayActivity = useMemo(
-    () => (firestoreActivity && firestoreActivity.length > 0)
-      ? firestoreActivity
-      : filterUsefulActivity(activityLog),
-    [firestoreActivity, activityLog],
+    () => {
+      if (activityLoaded && !activityFallback) return firestoreActivity ?? [];
+      return filterUsefulActivity(activityLog);
+    },
+    [activityLoaded, activityFallback, firestoreActivity, activityLog],
   );
 
   const needsAttention = summary.attention;
   const totalIncompleteTasks = incompleteTasks.length;
+  const taskEmptyDetail = !assignmentsLoaded
+    ? 'Syncing shared assignments from Firestore...'
+    : 'Assign plant profiles in the Map to get personalised care tasks.';
 
   return (
     <div style={{ padding: '12px 16px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -246,10 +256,10 @@ export function PlantCare({
           <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
             <div style={{ fontSize: 28, marginBottom: 6 }}>🌿</div>
             <div style={{ fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui", fontSize: 15 }}>
-              No tasks yet
+              {!assignmentsLoaded ? 'Syncing tasks' : 'No tasks yet'}
             </div>
             <div style={{ fontSize: 12, marginTop: 4, fontWeight: 600 }}>
-              Assign plant profiles in the Map to get personalised care tasks.
+              {taskEmptyDetail}
             </div>
           </div>
         ) : (
