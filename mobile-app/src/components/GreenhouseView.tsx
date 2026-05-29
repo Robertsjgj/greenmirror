@@ -44,8 +44,8 @@ export function GreenhouseView({
   const [waterVol, setWaterVol] = useState(200);
 
   const sydneyZones = useMemo(
-    () => mapZonesToSydneyLayout(latestReading, zoneAssignments),
-    [latestReading, zoneAssignments]
+    () => mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById),
+    [latestReading, zoneAssignments, profilesById]
   );
 
   const truroLayout = useMemo(

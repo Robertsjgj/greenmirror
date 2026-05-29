@@ -26,6 +26,11 @@ import {
   clearZoneAssignment,
 } from './services/zoneAssignmentsService';
 import {
+  subscribeToCustomProfiles,
+  writeCustomProfile,
+  deleteCustomProfile,
+} from './services/plantProfilesService';
+import {
   PlantProfile,
   ZoneAssignments,
   DEFAULT_PLANT_PROFILES,
@@ -168,7 +173,14 @@ export function App() {
   useEffect(() => {
     if (!ghId) return;
     console.info(`[GreenMirror] Greenhouse switched to "${ghId}" — reloading scoped state`);
-    setZoneAssignments(loadZoneAssignmentsForGh(ghId));
+    const localAssignments = loadZoneAssignmentsForGh(ghId);
+    if (Object.keys(localAssignments).length > 0) {
+      console.info(
+        `[GreenMirror] localStorage fallback: ${Object.keys(localAssignments).length} assignments for "${ghId}"`,
+        '(will be overwritten by Firestore subscription)',
+      );
+    }
+    setZoneAssignments(localAssignments);
     setActivityLog(loadActivityForGh(ghId));
     setFirestoreActivity([]);   // cleared until new subscription delivers
     setFirestoreReading(null);  // clear previous site's reading
@@ -178,12 +190,62 @@ export function App() {
   useEffect(() => {
     if (!ghId) return;
     const currentGhId = ghId;
-    const unsub = subscribeToZoneAssignments(currentGhId, (assignments) => {
+    const unsub = subscribeToZoneAssignments(currentGhId, (assignments, docExists) => {
+      if (!docExists) {
+        // Document not yet created — migrate local assignments up to Firestore
+        const local = loadZoneAssignmentsForGh(currentGhId);
+        if (Object.keys(local).length > 0) {
+          console.info(
+            `[GreenMirror] Migrating ${Object.keys(local).length} local assignments to Firestore for "${currentGhId}"`,
+          );
+          Object.entries(local).forEach(([zoneKey, plantId]) => {
+            writeZoneAssignment(currentGhId, zoneKey, plantId);
+          });
+        }
+        return; // keep current local state; Firestore write above will trigger a second callback
+      }
+      console.info(
+        `[GreenMirror] Applying ${Object.keys(assignments).length} Firestore assignments to state for "${currentGhId}"`,
+      );
       setZoneAssignments(assignments);
-      saveZoneAssignmentsForGh(currentGhId, assignments); // keep localStorage in sync
+      saveZoneAssignmentsForGh(currentGhId, assignments);
     });
     return () => { unsub?.(); };
   }, [ghId]);
+
+  // ── Firestore plant profiles — global cross-device sync ──────────────────────
+  useEffect(() => {
+    const unsub = subscribeToCustomProfiles((firestoreProfiles) => {
+      if (firestoreProfiles.length === 0) {
+        setPlantProfiles((current) => {
+          const customLocal = current.filter((p) => !p.isDefault);
+          if (customLocal.length > 0) {
+            console.info(`[GreenMirror] Migrating ${customLocal.length} local custom profiles to Firestore`);
+            customLocal.forEach((p) => writeCustomProfile(p));
+          } else {
+            console.info('[GreenMirror] Firestore plantProfiles empty — no local custom profiles to migrate');
+          }
+          return current; // keep current state until Firestore round-trip returns
+        });
+        return;
+      }
+      const firestoreById = new Map(firestoreProfiles.map((p) => [p.id, p]));
+      setPlantProfiles(() => {
+        const merged: PlantProfile[] = DEFAULT_PLANT_PROFILES.map((def) => {
+          const override = firestoreById.get(def.id);
+          return override ? { ...override, isDefault: true } : { ...def, isDefault: true };
+        });
+        firestoreProfiles
+          .filter((p) => !DEFAULT_PLANT_PROFILES.some((d) => d.id === p.id))
+          .forEach((p) => merged.push({ ...p, isDefault: false, isCustom: true }));
+        console.info(
+          `[GreenMirror] Applied ${firestoreProfiles.length} Firestore profiles — ${merged.length} total profiles`,
+        );
+        return merged;
+      });
+    });
+    return () => { unsub?.(); };
+  }, []);
 
   // ── Firestore activity log listener ─────────────────────────────────────────
   useEffect(() => {
@@ -268,11 +330,11 @@ export function App() {
 
   const resolvedZones = useMemo((): VisualZone[] => {
     if (mapKind === 'sydney') {
-      return mapZonesToSydneyLayout(latestReading, zoneAssignments);
+      return mapZonesToSydneyLayout(latestReading, zoneAssignments, profilesById);
     }
     return mapZonesToLayout(latestReading, layoutSettings, zoneAssignments)
       .rows.flatMap((r) => r.zones);
-  }, [mapKind, latestReading, layoutSettings, zoneAssignments]);
+  }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -309,6 +371,7 @@ export function App() {
       next[idx] = p;
       return next;
     });
+    writeCustomProfile(p); // sync to Firestore for cross-device consistency
     setEditorProfile(null);
     showToast(p.name ? `Saved ${p.name}` : 'Profile saved');
   }, [showToast]);
@@ -321,6 +384,7 @@ export function App() {
       Object.keys(next).forEach((k) => { if (next[k] === id) delete next[k]; });
       return next;
     });
+    deleteCustomProfile(id); // remove from Firestore
     setEditorProfile(null);
     showToast(`Deleted ${p?.name ?? 'profile'}`);
   }, [plantProfiles, showToast]);
@@ -329,6 +393,7 @@ export function App() {
     const def = DEFAULT_PLANT_PROFILES.find((p) => p.id === id);
     if (!def) return;
     setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
+    deleteCustomProfile(id); // remove Firestore override so hardcoded default is used on all devices
     setEditorProfile(null);
     showToast(`Reset ${def.name} to defaults`);
   }, [showToast]);

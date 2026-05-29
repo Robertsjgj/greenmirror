@@ -28,11 +28,18 @@ import type { ZoneAssignments } from '../plantProfiles';
 /**
  * Subscribe to real-time zone assignments for a greenhouse.
  * Fires immediately with current data, then on every remote change.
+ *
+ * The second argument to onData, `docExists`, distinguishes:
+ *   false — the Firestore document has never been written for this greenhouse
+ *            (caller should migrate local data to Firestore rather than wiping state)
+ *   true  — the document exists; use `assignments` as the source of truth,
+ *            even if the map is empty (all assignments were cleared)
+ *
  * Returns null when Firebase is not configured.
  */
 export function subscribeToZoneAssignments(
   greenhouseId: string,
-  onData: (assignments: ZoneAssignments) => void,
+  onData: (assignments: ZoneAssignments, docExists: boolean) => void,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) return null;
@@ -42,7 +49,10 @@ export function subscribeToZoneAssignments(
     ref,
     (snap) => {
       if (!snap.exists()) {
-        onData({});
+        console.info(
+          `[GreenMirror] No zoneAssignments document for "${greenhouseId}" — will migrate local data if present.`,
+        );
+        onData({}, false);
         return;
       }
       const raw = (snap.data()?.assignments ?? {}) as Record<string, unknown>;
@@ -52,10 +62,19 @@ export function subscribeToZoneAssignments(
             typeof e[0] === 'string' && typeof e[1] === 'string',
         ),
       );
-      onData(cleaned);
+      console.info(
+        `[GreenMirror] Firestore assignments for "${greenhouseId}":`,
+        Object.keys(cleaned).length, 'zones —',
+        JSON.stringify(cleaned),
+      );
+      onData(cleaned, true);
     },
     (err) => {
-      console.warn('[zoneAssignmentsService] Firestore error:', err.message);
+      console.warn(
+        '[GreenMirror] zoneAssignments Firestore error:', err.message,
+        '\n  Ensure Firestore rules allow read/write to the zoneAssignments collection.',
+        '\n  Recommended rule: match /zoneAssignments/{id} { allow read, write: if true; }',
+      );
     },
   );
 }
