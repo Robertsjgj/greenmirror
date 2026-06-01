@@ -482,21 +482,23 @@ export function App() {
     setEditorProfile(p);
   }, []);
 
-  const onSaveProfile = useCallback((p: PlantProfile) => {
-    setPlantProfiles((list) => {
-      const idx = list.findIndex((x) => x.id === p.id);
-      if (idx === -1) return [...list, p];
-      const next = [...list];
-      next[idx] = p;
-      return next;
-    });
-    // Sync to Firestore; surface a warning if the write fails so the user knows sync is broken.
-    writeCustomProfile(p).then((ok) => {
-      if (!ok && firebaseEnabled) {
-        console.warn('[GreenMirror] Profile write failed — profile saved locally only. Check Firestore rules for plantProfiles collection.');
-        showToast('⚠ Saved locally only — Firestore sync failed');
+  const onSaveProfile = useCallback(async (p: PlantProfile) => {
+    setEditorProfile(null);
+    if (firebaseEnabled) {
+      console.info(`[GreenMirror] Writing profile to Firestore: plantProfiles/${p.id} (${p.name})`);
+      const ok = await writeCustomProfile(p);
+      if (!ok) {
+        showToast('⚠ Could not save — Firestore write failed. Check plantProfiles rules.');
+        return;
       }
-    });
+      // Subscription fires on all devices and drives setPlantProfiles — no local optimistic update needed.
+    } else {
+      setPlantProfiles((list) => {
+        const idx = list.findIndex((x) => x.id === p.id);
+        if (idx === -1) return [...list, p];
+        const next = [...list]; next[idx] = p; return next;
+      });
+    }
     if (ghId) {
       writeActivityEvent({
         type: 'profile-update',
@@ -505,27 +507,31 @@ export function App() {
         message: `Saved plant profile ${p.name}`,
       });
     }
-    setEditorProfile(null);
     showToast(p.name ? `Saved ${p.name}` : 'Profile saved');
   }, [ghId, showToast]);
 
-  const onDeleteProfile = useCallback((id: string) => {
+  const onDeleteProfile = useCallback(async (id: string) => {
     const p = plantProfiles.find((x) => x.id === id);
     const assignedZoneKeys = Object.entries(zoneAssignments)
       .filter(([, plantId]) => plantId === id)
       .map(([zoneKey]) => zoneKey);
-    setPlantProfiles((list) => list.filter((x) => x.id !== id));
-    setZoneAssignments((a) => {
-      const next = { ...a };
-      Object.keys(next).forEach((k) => { if (next[k] === id) delete next[k]; });
-      return next;
-    });
-    deleteCustomProfile(id).then((ok) => {
-      if (!ok && firebaseEnabled) {
-        console.warn('[GreenMirror] Profile delete failed in Firestore — deleted locally only. Check Firestore rules for plantProfiles collection.');
-        showToast('⚠ Deleted locally only — Firestore sync failed');
+    setEditorProfile(null);
+    if (firebaseEnabled) {
+      console.info(`[GreenMirror] Deleting profile from Firestore: plantProfiles/${id}`);
+      const ok = await deleteCustomProfile(id);
+      if (!ok) {
+        showToast('⚠ Could not delete — Firestore write failed. Check plantProfiles rules.');
+        return;
       }
-    });
+      // Subscription fires and removes the profile from state on all devices.
+    } else {
+      setPlantProfiles((list) => list.filter((x) => x.id !== id));
+      setZoneAssignments((a) => {
+        const next = { ...a };
+        Object.keys(next).forEach((k) => { if (next[k] === id) delete next[k]; });
+        return next;
+      });
+    }
     if (ghId) {
       assignedZoneKeys.forEach((zoneKey) => clearZoneAssignment(ghId, zoneKey));
       writeActivityEvent({
@@ -535,21 +541,24 @@ export function App() {
         message: `Deleted plant profile ${p?.name ?? id}`,
       });
     }
-    setEditorProfile(null);
     showToast(`Deleted ${p?.name ?? 'profile'}`);
   }, [ghId, plantProfiles, showToast, zoneAssignments]);
 
-  const onResetProfile = useCallback((id: string) => {
+  const onResetProfile = useCallback(async (id: string) => {
     const def = DEFAULT_PLANT_PROFILES.find((p) => p.id === id);
     if (!def) return;
-    setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
-    // Remove Firestore override so hardcoded default is used on all devices.
-    deleteCustomProfile(id).then((ok) => {
-      if (!ok && firebaseEnabled) {
-        console.warn('[GreenMirror] Profile reset failed in Firestore — reset locally only. Check Firestore rules for plantProfiles collection.');
-        showToast('⚠ Reset locally only — Firestore sync failed');
+    setEditorProfile(null);
+    if (firebaseEnabled) {
+      console.info(`[GreenMirror] Resetting profile in Firestore: deleting plantProfiles/${id} override`);
+      const ok = await deleteCustomProfile(id);
+      if (!ok) {
+        showToast('⚠ Could not reset — Firestore write failed. Check plantProfiles rules.');
+        return;
       }
-    });
+      // Subscription fires; merge logic will restore the default since Firestore no longer has an override.
+    } else {
+      setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
+    }
     if (ghId) {
       writeActivityEvent({
         type: 'profile-update',
@@ -558,7 +567,6 @@ export function App() {
         message: `Reset ${def.name} profile to defaults`,
       });
     }
-    setEditorProfile(null);
     showToast(`Reset ${def.name} to defaults`);
   }, [ghId, showToast]);
 
@@ -756,6 +764,7 @@ export function App() {
             activityFallback={activityFallback}
             assignmentsLoaded={assignmentsLoaded}
             simHistory={isSimulating ? simHistory : undefined}
+            firestoreProfileCount={firestoreProfileCount}
           />
         )}
         {activeTab === 'greenhouse' && (

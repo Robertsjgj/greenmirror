@@ -27,6 +27,8 @@ interface PlantCareProps {
   assignmentsLoaded: boolean;
   /** Simulation history — when present, trends use this instead of Firestore */
   simHistory?: LatestReading[];
+  /** Number of plant profiles loaded from Firestore (diagnostic) */
+  firestoreProfileCount?: number;
 }
 
 type TaskKind = 'water' | 'check';
@@ -123,6 +125,7 @@ export function PlantCare({
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
   greenhouseId, firestoreActivity, activityLoaded, activityFallback, assignmentsLoaded, simHistory,
+  firestoreProfileCount,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
@@ -371,6 +374,11 @@ export function PlantCare({
           <div>
             <h2 className="gm-h2">Your plants 🌿</h2>
             <div className="gm-sub">{plantProfiles.length} kinds saved · tap one to edit</div>
+            {firestoreProfileCount !== undefined && (
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 2 }}>
+                Profiles from Firestore: {firestoreProfileCount}
+              </div>
+            )}
           </div>
           <button className="gm-btn primary" onClick={() => onAddProfile()} style={{ padding: '9px 14px', fontSize: 13, flexShrink: 0 }}>
             + New
