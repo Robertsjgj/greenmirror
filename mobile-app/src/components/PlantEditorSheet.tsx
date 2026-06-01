@@ -74,7 +74,8 @@ const EMPTY: Omit<PlantProfile, 'id'> = {
 };
 
 export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, onDelete, onReset }: PlantEditorSheetProps) {
-  const isNew = !profile;
+  // Treat profiles with no id (prefill from zone picker) as new, same as null.
+  const isNew = !profile || !profile.id;
 
   const [form, setForm] = useState<Omit<PlantProfile, 'id'> & { id?: string }>({ ...EMPTY });
 

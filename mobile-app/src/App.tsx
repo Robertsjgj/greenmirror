@@ -490,7 +490,13 @@ export function App() {
       next[idx] = p;
       return next;
     });
-    writeCustomProfile(p); // sync to Firestore for cross-device consistency
+    // Sync to Firestore; surface a warning if the write fails so the user knows sync is broken.
+    writeCustomProfile(p).then((ok) => {
+      if (!ok && firebaseEnabled) {
+        console.warn('[GreenMirror] Profile write failed — profile saved locally only. Check Firestore rules for plantProfiles collection.');
+        showToast('⚠ Saved locally only — Firestore sync failed');
+      }
+    });
     if (ghId) {
       writeActivityEvent({
         type: 'profile-update',
@@ -514,7 +520,12 @@ export function App() {
       Object.keys(next).forEach((k) => { if (next[k] === id) delete next[k]; });
       return next;
     });
-    deleteCustomProfile(id); // remove from Firestore
+    deleteCustomProfile(id).then((ok) => {
+      if (!ok && firebaseEnabled) {
+        console.warn('[GreenMirror] Profile delete failed in Firestore — deleted locally only. Check Firestore rules for plantProfiles collection.');
+        showToast('⚠ Deleted locally only — Firestore sync failed');
+      }
+    });
     if (ghId) {
       assignedZoneKeys.forEach((zoneKey) => clearZoneAssignment(ghId, zoneKey));
       writeActivityEvent({
@@ -532,7 +543,13 @@ export function App() {
     const def = DEFAULT_PLANT_PROFILES.find((p) => p.id === id);
     if (!def) return;
     setPlantProfiles((list) => list.map((p) => (p.id === id ? { ...def } : p)));
-    deleteCustomProfile(id); // remove Firestore override so hardcoded default is used on all devices
+    // Remove Firestore override so hardcoded default is used on all devices.
+    deleteCustomProfile(id).then((ok) => {
+      if (!ok && firebaseEnabled) {
+        console.warn('[GreenMirror] Profile reset failed in Firestore — reset locally only. Check Firestore rules for plantProfiles collection.');
+        showToast('⚠ Reset locally only — Firestore sync failed');
+      }
+    });
     if (ghId) {
       writeActivityEvent({
         type: 'profile-update',
