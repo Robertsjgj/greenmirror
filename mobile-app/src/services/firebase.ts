@@ -16,11 +16,21 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 
+const REQUIRED_FIREBASE_ENV = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+] as const;
+
+function missingFirebaseEnv(): string[] {
+  return REQUIRED_FIREBASE_ENV.filter((key) => !import.meta.env[key]);
+}
+
 function isFirebaseConfigured(): boolean {
-  return Boolean(
-    import.meta.env.VITE_FIREBASE_API_KEY &&
-    import.meta.env.VITE_FIREBASE_PROJECT_ID
-  );
+  return missingFirebaseEnv().length === 0;
 }
 
 let _app: FirebaseApp | null = null;
@@ -55,8 +65,10 @@ export function getDb(): Firestore | null {
   const app = getFirebaseApp();
   if (!app) {
     if (!_warnedOnce) {
+      const missing = missingFirebaseEnv();
       console.info(
-        '[GreenMirror] Firestore disabled — set VITE_FIREBASE_* env vars to enable cloud sync.',
+        '[GreenMirror] Firestore disabled — set VITE_FIREBASE_* env vars in mobile-app/.env.local to enable cloud sync.',
+        missing.length ? `Missing: ${missing.join(', ')}` : '',
       );
       _warnedOnce = true;
     }
