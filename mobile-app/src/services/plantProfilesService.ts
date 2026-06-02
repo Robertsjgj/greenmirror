@@ -27,6 +27,31 @@ import { getDb } from './firebase';
 import type { PlantProfile } from '../plantProfiles';
 
 /**
+ * Strip undefined values before writing to Firestore.
+ * Firestore rejects documents containing undefined — optional PlantProfile
+ * fields (notes, careNotes, icon, isDefault, isCustom) must be replaced with
+ * safe fallbacks before calling setDoc().
+ */
+function sanitizePlantProfileForFirestore(profile: PlantProfile): Record<string, unknown> {
+  const now = new Date().toISOString();
+  return {
+    id: profile.id,
+    name: profile.name,
+    icon: profile.icon ?? '🌱',
+    moistureMin: profile.moistureMin,
+    moistureMax: profile.moistureMax,
+    soilTempMin: profile.soilTempMin,
+    soilTempMax: profile.soilTempMax,
+    notes: profile.notes ?? '',
+    careNotes: profile.careNotes ?? '',
+    isDefault: profile.isDefault ?? false,
+    isCustom: profile.isCustom ?? false,
+    updatedAt: now,
+    createdAt: now,
+  };
+}
+
+/**
  * Subscribe to all custom/overridden plant profiles in Firestore.
  * Fires immediately with the current state, then on every change.
  * Returns null when Firebase is not configured.
@@ -72,12 +97,15 @@ export function subscribeToCustomProfiles(
 export async function writeCustomProfile(profile: PlantProfile): Promise<boolean> {
   const db = getDb();
   if (!db) return false;
+  const path = `plantProfiles/${profile.id}`;
+  const sanitized = sanitizePlantProfileForFirestore(profile);
+  console.info(`[GreenMirror] Writing profile → ${path}`, sanitized);
   try {
-    await setDoc(doc(db, 'plantProfiles', profile.id), { ...profile });
-    console.info(`[GreenMirror] Firestore write success: profile "${profile.id}" (${profile.name})`);
+    await setDoc(doc(db, 'plantProfiles', profile.id), sanitized);
+    console.info(`[GreenMirror] Firestore write success: ${path} (${profile.name})`);
     return true;
   } catch (err) {
-    console.warn('[GreenMirror] Firestore write failure: profile', err);
+    console.warn(`[GreenMirror] Firestore write failure: ${path}`, err);
     return false;
   }
 }
