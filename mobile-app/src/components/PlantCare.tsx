@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityEntry, filterUsefulActivity, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import type { LatestReading, VisualZone } from '../zoneLayout';
-import { TrendsSection } from './TrendsSection';
+import { TrendsPreview } from './TrendsPreview';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -29,6 +29,8 @@ interface PlantCareProps {
   simHistory?: LatestReading[];
   /** Number of plant profiles loaded from Firestore (diagnostic) */
   firestoreProfileCount?: number;
+  /** Opens the full Trends & Analysis dashboard */
+  onOpenTrends: () => void;
 }
 
 type TaskKind = 'water' | 'check';
@@ -125,7 +127,7 @@ export function PlantCare({
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
   greenhouseId, firestoreActivity, activityLoaded, activityFallback, assignmentsLoaded, simHistory,
-  firestoreProfileCount,
+  firestoreProfileCount, onOpenTrends,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
@@ -360,12 +362,11 @@ export function PlantCare({
         )}
       </div>
 
-      {/* ── SECTION 3: Sensor Trends ──────────────────────────────────── */}
-      <TrendsSection
-        greenhouseId={greenhouseId}
-        simHistory={simHistory}
+      {/* ── SECTION 3: Sensor Trends (compact preview) ───────────────── */}
+      <TrendsPreview
         zones={zones}
         profilesById={profilesById}
+        onOpenDashboard={onOpenTrends}
       />
 
       {/* ── SECTION 4: Your Plants / Plant Profiles ───────────────────── */}

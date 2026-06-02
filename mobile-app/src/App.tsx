@@ -5,6 +5,7 @@ import { GreenhouseSelector } from './components/GreenhouseSelector';
 import { GreenhouseView } from './components/GreenhouseView';
 import { PlantCare } from './components/PlantCare';
 import { PlantEditorSheet } from './components/PlantEditorSheet';
+import { TrendsDashboard } from './components/TrendsDashboard';
 import { SimpleRunoff } from './components/SimpleRunoff';
 import { SiteSwitcherSheet } from './components/SiteSwitcherSheet';
 import { ZoneDetailSheet } from './components/ZoneDetailSheet';
@@ -133,6 +134,7 @@ export function App() {
   const [activityLoaded, setActivityLoaded] = useState(!firebaseEnabled);
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
+  const [trendsOpen, setTrendsOpen] = useState(false);
   const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -765,6 +767,7 @@ export function App() {
             assignmentsLoaded={assignmentsLoaded}
             simHistory={isSimulating ? simHistory : undefined}
             firestoreProfileCount={firestoreProfileCount}
+            onOpenTrends={() => setTrendsOpen(true)}
           />
         )}
         {activeTab === 'greenhouse' && (
@@ -840,6 +843,19 @@ export function App() {
         onSave={onSaveProfile}
         onDelete={onDeleteProfile}
         onReset={onResetProfile}
+      />
+
+      <TrendsDashboard
+        open={trendsOpen}
+        greenhouseId={ghId ?? ''}
+        greenhouseName={greenhouse?.name}
+        zones={resolvedZones}
+        profilesById={profilesById}
+        plantProfiles={plantProfiles}
+        simHistory={isSimulating ? simHistory : undefined}
+        activityLog={activityLog}
+        firestoreActivity={firestoreActivity}
+        onClose={() => setTrendsOpen(false)}
       />
     </div>
   );
