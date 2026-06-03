@@ -19,6 +19,9 @@ export interface LatestReading {
   zone_count?: number;
   zones: ZoneReading[];
   timestamp?: string;
+  // RPi ambient readings (populated when RPi has environmental sensor hardware)
+  env_temp_c?: number | null;
+  env_humidity_pct?: number | null;
 }
 
 export interface LayoutSettings {

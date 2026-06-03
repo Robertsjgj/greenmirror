@@ -27,11 +27,36 @@ const RANGE_OPTIONS: { id: TimeRange; label: string }[] = [
   { id: '24h', label: '24h' },
   { id: '7d',  label: '7D'  },
   { id: '30d', label: '30D' },
+  { id: '3m',  label: '3M'  },
+  { id: '1y',  label: '1Y'  },
 ];
 
-// Static hex — CSS vars don't resolve reliably inside SVG
-const MOISTURE_COLOR = '#0ea5e9';
-const TEMP_COLOR     = '#22c55e';
+// Static hex — CSS vars don't resolve reliably inside SVG/recharts
+const MOISTURE_IN_COLOR  = '#0ea5e9';  // soil moisture inside GH — solid blue
+const MOISTURE_OUT_COLOR = '#93c5fd';  // soil moisture outside  — light blue dashed
+const TEMP_IN_COLOR      = '#22c55e';  // soil temp inside GH    — solid green
+const TEMP_OUT_COLOR     = '#86efac';  // soil temp outside       — light green dashed
+const ENV_TEMP_COLOR     = '#f59e0b';  // RPi air temp            — amber
+const ENV_HUM_COLOR      = '#a855f7';  // RPi air humidity        — purple
+// Aliases used by health/stats sections
+const MOISTURE_COLOR = MOISTURE_IN_COLOR;
+const TEMP_COLOR     = TEMP_IN_COLOR;
+
+const TOOLTIP_LABELS: Record<string, { label: string; unit: string }> = {
+  avgMoisture:        { label: 'Avg moisture',       unit: '%'  },
+  avgTemp:            { label: 'Avg soil temp',      unit: '°C' },
+  avgSoilMoistureIn:  { label: 'Moisture (inside)',  unit: '%'  },
+  avgSoilMoistureOut: { label: 'Moisture (outside)', unit: '%'  },
+  avgSoilTempIn:      { label: 'Soil temp (inside)', unit: '°C' },
+  avgSoilTempOut:     { label: 'Soil temp (outside)',unit: '°C' },
+  envTempC:           { label: 'Air temp (RPi)',     unit: '°C' },
+  envHumidityPct:     { label: 'Humidity (RPi)',     unit: '%'  },
+};
+
+function tooltipFormatter(value: number, name: string): [string, string] {
+  const info = TOOLTIP_LABELS[name] ?? { label: name, unit: '' };
+  return [`${value}${info.unit}`, info.label];
+}
 
 const tooltipStyle: React.CSSProperties = {
   background: 'var(--card)',
@@ -422,25 +447,27 @@ export function TrendsDashboard({
     }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '14px 16px 10px',
         background: 'var(--card)',
         borderBottom: '1px solid var(--line)',
         flexShrink: 0,
       }}>
-        <button className="gm-icon-btn" onClick={onClose} aria-label="Back" style={{ fontSize: 20 }}>←</button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', lineHeight: 1.1 }}>
-            Trends & Analysis 📈
+        {/* Title row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px 6px' }}>
+          <button className="gm-icon-btn" onClick={onClose} aria-label="Back" style={{ fontSize: 20 }}>←</button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', lineHeight: 1.1 }}>
+              Trends & Analysis 📈
+            </div>
+            {greenhouseName && (
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{greenhouseName}</div>
+            )}
           </div>
-          {greenhouseName && (
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{greenhouseName}</div>
-          )}
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
+        {/* Scrollable range picker row */}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', padding: '0 16px 10px' }}>
           {RANGE_OPTIONS.map((r) => (
             <button key={r.id} onClick={() => setRange(r.id)} style={{
-              padding: '5px 9px', borderRadius: 10, border: '1.5px solid',
+              flexShrink: 0, padding: '5px 12px', borderRadius: 10, border: '1.5px solid',
               borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
               background: range === r.id ? 'var(--primary-soft)' : 'transparent',
               color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
@@ -557,11 +584,24 @@ function OverviewSection({
   chartInsight, ghInsights,
 }: OverviewSectionProps) {
   const totalSamples = trendData.reduce((s, p) => s + p.sampleCount, 0);
-  const bucketNoun   = range === '24h' ? 'hr' : 'day';
+  const bucketNoun   = range === '24h' ? 'hr' : (range === '3m' || range === '1y') ? 'wk' : 'day';
   const hasTrendData = trendData.length >= 2;
   const noHistory    = !hasTrendData && !isLoading;
-  const hasTemp      = trendData.some((p) => p.avgTemp > 0);
   const insights     = ghInsights.slice(0, 3);
+
+  // Detect which split series have data
+  const hasMoistureIn  = trendData.some((p) => p.avgSoilMoistureIn  !== null);
+  const hasMoistureOut = trendData.some((p) => p.avgSoilMoistureOut !== null);
+  const hasTempIn      = trendData.some((p) => p.avgSoilTempIn      !== null);
+  const hasTempOut     = trendData.some((p) => p.avgSoilTempOut     !== null);
+  const hasEnvTemp     = trendData.some((p) => p.envTempC           !== null);
+  const hasEnvHum      = trendData.some((p) => p.envHumidityPct     !== null);
+
+  // Fall back to combined lines when no GH-prefix zone data (simulation mode uses zone-0X-Y IDs)
+  const hasAnySplit    = hasMoistureIn || hasMoistureOut || hasTempIn || hasTempOut;
+  const showCombined   = !hasAnySplit;
+  const hasCombinedTemp = trendData.some((p) => p.avgTemp > 0);
+  const showRightAxis  = hasEnvTemp || hasTempIn || hasTempOut || (showCombined && hasCombinedTemp);
 
   return (
     <>
@@ -652,9 +692,9 @@ function OverviewSection({
           </div>
         ) : (
           <>
-            {/* Two-line trend chart — single Y axis, no dual-axis confusion */}
-            <ResponsiveContainer width="100%" height={270}>
-              <LineChart data={trendData} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
+            {/* Multi-series chart — left Y=pct, right Y=°C */}
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={trendData} margin={{ top: 8, right: showRightAxis ? 4 : 8, left: -18, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
                 <XAxis
                   dataKey="label"
@@ -663,44 +703,69 @@ function OverviewSection({
                   axisLine={false}
                   interval="preserveStartEnd"
                 />
+                {/* Left axis: moisture % and humidity % */}
                 <YAxis
+                  yAxisId="pct"
                   domain={['auto', 'auto']}
                   tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
                   tickLine={false}
                   axisLine={false}
+                  tickFormatter={(v: number) => `${v}%`}
                 />
-                <Tooltip
-                  contentStyle={tooltipStyle}
-                  formatter={(value: number, name: string) =>
-                    name === 'avgMoisture' ? [`${value}%`, 'Avg moisture'] : [`${value}°C`, 'Avg soil temp']
-                  }
-                  labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="avgMoisture"
-                  stroke={MOISTURE_COLOR}
-                  strokeWidth={2.5}
-                  dot={false}
-                  activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_COLOR }}
-                />
-                {hasTemp && (
-                  <Line
-                    type="monotone"
-                    dataKey="avgTemp"
-                    stroke={TEMP_COLOR}
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_COLOR }}
+                {/* Right axis: temperature °C */}
+                {showRightAxis && (
+                  <YAxis
+                    yAxisId="temp"
+                    orientation="right"
+                    domain={['auto', 'auto']}
+                    width={40}
+                    tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => `${v}°`}
                   />
                 )}
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={tooltipFormatter}
+                  labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
+                />
+
+                {showCombined ? (
+                  <>
+                    <Line yAxisId="pct"  type="monotone" dataKey="avgMoisture" stroke={MOISTURE_IN_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR }} />
+                    {hasCombinedTemp && <Line yAxisId="temp" type="monotone" dataKey="avgTemp" stroke={TEMP_IN_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR }} />}
+                  </>
+                ) : (
+                  <>
+                    {hasMoistureIn  && <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureIn"  stroke={MOISTURE_IN_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR }}  />}
+                    {hasMoistureOut && <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureOut" stroke={MOISTURE_OUT_COLOR} strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_OUT_COLOR }} />}
+                    {hasTempIn      && <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempIn"      stroke={TEMP_IN_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR }}      />}
+                    {hasTempOut     && <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempOut"     stroke={TEMP_OUT_COLOR}     strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_OUT_COLOR }}     />}
+                  </>
+                )}
+                {hasEnvTemp && <Line yAxisId="temp" type="monotone" dataKey="envTempC"       stroke={ENV_TEMP_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_TEMP_COLOR }} />}
+                {hasEnvHum  && <Line yAxisId="pct"  type="monotone" dataKey="envHumidityPct" stroke={ENV_HUM_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_HUM_COLOR  }} />}
               </LineChart>
             </ResponsiveContainer>
 
-            {/* Legend below chart */}
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 10, marginBottom: 2 }}>
-              <LegendDot color={MOISTURE_COLOR} label="Avg moisture" />
-              {hasTemp && <LegendDot color={TEMP_COLOR} label="Avg soil temp" />}
+            {/* Legend */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 14px', marginTop: 10, marginBottom: 2 }}>
+              {showCombined ? (
+                <>
+                  <LegendDot color={MOISTURE_IN_COLOR} label="Avg moisture" />
+                  {hasCombinedTemp && <LegendDot color={TEMP_IN_COLOR} label="Avg soil temp" />}
+                </>
+              ) : (
+                <>
+                  {hasMoistureIn  && <LegendDot color={MOISTURE_IN_COLOR}  label="Moisture (in)"  />}
+                  {hasMoistureOut && <LegendDot color={MOISTURE_OUT_COLOR} label="Moisture (out)" dashed />}
+                  {hasTempIn      && <LegendDot color={TEMP_IN_COLOR}      label="Soil temp (in)"  />}
+                  {hasTempOut     && <LegendDot color={TEMP_OUT_COLOR}     label="Soil temp (out)" dashed />}
+                </>
+              )}
+              {hasEnvTemp && <LegendDot color={ENV_TEMP_COLOR} label="Air temp (RPi)"     />}
+              {hasEnvHum  && <LegendDot color={ENV_HUM_COLOR}  label="Humidity (RPi)"     />}
             </div>
 
             {/* Chart insight + reading count */}
@@ -999,11 +1064,17 @@ function HealthChip({ value, label, color, prevValue, higherIsBad }: {
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+function LegendDot({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
-      <span style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 700 }}>{label}</span>
+      {dashed ? (
+        <svg width="18" height="10" viewBox="0 0 18 10" style={{ flexShrink: 0 }}>
+          <line x1="0" y1="5" x2="18" y2="5" stroke={color} strokeWidth="2.5" strokeDasharray="4 2" />
+        </svg>
+      ) : (
+        <span style={{ width: 18, height: 2.5, borderRadius: 2, background: color, display: 'inline-block', flexShrink: 0 }} />
+      )}
+      <span style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 700 }}>{label}</span>
     </div>
   );
 }
