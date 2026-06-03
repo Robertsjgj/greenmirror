@@ -517,7 +517,7 @@ export function TrendsDashboard({
           />
         )}
 
-        <div style={{ height: 48 }} />
+        <div style={{ height: 64 }} />
       </div>
     </div>
   );
@@ -566,7 +566,7 @@ function OverviewSection({
   return (
     <>
       {/* ── Section 1: Health Snapshot ────────────────────────────────────── */}
-      <div className="gm-card" style={{ padding: 16 }}>
+      <div className="gm-card" style={{ padding: 16, flexShrink: 0 }}>
         <div style={{
           fontSize: 10, fontWeight: 800, color: 'var(--ink-3)',
           textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 12,
@@ -624,7 +624,7 @@ function OverviewSection({
       </div>
 
       {/* ── Section 2: Main Greenhouse Trend Chart ────────────────────────── */}
-      <div className="gm-card" style={{ padding: '16px 14px 16px' }}>
+      <div className="gm-card" style={{ padding: '16px 14px 20px', flexShrink: 0 }}>
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>
             Greenhouse Conditions
@@ -721,31 +721,23 @@ function OverviewSection({
         )}
       </div>
 
-      {/* ── Section 3: Insight Summary (max 3) ───────────────────────────── */}
-      {insights.length > 0 && (
-        <div className="gm-card" style={{ padding: '14px 16px' }}>
-          {insights.map((text, i) => (
-            <div key={i} style={{
-              display: 'flex', gap: 10,
-              paddingTop: i === 0 ? 0 : 12,
-              paddingBottom: i === insights.length - 1 ? 0 : 12,
-              borderBottom: i < insights.length - 1 ? '1px solid var(--line)' : 'none',
-              alignItems: 'flex-start',
-            }}>
-              <span style={{ fontSize: 14, flexShrink: 0, marginTop: 2 }}>
-                {i === 0 ? '💡' : i === 1 ? '🌿' : '📊'}
-              </span>
-              <div style={{
-                fontSize: 13, fontWeight: 600, color: 'var(--ink)',
-                lineHeight: 1.6, overflowWrap: 'break-word', wordBreak: 'break-word',
-                flex: 1, minWidth: 0,
-              }}>
-                {text}
-              </div>
-            </div>
-          ))}
+      {/* ── Section 3: Insight Summary — one card per insight ───────────── */}
+      {insights.map((text, i) => (
+        <div key={i} className="gm-card" style={{
+          padding: '14px 16px', flexShrink: 0,
+          display: 'flex', gap: 12, alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>
+            {i === 0 ? '💡' : i === 1 ? '🌿' : '📊'}
+          </span>
+          <div style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--ink)',
+            lineHeight: 1.65, flex: 1, minWidth: 0,
+          }}>
+            {text}
+          </div>
         </div>
-      )}
+      ))}
     </>
   );
 }
