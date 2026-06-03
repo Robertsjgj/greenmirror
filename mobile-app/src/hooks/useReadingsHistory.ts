@@ -44,22 +44,22 @@ export interface TrendPoint {
   label: string;
   /** Unix ms — used for sorting */
   ts: number;
-  /** Combined avg soil moisture across all zones (fallback when no GH-prefix data) */
+  /** Combined avg soil moisture across all zones (used for insight text) */
   avgMoisture: number;
-  /** Combined avg soil temp across all zones (fallback when no GH-prefix data) */
+  /** Combined avg soil temp across all zones (used for insight text) */
   avgTemp: number;
-  /** Avg soil moisture of inside-greenhouse zones (zone_id starts with "GH") */
-  avgSoilMoistureIn: number | null;
-  /** Avg soil moisture of outside zones */
-  avgSoilMoistureOut: number | null;
-  /** Avg soil temp of inside-greenhouse zones */
-  avgSoilTempIn: number | null;
-  /** Avg soil temp of outside zones */
-  avgSoilTempOut: number | null;
-  /** RPi ambient air temperature reading */
-  envTempC: number | null;
-  /** RPi ambient air humidity reading */
-  envHumidityPct: number | null;
+  /** Avg soil moisture of GH-prefix zones — 0 when no such zones exist */
+  avgSoilMoistureIn: number;
+  /** Avg soil moisture of OUTDOOR-prefix zones — 0 when no such zones exist */
+  avgSoilMoistureOut: number;
+  /** Avg soil temp of GH-prefix zones — 0 when no such zones exist */
+  avgSoilTempIn: number;
+  /** Avg soil temp of OUTDOOR-prefix zones — 0 when no such zones exist */
+  avgSoilTempOut: number;
+  /** RPi ambient air temperature — 0 when sensor not present */
+  envTempC: number;
+  /** RPi ambient air humidity — 0 when sensor not present */
+  envHumidityPct: number;
   /** Number of zones that contributed readings for this bucket */
   zoneCount: number;
   /** Number of raw readings collapsed into this bucket */
@@ -100,10 +100,17 @@ function bucketLabel(key: string, range: TimeRange): string {
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
 
+// Zone classification: inside = GH-prefix, outside = OUTDOOR-prefix
+// Handles both bare prefixes (real hardware: "GH-01", "OUTDOOR-01") and
+// compound IDs (simulation: "SYD-GH-LEFT-01", "SYD-OUTDOOR-05").
 const isInsideZone = (zoneId: string): boolean => {
   const upper = (zoneId ?? '').toUpperCase();
-  // Matches real hardware "GH-01" (starts with GH) and sim IDs "SYD-GH-LEFT-01" (contains -GH-)
   return upper.startsWith('GH') || upper.includes('-GH-');
+};
+
+const isOutsideZone = (zoneId: string): boolean => {
+  const upper = (zoneId ?? '').toUpperCase();
+  return upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-');
 };
 
 /** Collapse an array of LatestReading into bucketed TrendPoint[]. */
@@ -156,24 +163,26 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
     for (const zone of reading.zones ?? []) {
       const m = zone.soil_moisture_pct;
       const t = zone.soil_temp_c;
-      const inside = isInsideZone(zone.zone_id);
+      const inside  = isInsideZone(zone.zone_id);
+      const outside = isOutsideZone(zone.zone_id);
 
       if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) {
         b.moistureSum += m; b.moistureCount++;
-        if (inside) { b.moistureInSum += m;  b.moistureInCount++;  }
-        else         { b.moistureOutSum += m; b.moistureOutCount++; }
+        if (inside)  { b.moistureInSum  += m; b.moistureInCount++;  }
+        if (outside) { b.moistureOutSum += m; b.moistureOutCount++; }
       }
       // Skip DS18B20 error sentinels (-127 = disconnected, 85 = power-on default)
       if (typeof t === 'number' && isFinite(t) && t !== -127 && t !== 85 && t > -40 && t < 80) {
         b.tempSum += t; b.tempCount++;
-        if (inside) { b.tempInSum += t;  b.tempInCount++;  }
-        else         { b.tempOutSum += t; b.tempOutCount++; }
+        if (inside)  { b.tempInSum  += t; b.tempInCount++;  }
+        if (outside) { b.tempOutSum += t; b.tempOutCount++; }
       }
     }
   }
 
-  const nullableAvg = (sum: number, count: number): number | null =>
-    count > 0 ? parseFloat((sum / count).toFixed(1)) : null;
+  // Returns 0 when no samples — line sits at 0 on chart to signal "no sensor data yet"
+  const zeroOrAvg = (sum: number, count: number): number =>
+    count > 0 ? parseFloat((sum / count).toFixed(1)) : 0;
 
   const points: TrendPoint[] = [];
   for (const [key, b] of buckets) {
@@ -184,12 +193,12 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       ts:                 b.ts,
       avgMoisture:        b.moistureCount > 0 ? Math.round(b.moistureSum / b.moistureCount) : 0,
       avgTemp:            b.tempCount > 0 ? parseFloat((b.tempSum / b.tempCount).toFixed(1)) : 0,
-      avgSoilMoistureIn:  nullableAvg(b.moistureInSum,  b.moistureInCount),
-      avgSoilMoistureOut: nullableAvg(b.moistureOutSum, b.moistureOutCount),
-      avgSoilTempIn:      nullableAvg(b.tempInSum,      b.tempInCount),
-      avgSoilTempOut:     nullableAvg(b.tempOutSum,     b.tempOutCount),
-      envTempC:           nullableAvg(b.envTempSum,     b.envTempCount),
-      envHumidityPct:     nullableAvg(b.envHumSum,      b.envHumCount),
+      avgSoilMoistureIn:  zeroOrAvg(b.moistureInSum,  b.moistureInCount),
+      avgSoilMoistureOut: zeroOrAvg(b.moistureOutSum, b.moistureOutCount),
+      avgSoilTempIn:      zeroOrAvg(b.tempInSum,      b.tempInCount),
+      avgSoilTempOut:     zeroOrAvg(b.tempOutSum,     b.tempOutCount),
+      envTempC:           zeroOrAvg(b.envTempSum,     b.envTempCount),
+      envHumidityPct:     zeroOrAvg(b.envHumSum,      b.envHumCount),
       zoneCount:          Math.max(b.moistureCount, b.tempCount),
       sampleCount:        b.sampleCount,
     });

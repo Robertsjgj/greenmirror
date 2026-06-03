@@ -576,20 +576,6 @@ function OverviewSection({
   const noHistory    = !hasTrendData && !isLoading;
   const insights     = ghInsights.slice(0, 3);
 
-  // Detect which split series have data
-  const hasMoistureIn  = trendData.some((p) => p.avgSoilMoistureIn  !== null);
-  const hasMoistureOut = trendData.some((p) => p.avgSoilMoistureOut !== null);
-  const hasTempIn      = trendData.some((p) => p.avgSoilTempIn      !== null);
-  const hasTempOut     = trendData.some((p) => p.avgSoilTempOut     !== null);
-  const hasEnvTemp     = trendData.some((p) => p.envTempC           !== null);
-  const hasEnvHum      = trendData.some((p) => p.envHumidityPct     !== null);
-
-  // Fall back to combined lines when no GH-prefix zone data (simulation mode uses zone-0X-Y IDs)
-  const hasAnySplit    = hasMoistureIn || hasMoistureOut || hasTempIn || hasTempOut;
-  const showCombined   = !hasAnySplit;
-  const hasCombinedTemp = trendData.some((p) => p.avgTemp > 0);
-  const showRightAxis  = hasEnvTemp || hasTempIn || hasTempOut || (showCombined && hasCombinedTemp);
-
   return (
     <>
       {/* ── Section 1: Health Snapshot ────────────────────────────────────── */}
@@ -691,9 +677,9 @@ function OverviewSection({
           </div>
         ) : (
           <>
-            {/* Multi-series chart — left Y=pct, right Y=°C */}
+            {/* 6-series chart: left Y=% (moisture+humidity), right Y=°C (soil+air temp) */}
             <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={trendData} margin={{ top: 8, right: showRightAxis ? 4 : 8, left: -18, bottom: 4 }}>
+              <LineChart data={trendData} margin={{ top: 8, right: 4, left: -18, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
                 <XAxis
                   dataKey="label"
@@ -702,69 +688,49 @@ function OverviewSection({
                   axisLine={false}
                   interval="preserveStartEnd"
                 />
-                {/* Left axis: moisture % and humidity % */}
+                {/* Left axis: % values (moisture 0-100, humidity 0-100) */}
                 <YAxis
                   yAxisId="pct"
-                  domain={['auto', 'auto']}
+                  domain={[0, 100]}
                   tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v: number) => `${v}%`}
                 />
-                {/* Right axis: temperature °C */}
-                {showRightAxis && (
-                  <YAxis
-                    yAxisId="temp"
-                    orientation="right"
-                    domain={['auto', 'auto']}
-                    width={40}
-                    tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v: number) => `${v}°`}
-                  />
-                )}
+                {/* Right axis: °C values (soil temp + RPi air temp) */}
+                <YAxis
+                  yAxisId="temp"
+                  orientation="right"
+                  domain={[0, 'auto']}
+                  width={40}
+                  tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v}°`}
+                />
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={tooltipFormatter}
                   labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
                 />
-
-                {showCombined ? (
-                  <>
-                    <Line yAxisId="pct"  type="monotone" dataKey="avgMoisture" stroke={MOISTURE_IN_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR }} />
-                    {hasCombinedTemp && <Line yAxisId="temp" type="monotone" dataKey="avgTemp" stroke={TEMP_IN_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR }} />}
-                  </>
-                ) : (
-                  <>
-                    {hasMoistureIn  && <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureIn"  stroke={MOISTURE_IN_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR }}  />}
-                    {hasMoistureOut && <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureOut" stroke={MOISTURE_OUT_COLOR} strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_OUT_COLOR }} />}
-                    {hasTempIn      && <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempIn"      stroke={TEMP_IN_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR }}      />}
-                    {hasTempOut     && <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempOut"     stroke={TEMP_OUT_COLOR}     strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_OUT_COLOR }}     />}
-                  </>
-                )}
-                {hasEnvTemp && <Line yAxisId="temp" type="monotone" dataKey="envTempC"       stroke={ENV_TEMP_COLOR} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_TEMP_COLOR }} />}
-                {hasEnvHum  && <Line yAxisId="pct"  type="monotone" dataKey="envHumidityPct" stroke={ENV_HUM_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_HUM_COLOR  }} />}
+                {/* All 6 lines always rendered — series without data sit flat at 0 */}
+                <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureIn"  stroke={MOISTURE_IN_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR  }} />
+                <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureOut" stroke={MOISTURE_OUT_COLOR} strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_OUT_COLOR }} />
+                <Line yAxisId="pct"  type="monotone" dataKey="envHumidityPct"     stroke={ENV_HUM_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_HUM_COLOR      }} />
+                <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempIn"      stroke={TEMP_IN_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR      }} />
+                <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempOut"     stroke={TEMP_OUT_COLOR}     strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_OUT_COLOR     }} />
+                <Line yAxisId="temp" type="monotone" dataKey="envTempC"           stroke={ENV_TEMP_COLOR}     strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_TEMP_COLOR     }} />
               </LineChart>
             </ResponsiveContainer>
 
-            {/* Legend */}
+            {/* Legend — always all 6 */}
             <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 14px', marginTop: 10, marginBottom: 2 }}>
-              {showCombined ? (
-                <>
-                  <LegendDot color={MOISTURE_IN_COLOR} label="Avg moisture" />
-                  {hasCombinedTemp && <LegendDot color={TEMP_IN_COLOR} label="Avg soil temp" />}
-                </>
-              ) : (
-                <>
-                  {hasMoistureIn  && <LegendDot color={MOISTURE_IN_COLOR}  label="Moisture (in)"  />}
-                  {hasMoistureOut && <LegendDot color={MOISTURE_OUT_COLOR} label="Moisture (out)" dashed />}
-                  {hasTempIn      && <LegendDot color={TEMP_IN_COLOR}      label="Soil temp (in)"  />}
-                  {hasTempOut     && <LegendDot color={TEMP_OUT_COLOR}     label="Soil temp (out)" dashed />}
-                </>
-              )}
-              {hasEnvTemp && <LegendDot color={ENV_TEMP_COLOR} label="Air temp (RPi)"     />}
-              {hasEnvHum  && <LegendDot color={ENV_HUM_COLOR}  label="Humidity (RPi)"     />}
+              <LegendDot color={MOISTURE_IN_COLOR}  label="Moisture (GH)"      />
+              <LegendDot color={MOISTURE_OUT_COLOR} label="Moisture (outdoor)" dashed />
+              <LegendDot color={ENV_HUM_COLOR}      label="Humidity (RPi)"     />
+              <LegendDot color={TEMP_IN_COLOR}      label="Soil temp (GH)"     />
+              <LegendDot color={TEMP_OUT_COLOR}     label="Soil temp (outdoor)" dashed />
+              <LegendDot color={ENV_TEMP_COLOR}     label="Air temp (RPi)"     />
             </div>
 
             {/* Chart insight + reading count */}
