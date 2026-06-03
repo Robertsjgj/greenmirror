@@ -447,35 +447,20 @@ export function TrendsDashboard({
     }}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '14px 16px 10px',
         background: 'var(--card)',
         borderBottom: '1px solid var(--line)',
         flexShrink: 0,
       }}>
-        {/* Title row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px 6px' }}>
-          <button className="gm-icon-btn" onClick={onClose} aria-label="Back" style={{ fontSize: 20 }}>←</button>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', lineHeight: 1.1 }}>
-              Trends & Analysis 📈
-            </div>
-            {greenhouseName && (
-              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{greenhouseName}</div>
-            )}
+        <button className="gm-icon-btn" onClick={onClose} aria-label="Back" style={{ fontSize: 20 }}>←</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', lineHeight: 1.1 }}>
+            Trends & Analysis 📈
           </div>
-        </div>
-        {/* Scrollable range picker row */}
-        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', padding: '0 16px 10px' }}>
-          {RANGE_OPTIONS.map((r) => (
-            <button key={r.id} onClick={() => setRange(r.id)} style={{
-              flexShrink: 0, padding: '5px 12px', borderRadius: 10, border: '1.5px solid',
-              borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
-              background: range === r.id ? 'var(--primary-soft)' : 'transparent',
-              color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
-              fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
-            }}>
-              {r.label}
-            </button>
-          ))}
+          {greenhouseName && (
+            <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{greenhouseName}</div>
+          )}
         </div>
       </div>
 
@@ -510,6 +495,7 @@ export function TrendsDashboard({
             trendData={trendData}
             isLoading={isChartLoading}
             range={range}
+            onRangeChange={setRange}
             simHistory={simHistory}
             chartInsight={chartInsight}
             ghInsights={ghInsights}
@@ -572,6 +558,7 @@ interface OverviewSectionProps {
   trendData: TrendPoint[];
   isLoading: boolean;
   range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
   simHistory?: LatestReading[];
   chartInsight: string | null;
   ghInsights: string[];
@@ -580,7 +567,7 @@ interface OverviewSectionProps {
 function OverviewSection({
   statusCounts, historicalStatusCounts,
   avgMoisturePct, avgTempC,
-  trendData, isLoading, range, simHistory,
+  trendData, isLoading, range, onRangeChange, simHistory,
   chartInsight, ghInsights,
 }: OverviewSectionProps) {
   const totalSamples = trendData.reduce((s, p) => s + p.sampleCount, 0);
@@ -665,13 +652,25 @@ function OverviewSection({
 
       {/* ── Section 2: Main Greenhouse Trend Chart ────────────────────────── */}
       <div className="gm-card" style={{ padding: '16px 14px 20px', flexShrink: 0 }}>
-        <div style={{ marginBottom: 14 }}>
+        {/* Chart title + range picker */}
+        <div style={{ marginBottom: 10 }}>
           <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>
             Greenhouse Conditions
           </div>
-          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>
-            {TIME_RANGE_LABELS[range]}
-          </div>
+        </div>
+        {/* Range picker — scrollable row directly above chart */}
+        <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none', marginBottom: 10 }}>
+          {RANGE_OPTIONS.map((r) => (
+            <button key={r.id} onClick={() => onRangeChange(r.id)} style={{
+              flexShrink: 0, padding: '4px 10px', borderRadius: 8, border: '1.5px solid',
+              borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
+              background: range === r.id ? 'var(--primary-soft)' : 'transparent',
+              color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
+              fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+            }}>
+              {r.label}
+            </button>
+          ))}
         </div>
 
         {isLoading ? (

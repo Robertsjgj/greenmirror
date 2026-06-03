@@ -94,6 +94,11 @@ export function tickStates(
 
 // ─── Build a LatestReading snapshot ──────────────────────────────────────────
 
+const isGHZone = (id: string) => {
+  const u = id.toUpperCase();
+  return u.startsWith('GH') || u.includes('-GH-');
+};
+
 export function buildReading(
   ghId: string,
   zoneIds: string[],
@@ -113,12 +118,28 @@ export function buildReading(
     };
   });
 
+  // Simulate RPi ambient air sensor (peaks mid-afternoon, lowest overnight)
+  const hourOfDay = (timestamp.getTime() / 3_600_000) % 24;
+  const envTempC = parseFloat((
+    23 + 3 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 3)
+    + (Math.random() - 0.5) * 0.4
+  ).toFixed(1));
+  // Humidity inversely correlated with temp
+  const envHumidityPct = parseFloat(Math.min(90, Math.max(50,
+    68 - 8 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 3)
+    + (Math.random() - 0.5) * 2
+  )).toFixed(1));
+
+  // Only emit env readings if the layout has inside-greenhouse zones
+  const hasGHZones = zoneIds.some(isGHZone);
+
   return {
     greenhouse_id: ghId,
     timestamp: timestamp.toISOString(),
     mode: 'simulation',
     zone_count: zones.length,
     zones,
+    ...(hasGHZones ? { env_temp_c: envTempC, env_humidity_pct: envHumidityPct } : {}),
   };
 }
 

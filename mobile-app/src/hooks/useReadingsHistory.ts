@@ -100,8 +100,11 @@ function bucketLabel(key: string, range: TimeRange): string {
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
 
-const isInsideZone = (zoneId: string): boolean =>
-  (zoneId ?? '').toUpperCase().startsWith('GH');
+const isInsideZone = (zoneId: string): boolean => {
+  const upper = (zoneId ?? '').toUpperCase();
+  // Matches real hardware "GH-01" (starts with GH) and sim IDs "SYD-GH-LEFT-01" (contains -GH-)
+  return upper.startsWith('GH') || upper.includes('-GH-');
+};
 
 /** Collapse an array of LatestReading into bucketed TrendPoint[]. */
 export function buildTrendData(readings: LatestReading[], range: TimeRange): TrendPoint[] {
