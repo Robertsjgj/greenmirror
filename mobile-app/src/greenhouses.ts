@@ -5,8 +5,8 @@
  * All Firestore reads/writes must use these IDs — never bare strings.
  *
  * Official IDs:
- *   sydney-greenhouse   →  Sydney, NSW  (default / simulation target)
- *   truro-greenhouse    →  Truro, Cornwall
+ *   sydney-greenhouse   -> Sydney, Nova Scotia, Canada (default / simulation target)
+ *   truro-greenhouse    -> Truro, Nova Scotia, Canada
  */
 
 export type MapKind = 'truro' | 'sydney';
@@ -15,6 +15,11 @@ export interface GreenhouseMeta {
   id: string;
   name: string;
   region: string;
+  city: string;
+  province: string;
+  country: string;
+  latitude: number;
+  longitude: number;
   mapKind: MapKind;
 }
 
@@ -22,13 +27,23 @@ export const GREENHOUSES: Record<MapKind, GreenhouseMeta> = {
   sydney: {
     id: 'sydney-greenhouse',
     name: 'Sydney',
-    region: 'Sydney, NSW, Australia',
+    region: 'Sydney, Nova Scotia, Canada',
+    city: 'Sydney',
+    province: 'Nova Scotia',
+    country: 'Canada',
+    latitude: 46.1368,
+    longitude: -60.1942,
     mapKind: 'sydney',
   },
   truro: {
     id: 'truro-greenhouse',
     name: 'Truro',
-    region: 'Truro, Cornwall, UK',
+    region: 'Truro, Nova Scotia, Canada',
+    city: 'Truro',
+    province: 'Nova Scotia',
+    country: 'Canada',
+    latitude: 45.3650,
+    longitude: -63.2869,
     mapKind: 'truro',
   },
 };

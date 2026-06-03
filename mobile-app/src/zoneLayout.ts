@@ -11,6 +11,21 @@ export interface ZoneReading {
   alerts?: string[];
 }
 
+export interface EnvironmentReading {
+  air_temp_c?: number | null;
+  humidity_pct?: number | null;
+  light_lux?: number | null;
+  brightness_pct?: number | null;
+  source?: string;
+}
+
+export interface ReadingSummary {
+  avg_inside_soil_moisture_pct?: number | null;
+  avg_outside_soil_moisture_pct?: number | null;
+  avg_inside_soil_temp_c?: number | null;
+  avg_outside_soil_temp_c?: number | null;
+}
+
 export interface LatestReading {
   mode?: string;
   node_id?: string;
@@ -19,7 +34,9 @@ export interface LatestReading {
   zone_count?: number;
   zones: ZoneReading[];
   timestamp?: string;
-  // RPi ambient readings (populated when RPi has environmental sensor hardware)
+  environment?: EnvironmentReading | null;
+  summary?: ReadingSummary;
+  // Legacy RPi ambient fields retained for older chart code.
   env_temp_c?: number | null;
   env_humidity_pct?: number | null;
 }

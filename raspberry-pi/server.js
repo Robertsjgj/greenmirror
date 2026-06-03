@@ -48,6 +48,81 @@ function analyzeZone(zone) {
   return alerts;
 }
 
+function toFiniteNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function buildEnvironment(input) {
+  const source = input && typeof input === "object" ? input : {};
+  const env = {
+    air_temp_c: toFiniteNumber(source.air_temp_c ?? source.env_temp_c),
+    humidity_pct: toFiniteNumber(source.humidity_pct ?? source.env_humidity_pct),
+    light_lux: toFiniteNumber(source.light_lux),
+    brightness_pct: toFiniteNumber(source.brightness_pct),
+    source: source.source || "rpi"
+  };
+
+  const hasSensorValue = [
+    env.air_temp_c,
+    env.humidity_pct,
+    env.light_lux,
+    env.brightness_pct
+  ].some((value) => typeof value === "number");
+
+  if (!hasSensorValue) return null;
+  return env;
+}
+
+function isOutsideZone(zone) {
+  const id = String(zone.zone_id || "").toUpperCase();
+  return id.includes("OUTDOOR") || id.includes("OUTSIDE") || id.includes("OUT");
+}
+
+function avg(values) {
+  const nums = values.filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (!nums.length) return null;
+  return Number((nums.reduce((sum, value) => sum + value, 0) / nums.length).toFixed(1));
+}
+
+function buildSummary(zones) {
+  const inside = zones.filter((zone) => !isOutsideZone(zone));
+  const outside = zones.filter(isOutsideZone);
+
+  return {
+    avg_inside_soil_moisture_pct: avg(inside.map((zone) => zone.soil_moisture_pct)),
+    avg_outside_soil_moisture_pct: avg(outside.map((zone) => zone.soil_moisture_pct)),
+    avg_inside_soil_temp_c: avg(inside.map((zone) => zone.soil_temp_c)),
+    avg_outside_soil_temp_c: avg(outside.map((zone) => zone.soil_temp_c))
+  };
+}
+
+function enrichReading(reading, mode) {
+  const simulationEnvironment = mode === "simulation"
+    ? {
+        air_temp_c: Number((21 + Math.sin(Date.now() / 3_600_000) * 3).toFixed(1)),
+        humidity_pct: Number((62 + Math.cos(Date.now() / 2_700_000) * 8).toFixed(1)),
+        brightness_pct: Math.max(15, Math.min(95, Number((60 + Math.sin(Date.now() / 1_800_000) * 30).toFixed(0)))),
+        source: "rpi"
+      }
+    : null;
+  const environment = buildEnvironment(reading.environment ?? reading)
+    || simulationEnvironment;
+  const enriched = {
+    ...reading,
+    mode,
+    summary: buildSummary(reading.zones || []),
+    ...(environment ? {
+      environment,
+      env_temp_c: environment.air_temp_c,
+      env_humidity_pct: environment.humidity_pct
+    } : {})
+  };
+
+  console.log("[Environment] Firestore environment object:", environment || "unavailable");
+  return enriched;
+}
+
 // test route
 app.get("/", (req, res) => {
   res.send("GreenMirror Pi API running");
@@ -65,12 +140,11 @@ app.post("/api/readings", (req, res) => {
       }))
     : [];
 
-  latestReading = {
+  latestReading = enrichReading({
     ...req.body,
-    mode: "real",
     zones,
     timestamp: new Date().toISOString()
-  };
+  }, "real");
 
   readingsHistory.push(latestReading);
 
@@ -99,11 +173,12 @@ if (USE_SIMULATION) {
     analyzeZone,
     onSystemState: (systemState) => {
       // Simulated ticks behave like incoming ESP readings and are kept in history.
-      latestSystemState = systemState;
-      readingsHistory.push(systemState);
-      if (firestoreEnabled) saveReading(systemState);
+      const enrichedSystemState = enrichReading(systemState, "simulation");
+      latestSystemState = enrichedSystemState;
+      readingsHistory.push(enrichedSystemState);
+      if (firestoreEnabled) saveReading(enrichedSystemState);
       console.log(
-        `Simulated ${systemState.node_count} nodes / ${systemState.zone_count} zones at ${systemState.timestamp}`
+        `Simulated ${enrichedSystemState.node_count} nodes / ${enrichedSystemState.zone_count} zones at ${enrichedSystemState.timestamp}`
       );
     }
   });

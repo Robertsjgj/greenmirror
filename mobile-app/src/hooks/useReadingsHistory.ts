@@ -151,11 +151,11 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
     b.ts = Math.max(b.ts, ts);
 
     // RPi ambient readings (optional hardware)
-    const et = reading.env_temp_c;
+    const et = reading.environment?.air_temp_c ?? reading.env_temp_c;
     if (typeof et === 'number' && isFinite(et) && et > -40 && et < 80) {
       b.envTempSum += et; b.envTempCount++;
     }
-    const eh = reading.env_humidity_pct;
+    const eh = reading.environment?.humidity_pct ?? reading.env_humidity_pct;
     if (typeof eh === 'number' && isFinite(eh) && eh >= 0 && eh <= 100) {
       b.envHumSum += eh; b.envHumCount++;
     }

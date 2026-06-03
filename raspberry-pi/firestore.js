@@ -147,6 +147,8 @@ function attachSaveReading(admin, db) {
 
       await batch.commit();
 
+      console.log(`[Firestore] Environment stored for ${ghId}:`, payload.environment || 'unavailable');
+
       if (process.env.FIRESTORE_VERBOSE === 'true') {
         console.log(`[Firestore] ✅ Wrote latestReadings/${ghId} + readings history`);
       }

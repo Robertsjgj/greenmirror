@@ -5,6 +5,7 @@ import { PlantProfile, ZoneAssignments, evaluateZoneAgainstPlant } from '../plan
 import { SydneyMapView } from './SydneyMapView';
 import { ZoneCard } from './ZoneCard';
 import { mapZonesToSydneyLayout } from '../sydneyLayout';
+import { GREENHOUSES } from '../greenhouses';
 import {
   LatestReading,
   LayoutSettings,
@@ -27,11 +28,6 @@ interface GreenhouseViewProps {
   layoutSettings: LayoutSettings;
   setLayoutSettings: Dispatch<SetStateAction<LayoutSettings>>;
 }
-
-const SITE_INFO: Record<MapKind, { name: string; region: string }> = {
-  sydney: { name: 'Sydney', region: 'Sydney, NSW' },
-  truro:  { name: 'Truro',  region: 'Truro, Cornwall' },
-};
 
 export function GreenhouseView({
   latestReading, error,
@@ -70,7 +66,7 @@ export function GreenhouseView({
     return c;
   }, [zones, profilesById]);
 
-  const siteInfo = SITE_INFO[mapKind];
+  const siteInfo = GREENHOUSES[mapKind];
 
   return (
     <div style={{ padding: '12px 16px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>

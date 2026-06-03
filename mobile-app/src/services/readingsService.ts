@@ -44,6 +44,7 @@ export function subscribeToLatestReading(
       if (!snap.exists()) return;
       const data = snap.data() as LatestReading;
       if (Array.isArray(data?.zones) && data.zones.length > 0) {
+        console.info('[readingsService] environment object received:', data.environment ?? null);
         onData(data);
       }
     },

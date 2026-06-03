@@ -786,7 +786,13 @@ export function App() {
             setLayoutSettings={setLayoutSettings}
           />
         )}
-        {activeTab === 'environment' && <EnvironmentView site={mapKind} />}
+        {activeTab === 'environment' && (
+          <EnvironmentView
+            site={mapKind}
+            greenhouse={greenhouse}
+            latestReading={latestReading}
+          />
+        )}
         {activeTab === 'alerts' && (
           <AlertsView
             zones={resolvedZones}

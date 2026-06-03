@@ -94,10 +94,16 @@ export function tickStates(
 
 // ─── Build a LatestReading snapshot ──────────────────────────────────────────
 
-const isGHZone = (id: string) => {
+const isOutsideZone = (id: string) => {
   const u = id.toUpperCase();
-  return u.startsWith('GH') || u.includes('-GH-');
+  return u.includes('OUTDOOR') || u.includes('OUTSIDE') || u.includes('OUT');
 };
+
+function avg(values: Array<number | null | undefined>) {
+  const nums = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  if (!nums.length) return null;
+  return parseFloat((nums.reduce((sum, value) => sum + value, 0) / nums.length).toFixed(1));
+}
 
 export function buildReading(
   ghId: string,
@@ -130,8 +136,17 @@ export function buildReading(
     + (Math.random() - 0.5) * 2
   )).toFixed(1));
 
-  // Only emit env readings if the layout has inside-greenhouse zones
-  const hasGHZones = zoneIds.some(isGHZone);
+  const brightnessPct = Math.round(Math.min(95, Math.max(20,
+    58 + 32 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 2)
+  )));
+  const insideZones = zones.filter((zone) => !isOutsideZone(zone.zone_id));
+  const outsideZones = zones.filter((zone) => isOutsideZone(zone.zone_id));
+  const environment = {
+    air_temp_c: envTempC,
+    humidity_pct: envHumidityPct,
+    brightness_pct: brightnessPct,
+    source: 'rpi',
+  };
 
   return {
     greenhouse_id: ghId,
@@ -139,7 +154,15 @@ export function buildReading(
     mode: 'simulation',
     zone_count: zones.length,
     zones,
-    ...(hasGHZones ? { env_temp_c: envTempC, env_humidity_pct: envHumidityPct } : {}),
+    environment,
+    env_temp_c: environment.air_temp_c,
+    env_humidity_pct: environment.humidity_pct,
+    summary: {
+      avg_inside_soil_moisture_pct: avg(insideZones.map((zone) => zone.soil_moisture_pct)),
+      avg_outside_soil_moisture_pct: avg(outsideZones.map((zone) => zone.soil_moisture_pct)),
+      avg_inside_soil_temp_c: avg(insideZones.map((zone) => zone.soil_temp_c)),
+      avg_outside_soil_temp_c: avg(outsideZones.map((zone) => zone.soil_temp_c)),
+    },
   };
 }
 
