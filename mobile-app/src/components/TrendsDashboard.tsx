@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  ComposedChart, Area, Line,
+  LineChart, Line, CartesianGrid,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import {
@@ -31,7 +31,7 @@ const RANGE_OPTIONS: { id: TimeRange; label: string }[] = [
 
 // Static hex — CSS vars don't resolve reliably inside SVG
 const MOISTURE_COLOR = '#0ea5e9';
-const TEMP_COLOR     = '#f59e0b';
+const TEMP_COLOR     = '#22c55e';
 
 const tooltipStyle: React.CSSProperties = {
   background: 'var(--card)',
@@ -517,7 +517,7 @@ export function TrendsDashboard({
           />
         )}
 
-        <div style={{ height: 24 }} />
+        <div style={{ height: 48 }} />
       </div>
     </div>
   );
@@ -624,19 +624,13 @@ function OverviewSection({
       </div>
 
       {/* ── Section 2: Main Greenhouse Trend Chart ────────────────────────── */}
-      <div className="gm-card" style={{ padding: '16px 14px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 14 }}>
-          <div>
-            <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>
-              Greenhouse Conditions
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>
-              {TIME_RANGE_LABELS[range]}
-            </div>
+      <div className="gm-card" style={{ padding: '16px 14px 16px' }}>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>
+            Greenhouse Conditions
           </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0, paddingTop: 2 }}>
-            <LegendDot color={MOISTURE_COLOR} label="Moisture" />
-            {hasTemp && <LegendDot color={TEMP_COLOR} label="Temp" />}
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>
+            {TIME_RANGE_LABELS[range]}
           </div>
         </div>
 
@@ -645,23 +639,23 @@ function OverviewSection({
             ⏳ Loading greenhouse history…
           </div>
         ) : noHistory ? (
-          <div style={{ height: 240, display: 'grid', placeItems: 'center' }}>
-            <div style={{ textAlign: 'center', color: 'var(--ink-3)' }}>
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📡</div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui" }}>
-                No history yet
-              </div>
-              <div style={{ fontSize: 12, fontWeight: 600, marginTop: 6, maxWidth: 220, lineHeight: 1.6 }}>
-                {simHistory
-                  ? 'Run the simulation longer to build trend data.'
-                  : 'More history will appear as sensor data is collected.'}
-              </div>
+          <div style={{ paddingTop: 24, paddingBottom: 24, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+            <div style={{ fontSize: 40 }}>📡</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink-2)', fontFamily: "'Baloo 2', system-ui" }}>
+              No history yet
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-3)', textAlign: 'center', maxWidth: 240, lineHeight: 1.6 }}>
+              {simHistory
+                ? 'Run the simulation longer to build trend data.'
+                : 'More history will appear as sensor data is collected.'}
             </div>
           </div>
         ) : (
           <>
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={trendData} margin={{ top: 8, right: hasTemp ? 42 : 8, left: -16, bottom: 4 }}>
+            {/* Two-line trend chart — single Y axis, no dual-axis confusion */}
+            <ResponsiveContainer width="100%" height={270}>
+              <LineChart data={trendData} margin={{ top: 8, right: 8, left: -18, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
                 <XAxis
                   dataKey="label"
                   tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
@@ -670,70 +664,58 @@ function OverviewSection({
                   interval="preserveStartEnd"
                 />
                 <YAxis
-                  yAxisId="moisture"
-                  domain={[0, 100]}
-                  tickCount={5}
+                  domain={['auto', 'auto']}
                   tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v) => `${v}%`}
                 />
-                {hasTemp && (
-                  <YAxis
-                    yAxisId="temp"
-                    orientation="right"
-                    tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={(v) => `${v}°`}
-                  />
-                )}
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={(value: number, name: string) =>
-                    name === 'avgMoisture' ? [`${value}%`, 'Moisture'] : [`${value}°C`, 'Temp']
+                    name === 'avgMoisture' ? [`${value}%`, 'Avg moisture'] : [`${value}°C`, 'Avg soil temp']
                   }
                   labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
                 />
-                <Area
-                  yAxisId="moisture"
+                <Line
                   type="monotone"
                   dataKey="avgMoisture"
                   stroke={MOISTURE_COLOR}
                   strokeWidth={2.5}
-                  fill={MOISTURE_COLOR}
-                  fillOpacity={0.12}
                   dot={false}
                   activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_COLOR }}
                 />
                 {hasTemp && (
                   <Line
-                    yAxisId="temp"
                     type="monotone"
                     dataKey="avgTemp"
                     stroke={TEMP_COLOR}
-                    strokeWidth={2}
+                    strokeWidth={2.5}
                     dot={false}
                     activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_COLOR }}
                   />
                 )}
-              </ComposedChart>
+              </LineChart>
             </ResponsiveContainer>
 
-            <div style={{ marginTop: 10 }}>
-              {chartInsight && (
-                <div style={{
-                  padding: '8px 12px', marginBottom: 6,
-                  background: 'var(--bg-sub, #f1ede6)', borderRadius: 10,
-                  fontSize: 12, color: 'var(--ink-2)', fontWeight: 600,
-                  lineHeight: 1.5, fontStyle: 'italic',
-                }}>
-                  {chartInsight}
-                </div>
-              )}
-              <div style={{ fontSize: 10, color: '#b0b8c1', fontWeight: 600, textAlign: 'right' }}>
-                {totalSamples} readings · {trendData.length} {bucketNoun}{trendData.length !== 1 ? 's' : ''}
+            {/* Legend below chart */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 20, marginTop: 10, marginBottom: 2 }}>
+              <LegendDot color={MOISTURE_COLOR} label="Avg moisture" />
+              {hasTemp && <LegendDot color={TEMP_COLOR} label="Avg soil temp" />}
+            </div>
+
+            {/* Chart insight + reading count */}
+            {chartInsight && (
+              <div style={{
+                marginTop: 10, padding: '8px 12px',
+                background: 'var(--bg-sub, #f1ede6)', borderRadius: 10,
+                fontSize: 12, color: 'var(--ink-2)', fontWeight: 600,
+                lineHeight: 1.5, fontStyle: 'italic',
+              }}>
+                {chartInsight}
               </div>
+            )}
+            <div style={{ fontSize: 10, color: '#b0b8c1', fontWeight: 600, textAlign: 'right', marginTop: 6 }}>
+              {totalSamples} readings · {trendData.length} {bucketNoun}{trendData.length !== 1 ? 's' : ''}
             </div>
           </>
         )}
@@ -741,19 +723,25 @@ function OverviewSection({
 
       {/* ── Section 3: Insight Summary (max 3) ───────────────────────────── */}
       {insights.length > 0 && (
-        <div className="gm-card" style={{ padding: '12px 16px' }}>
+        <div className="gm-card" style={{ padding: '14px 16px' }}>
           {insights.map((text, i) => (
             <div key={i} style={{
               display: 'flex', gap: 10,
-              paddingTop: i === 0 ? 0 : 10,
-              paddingBottom: i === insights.length - 1 ? 0 : 10,
+              paddingTop: i === 0 ? 0 : 12,
+              paddingBottom: i === insights.length - 1 ? 0 : 12,
               borderBottom: i < insights.length - 1 ? '1px solid var(--line)' : 'none',
               alignItems: 'flex-start',
             }}>
-              <span style={{ fontSize: 14, flexShrink: 0, marginTop: 1 }}>
+              <span style={{ fontSize: 14, flexShrink: 0, marginTop: 2 }}>
                 {i === 0 ? '💡' : i === 1 ? '🌿' : '📊'}
               </span>
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', lineHeight: 1.6 }}>{text}</div>
+              <div style={{
+                fontSize: 13, fontWeight: 600, color: 'var(--ink)',
+                lineHeight: 1.6, overflowWrap: 'break-word', wordBreak: 'break-word',
+                flex: 1, minWidth: 0,
+              }}>
+                {text}
+              </div>
             </div>
           ))}
         </div>
@@ -1021,9 +1009,9 @@ function HealthChip({ value, label, color, prevValue, higherIsBad }: {
 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
-      <span style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 700 }}>{label}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      <span style={{ width: 10, height: 10, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
+      <span style={{ fontSize: 12, color: 'var(--ink-2)', fontWeight: 700 }}>{label}</span>
     </div>
   );
 }
