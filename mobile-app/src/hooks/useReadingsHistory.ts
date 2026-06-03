@@ -60,6 +60,10 @@ export interface TrendPoint {
   envTempC: number;
   /** RPi ambient air humidity — 0 when sensor not present */
   envHumidityPct: number;
+  /** External city weather temperature (Open-Meteo) — 0 when unavailable */
+  externalWeatherTempC: number;
+  /** External city weather humidity (Open-Meteo) — 0 when unavailable */
+  externalWeatherHumidityPct: number;
   /** Number of zones that contributed readings for this bucket */
   zoneCount: number;
   /** Number of raw readings collapsed into this bucket */
@@ -124,6 +128,8 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
     tempOutSum: number;     tempOutCount: number;
     envTempSum: number;     envTempCount: number;
     envHumSum: number;      envHumCount: number;
+    extTempSum: number;     extTempCount: number;
+    extHumSum: number;      extHumCount: number;
     sampleCount: number;    ts: number;
   }>();
 
@@ -143,6 +149,8 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
         tempOutSum: 0,  tempOutCount: 0,
         envTempSum: 0,  envTempCount: 0,
         envHumSum: 0,   envHumCount: 0,
+        extTempSum: 0,  extTempCount: 0,
+        extHumSum: 0,   extHumCount: 0,
         sampleCount: 0, ts,
       });
     }
@@ -158,6 +166,16 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
     const eh = reading.environment?.humidity_pct ?? reading.env_humidity_pct;
     if (typeof eh === 'number' && isFinite(eh) && eh >= 0 && eh <= 100) {
       b.envHumSum += eh; b.envHumCount++;
+    }
+
+    // External weather (Open-Meteo, embedded by backend in each snapshot)
+    const xt = reading.external_weather?.temp_c;
+    if (typeof xt === 'number' && isFinite(xt) && xt > -60 && xt < 60) {
+      b.extTempSum += xt; b.extTempCount++;
+    }
+    const xh = reading.external_weather?.humidity_pct;
+    if (typeof xh === 'number' && isFinite(xh) && xh >= 0 && xh <= 100) {
+      b.extHumSum += xh; b.extHumCount++;
     }
 
     for (const zone of reading.zones ?? []) {
@@ -199,6 +217,8 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       avgSoilTempOut:     zeroOrAvg(b.tempOutSum,     b.tempOutCount),
       envTempC:           zeroOrAvg(b.envTempSum,     b.envTempCount),
       envHumidityPct:     zeroOrAvg(b.envHumSum,      b.envHumCount),
+      externalWeatherTempC:        zeroOrAvg(b.extTempSum, b.extTempCount),
+      externalWeatherHumidityPct:  zeroOrAvg(b.extHumSum,  b.extHumCount),
       zoneCount:          Math.max(b.moistureCount, b.tempCount),
       sampleCount:        b.sampleCount,
     });

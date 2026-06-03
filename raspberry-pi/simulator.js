@@ -1,107 +1,132 @@
-const GREENHOUSE_ID = "sydney-greenhouse";
-const NODE_COUNT = 15;
+'use strict';
+
+/**
+ * Hardware simulator — runs inside server.js when USE_SIMULATION=true.
+ *
+ * Zone ID conventions (must match frontend classification):
+ *   GH-NN-Z      — inside greenhouse zones  (nodes 01–10)
+ *   OUTDOOR-NN-Z — outside / garden zones   (nodes 11–15)
+ *
+ * The first 5 inside nodes with index % 3 === 0 get 2 zones each.
+ */
+
 const UPDATE_INTERVAL_MS = 5000;
 
-function padNodeNumber(index) {
-  return String(index + 1).padStart(2, "0");
+function padNum(n) {
+  return String(n).padStart(2, '0');
 }
 
-function createInitialNodes() {
-  return Array.from({ length: NODE_COUNT }, (_, index) => {
-    const zoneCount = index % 3 === 0 ? 2 : 1;
+function moisturePctToRaw(pct) {
+  // Capacitive sensor: wetter = lower ADC value
+  return Math.round(4095 - pct * 30);
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+/**
+ * Build the initial node/zone list.
+ * Nodes 0–9  → inside  (GH-01 … GH-10)
+ * Nodes 10–14 → outside (OUTDOOR-01 … OUTDOOR-05)
+ */
+function createInitialNodes(greenhouseId) {
+  const NODE_COUNT = 15;
+
+  return Array.from({ length: NODE_COUNT }, (_, i) => {
+    const isOutside  = i >= 10;
+    const locationNum = isOutside ? (i - 9) : (i + 1);
+    const prefix      = isOutside ? 'OUTDOOR' : 'GH';
+    const numStr      = padNum(locationNum);
+
+    // Two zones for every third node, one for the rest
+    const zoneCount = i % 3 === 0 ? 2 : 1;
 
     return {
-      node_id: `esp32-node-${padNodeNumber(index)}`,
-      greenhouse_id: GREENHOUSE_ID,
-      zones: Array.from({ length: zoneCount }, (__, zoneIndex) => {
-        const baseMoisture = 35 + ((index * 7 + zoneIndex * 13) % 45);
-        const baseTemp = 16 + ((index * 3 + zoneIndex * 4) % 12);
+      node_id:       `esp32-node-${padNum(i + 1)}`,
+      greenhouse_id: greenhouseId,
+      zones: Array.from({ length: zoneCount }, (__, zi) => {
+        const baseMoisture = 35 + ((i * 7 + zi * 13) % 45);
+        const baseTemp     = 16 + ((i * 3 + zi * 4)  % 12);
 
         return {
-          zone_id: `zone-${padNodeNumber(index)}-${zoneIndex + 1}`,
+          zone_id:           `${prefix}-${numStr}-${zi + 1}`,
+          zone_name:         `${prefix}-${numStr}-${zi + 1}`,
           soil_moisture_raw: moisturePctToRaw(baseMoisture),
           soil_moisture_pct: baseMoisture,
-          soil_temp_c: baseTemp,
-          soil_temp_status: "ok"
+          soil_temp_c:       baseTemp,
+          soil_temp_status:  'ok',
         };
-      })
+      }),
     };
   });
 }
 
-function moisturePctToRaw(moisturePct) {
-  // Match a common ESP capacitive sensor scale: wetter soil means lower raw ADC.
-  return Math.round(4095 - moisturePct * 30);
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
 function updateZone(zone, tick, nodeIndex, zoneIndex) {
-  const moistureWave = Math.sin((tick + nodeIndex * 2 + zoneIndex) / 4) * 3;
-  const tempWave = Math.cos((tick + nodeIndex + zoneIndex * 2) / 5) * 0.8;
-  const dryingDrift = tick % 6 === 0 ? -1 : 0;
+  const moistureWave  = Math.sin((tick + nodeIndex * 2 + zoneIndex) / 4) * 3;
+  const tempWave      = Math.cos((tick + nodeIndex + zoneIndex * 2) / 5) * 0.8;
+  const dryingDrift   = tick % 6 === 0 ? -1 : 0;
 
-  const soilMoisturePct = clamp(
+  const moisture = clamp(
     Math.round(zone.soil_moisture_pct + moistureWave + dryingDrift),
-    12,
-    92
+    12, 92,
   );
-  const soilTempC = Number(clamp(zone.soil_temp_c + tempWave, 6, 34).toFixed(1));
+  const temp = Number(clamp(zone.soil_temp_c + tempWave, 6, 34).toFixed(1));
 
   return {
     ...zone,
-    soil_moisture_raw: moisturePctToRaw(soilMoisturePct),
-    soil_moisture_pct: soilMoisturePct,
-    soil_temp_c: soilTempC,
-    soil_temp_status: soilTempC < 10 ? "cold" : "ok"
+    soil_moisture_raw: moisturePctToRaw(moisture),
+    soil_moisture_pct: moisture,
+    soil_temp_c:       temp,
+    soil_temp_status:  temp < 10 ? 'cold' : 'ok',
   };
 }
 
-function createSimulator({ analyzeZone, onSystemState }) {
-  let tick = 0;
-  let nodes = createInitialNodes();
+/**
+ * @param {object} opts
+ * @param {string}   [opts.greenhouseId]   defaults to 'sydney-greenhouse'
+ * @param {Function} opts.analyzeZone      zone → string[]
+ * @param {Function} opts.onSystemState    async (systemState) => void
+ */
+function createSimulator({ greenhouseId = 'sydney-greenhouse', analyzeZone, onSystemState }) {
+  let tick  = 0;
+  let nodes = createInitialNodes(greenhouseId);
   let interval = null;
 
   const buildSystemState = () => {
     tick += 1;
     const timestamp = new Date().toISOString();
 
-    nodes = nodes.map((node, nodeIndex) => ({
+    nodes = nodes.map((node, ni) => ({
       ...node,
-      zones: node.zones.map((zone, zoneIndex) => {
-        const updatedZone = updateZone(zone, tick, nodeIndex, zoneIndex);
-
-        return {
-          ...updatedZone,
-          alerts: analyzeZone(updatedZone)
-        };
-      })
+      zones: node.zones.map((zone, zi) => {
+        const updated = updateZone(zone, tick, ni, zi);
+        return { ...updated, alerts: analyzeZone(updated) };
+      }),
     }));
 
     const zones = nodes.flatMap((node) =>
       node.zones.map((zone) => ({
         ...zone,
-        node_id: node.node_id,
-        greenhouse_id: node.greenhouse_id
-      }))
+        node_id:       node.node_id,
+        greenhouse_id: node.greenhouse_id,
+      })),
     );
 
     return {
-      mode: "simulation",
-      greenhouse_id: GREENHOUSE_ID,
-      node_count: nodes.length,
-      zone_count: zones.length,
+      greenhouse_id: greenhouseId,
+      node_count:    nodes.length,
+      zone_count:    zones.length,
       nodes,
       zones,
-      timestamp
+      timestamp,
+      // environment is NOT set here — server.js buildSnapshot generates it
+      // so that the same logic applies to both live and simulation modes.
     };
   };
 
   const start = () => {
     const publish = () => onSystemState(buildSystemState());
-
     publish();
     interval = setInterval(publish, UPDATE_INTERVAL_MS);
   };
@@ -113,7 +138,4 @@ function createSimulator({ analyzeZone, onSystemState }) {
   return { start, stop };
 }
 
-module.exports = {
-  createSimulator,
-  UPDATE_INTERVAL_MS
-};
+module.exports = { createSimulator, UPDATE_INTERVAL_MS };

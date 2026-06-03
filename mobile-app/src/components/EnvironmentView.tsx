@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MapKind } from '../App';
 import type { GreenhouseMeta } from '../greenhouses';
-import type { LatestReading, ZoneReading } from '../zoneLayout';
+import type { ExternalWeatherReading, LatestReading, ZoneReading } from '../zoneLayout';
 import { ExternalWeather, fetchExternalWeather } from '../services/weatherService';
 
 interface EnvironmentViewProps {
@@ -65,42 +65,72 @@ function formatTimestamp(timestamp: string | null | undefined) {
   return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/** Adapt the new embedded external_weather shape to the existing ExternalWeather interface. */
+function adaptEmbeddedWeather(ew: ExternalWeatherReading): ExternalWeather {
+  return {
+    external_temp_c:       ew.temp_c         ?? null,
+    external_humidity_pct: ew.humidity_pct   ?? null,
+    wind_speed_kmh:        ew.wind_speed_kmh ?? null,
+    condition:             ew.condition       ?? 'Unavailable',
+    timestamp:             ew.fetched_at      ?? null,
+    source:                'Open-Meteo',
+  };
+}
+
 export function EnvironmentView({ site, greenhouse, latestReading }: EnvironmentViewProps) {
-  const [externalWeather, setExternalWeather] = useState<ExternalWeather | null>(null);
+  const [fetchedWeather, setFetchedWeather] = useState<ExternalWeather | null>(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState<string | null>(null);
 
+  // Use external_weather embedded in the latest reading (from backend/Firestore snapshot)
+  // as the primary source.  Fall back to a direct Open-Meteo fetch when it's absent.
+  const embeddedWeather = latestReading?.external_weather ?? null;
+  const hasEmbedded = embeddedWeather !== null && embeddedWeather.temp_c !== null;
+
   useEffect(() => {
+    if (hasEmbedded) {
+      // Backend already fetched weather — no need to hit Open-Meteo from the client.
+      setWeatherLoading(false);
+      setWeatherError(null);
+      return;
+    }
+
     let cancelled = false;
     setWeatherLoading(true);
     setWeatherError(null);
     console.info(
-      `[EnvironmentView] Selected greenhouse weather location: ${greenhouse.name}, Nova Scotia (${greenhouse.latitude}, ${greenhouse.longitude})`,
+      `[EnvironmentView] No embedded weather — fetching from Open-Meteo for ${greenhouse.name}, Nova Scotia (${greenhouse.latitude}, ${greenhouse.longitude})`,
     );
 
     fetchExternalWeather(greenhouse)
       .then((weather) => {
         if (cancelled) return;
-        setExternalWeather(weather);
+        setFetchedWeather(weather);
       })
       .catch((err) => {
         if (cancelled) return;
         console.warn('[EnvironmentView] External weather fetch failed:', err);
         setWeatherError(err instanceof Error ? err.message : 'Weather unavailable');
-        setExternalWeather(null);
+        setFetchedWeather(null);
       })
       .finally(() => {
         if (!cancelled) setWeatherLoading(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [greenhouse]);
+    return () => { cancelled = true; };
+  }, [greenhouse, hasEmbedded]);
 
   useEffect(() => {
     console.info('[EnvironmentView] Environment object received by frontend:', latestReading?.environment ?? null);
-  }, [latestReading?.environment]);
+    if (embeddedWeather) {
+      console.info('[EnvironmentView] Embedded external_weather from snapshot:', embeddedWeather);
+    }
+  }, [latestReading?.environment, embeddedWeather]);
+
+  // Resolve the active weather source
+  const externalWeather: ExternalWeather | null = hasEmbedded
+    ? adaptEmbeddedWeather(embeddedWeather!)
+    : fetchedWeather;
 
   const environment = latestReading?.environment ?? null;
   const soil = useMemo(() => buildSoilSummary(latestReading), [latestReading]);

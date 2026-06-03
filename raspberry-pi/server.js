@@ -2,10 +2,13 @@
 require('dotenv').config();
 
 const express = require("express");
-const cors = require("cors");
-const os = require("os");
+const cors    = require("cors");
+const os      = require("os");
+
 const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
-const { saveReading, firestoreEnabled } = require("./firestore");
+const { saveReading, firestoreEnabled }        = require("./firestore");
+const { buildGreenhouseReadingSnapshot }        = require("./snapshot");
+const { getWeatherCached }                      = require("./weather");
 
 function getLanIp() {
   for (const nets of Object.values(os.networkInterfaces())) {
@@ -16,151 +19,131 @@ function getLanIp() {
   return "localhost";
 }
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+const app            = express();
+const PORT           = process.env.PORT || 5000;
 const USE_SIMULATION = process.env.USE_SIMULATION === "true";
+const GREENHOUSE_ID  = process.env.GREENHOUSE_ID  || "sydney-greenhouse";
 
-// Open CORS — allows any origin (localhost, LAN IPs, phone browsers on same Wi-Fi).
-// Fine for local/embedded use; tighten if this ever faces the public internet.
 app.use(cors());
-
-// allow JSON
 app.use(express.json());
 
-// in-memory storage for readings
-let readingsHistory = [];
-let latestReading = null;
+// In-memory snapshots
+let latestReading    = null;
 let latestSystemState = null;
+let readingsHistory  = [];
 
-// basic zone analysis logic
+// ─── Zone alert analysis ───────────────────────────────────────────────────────
+
 function analyzeZone(zone) {
   const alerts = [];
-
   if (typeof zone.soil_moisture_pct === 'number') {
     if (zone.soil_moisture_pct < 30) alerts.push("too dry");
     if (zone.soil_moisture_pct > 80) alerts.push("too wet");
   }
-
   if (typeof zone.soil_temp_c === 'number' && zone.soil_temp_c < 10) {
     alerts.push("too cold");
   }
-
   return alerts;
 }
 
-function toFiniteNumber(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-}
+// ─── Build a full reading snapshot ────────────────────────────────────────────
 
-function buildEnvironment(input) {
-  const source = input && typeof input === "object" ? input : {};
-  const env = {
-    air_temp_c: toFiniteNumber(source.air_temp_c ?? source.env_temp_c),
-    humidity_pct: toFiniteNumber(source.humidity_pct ?? source.env_humidity_pct),
-    light_lux: toFiniteNumber(source.light_lux),
-    brightness_pct: toFiniteNumber(source.brightness_pct),
-    source: source.source || "rpi"
+/**
+ * Creates the unified Firestore document from raw input.
+ *
+ * mode "real"       — live ESP data; RPi environment if present in body; real weather from API.
+ * mode "simulation" — simulated ESP data; generated environment; real weather from API.
+ */
+async function buildSnapshot(rawReading, mode) {
+  // Raw zones with alert strings
+  const rawZones = (rawReading.zones || []).map((z) => ({
+    ...z,
+    alerts: analyzeZone(z),
+  }));
+
+  // RPi environment sensor (live mode: from request body; sim mode: from simulator)
+  // In live mode, if no environment fields arrive, source becomes 'unavailable'.
+  const rawEnv = rawReading.environment || null;
+  let environment = null;
+  if (rawEnv) {
+    environment = {
+      source:         rawEnv.source || 'rpi',
+      air_temp_c:     rawEnv.air_temp_c     ?? rawEnv.env_temp_c     ?? null,
+      humidity_pct:   rawEnv.humidity_pct   ?? rawEnv.env_humidity_pct ?? null,
+      light_lux:      rawEnv.light_lux      ?? null,
+      brightness_pct: rawEnv.brightness_pct ?? null,
+    };
+  } else if (mode === 'simulation') {
+    // Generate realistic sim environment when no real sensor is present
+    const hourOfDay = (Date.now() / 3_600_000) % 24;
+    environment = {
+      source:         'simulation',
+      air_temp_c:     Number((22 + 4 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 3)).toFixed(1)),
+      humidity_pct:   Number(Math.min(90, Math.max(50,
+                        65 - 8 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 3)
+                        + (Math.random() - 0.5) * 2
+                      )).toFixed(1)),
+      brightness_pct: Math.round(Math.min(95, Math.max(10,
+                        55 + 35 * Math.sin((hourOfDay / 24) * 2 * Math.PI - Math.PI / 2)
+                      ))),
+      light_lux:      null,
+    };
+  }
+  // In live mode with no env data: environment stays null → snapshot marks source 'unavailable'
+
+  // External weather — cached, refreshed every 10 minutes
+  const externalWeather = await getWeatherCached(GREENHOUSE_ID);
+
+  // System status
+  const nodeIds    = new Set((rawZones).map(z => z.node_id).filter(Boolean));
+  const nodeCount  = rawReading.node_count || nodeIds.size;
+  const system     = {
+    rpi_online:         true,
+    esp_nodes_online:   nodeCount,
+    esp_nodes_expected: nodeCount,
+    missing_nodes:      [],
+    battery_status:     null,
   };
 
-  const hasSensorValue = [
-    env.air_temp_c,
-    env.humidity_pct,
-    env.light_lux,
-    env.brightness_pct
-  ].some((value) => typeof value === "number");
-
-  if (!hasSensorValue) return null;
-  return env;
-}
-
-function isOutsideZone(zone) {
-  const id = String(zone.zone_id || "").toUpperCase();
-  return id.includes("OUTDOOR") || id.includes("OUTSIDE") || id.includes("OUT");
-}
-
-function avg(values) {
-  const nums = values.filter((value) => typeof value === "number" && Number.isFinite(value));
-  if (!nums.length) return null;
-  return Number((nums.reduce((sum, value) => sum + value, 0) / nums.length).toFixed(1));
-}
-
-function buildSummary(zones) {
-  const inside = zones.filter((zone) => !isOutsideZone(zone));
-  const outside = zones.filter(isOutsideZone);
-
-  return {
-    avg_inside_soil_moisture_pct: avg(inside.map((zone) => zone.soil_moisture_pct)),
-    avg_outside_soil_moisture_pct: avg(outside.map((zone) => zone.soil_moisture_pct)),
-    avg_inside_soil_temp_c: avg(inside.map((zone) => zone.soil_temp_c)),
-    avg_outside_soil_temp_c: avg(outside.map((zone) => zone.soil_temp_c))
-  };
-}
-
-function enrichReading(reading, mode) {
-  const simulationEnvironment = mode === "simulation"
-    ? {
-        air_temp_c: Number((21 + Math.sin(Date.now() / 3_600_000) * 3).toFixed(1)),
-        humidity_pct: Number((62 + Math.cos(Date.now() / 2_700_000) * 8).toFixed(1)),
-        brightness_pct: Math.max(15, Math.min(95, Number((60 + Math.sin(Date.now() / 1_800_000) * 30).toFixed(0)))),
-        source: "rpi"
-      }
-    : null;
-  const environment = buildEnvironment(reading.environment ?? reading)
-    || simulationEnvironment;
-  const enriched = {
-    ...reading,
+  return buildGreenhouseReadingSnapshot({
+    greenhouseId: rawReading.greenhouse_id || GREENHOUSE_ID,
     mode,
-    summary: buildSummary(reading.zones || []),
-    ...(environment ? {
-      environment,
-      env_temp_c: environment.air_temp_c,
-      env_humidity_pct: environment.humidity_pct
-    } : {})
-  };
-
-  console.log("[Environment] Firestore environment object:", environment || "unavailable");
-  return enriched;
+    rawZones,
+    environment,
+    externalWeather,
+    system,
+    nodeCount,
+    timestamp: rawReading.timestamp || new Date().toISOString(),
+  });
 }
 
-// test route
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
 app.get("/", (req, res) => {
   res.send("GreenMirror Pi API running");
 });
 
-// receive ESP data
-app.post("/api/readings", (req, res) => {
-  console.log("📡 Received data from ESP:");
-  console.log(JSON.stringify(req.body, null, 2));
-
-  const zones = Array.isArray(req.body.zones)
-    ? req.body.zones.map((zone) => ({
-        ...zone,
-        alerts: analyzeZone(zone)
-      }))
-    : [];
-
-  latestReading = enrichReading({
-    ...req.body,
-    zones,
-    timestamp: new Date().toISOString()
-  }, "real");
-
-  readingsHistory.push(latestReading);
-
-  // Write to Firestore if configured (non-blocking, non-fatal)
-  if (firestoreEnabled) saveReading(latestReading);
-
-  res.status(200).json({ status: "ok" });
+// Receive ESP sensor data
+app.post("/api/readings", async (req, res) => {
+  console.log("📡 Received data from ESP:", JSON.stringify(req.body, null, 2));
+  try {
+    latestReading = await buildSnapshot(
+      { ...req.body, timestamp: new Date().toISOString() },
+      "live",
+    );
+    readingsHistory.push(latestReading);
+    if (firestoreEnabled) saveReading(latestReading);
+    console.log('[server] latestReadings write:', latestReading.greenhouse_id, '·', latestReading.zones.length, 'zones');
+    res.status(200).json({ status: "ok" });
+  } catch (err) {
+    console.error('[server] Failed to build reading snapshot:', err.message);
+    res.status(500).json({ status: "error", message: err.message });
+  }
 });
 
 app.get("/api/latest", (req, res) => {
   const latest = USE_SIMULATION ? latestSystemState : latestReading;
-
-  if (!latest) {
-    return res.status(404).json({ error: "No readings available" });
-  }
-
+  if (!latest) return res.status(404).json({ error: "No readings available" });
   res.json(latest);
 });
 
@@ -168,29 +151,38 @@ app.get("/api/history", (req, res) => {
   res.json(readingsHistory);
 });
 
+// ─── Simulation mode ──────────────────────────────────────────────────────────
+
 if (USE_SIMULATION) {
   const simulator = createSimulator({
+    greenhouseId: GREENHOUSE_ID,
     analyzeZone,
-    onSystemState: (systemState) => {
-      // Simulated ticks behave like incoming ESP readings and are kept in history.
-      const enrichedSystemState = enrichReading(systemState, "simulation");
-      latestSystemState = enrichedSystemState;
-      readingsHistory.push(enrichedSystemState);
-      if (firestoreEnabled) saveReading(enrichedSystemState);
-      console.log(
-        `Simulated ${enrichedSystemState.node_count} nodes / ${enrichedSystemState.zone_count} zones at ${enrichedSystemState.timestamp}`
-      );
-    }
+    onSystemState: async (rawSystemState) => {
+      try {
+        const snapshot = await buildSnapshot(rawSystemState, "simulation");
+        latestSystemState = snapshot;
+        readingsHistory.push(snapshot);
+        if (firestoreEnabled) saveReading(snapshot);
+        console.log(
+          `[sim] Snapshot built — ${snapshot.zones.length} zones · env: ${snapshot.environment.source}`,
+          `· weather: ${snapshot.external_weather.temp_c !== null ? snapshot.external_weather.temp_c + '°C' : 'N/A'}`,
+        );
+      } catch (err) {
+        console.error('[sim] Snapshot build failed:', err.message);
+      }
+    },
   });
 
   simulator.start();
   console.log(`Simulation mode ON; updating every ${UPDATE_INTERVAL_MS / 1000}s`);
 }
 
+// ─── Start ────────────────────────────────────────────────────────────────────
+
 app.listen(PORT, "0.0.0.0", () => {
   const lan = getLanIp();
   console.log(`🚀 GreenMirror API ready`);
-  console.log(`   Local:   http://localhost:${PORT}`);
-  console.log(`   Network: http://${lan}:${PORT}`);
-  console.log(`   Frontend on the same machine will auto-detect http://${lan}:5174`);
+  console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
+  console.log(`   Local:      http://localhost:${PORT}`);
+  console.log(`   Network:    http://${lan}:${PORT}`);
 });

@@ -13,6 +13,29 @@
 
 import type { LatestReading, ZoneReading } from '../zoneLayout';
 
+// ─── Zone classification (mirrors backend snapshot.js) ────────────────────────
+
+function classifyZone(zoneId: string): 'inside' | 'outside' | 'unknown' {
+  const upper = (zoneId || '').toUpperCase();
+  if (upper.startsWith('GH') || upper.includes('-GH-')) return 'inside';
+  if (upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-')) return 'outside';
+  return 'unknown';
+}
+
+function deriveMoistureStatus(pct: number | null): 'dry' | 'ok' | 'wet' | 'unknown' {
+  if (typeof pct !== 'number') return 'unknown';
+  if (pct < 30) return 'dry';
+  if (pct > 80) return 'wet';
+  return 'ok';
+}
+
+function deriveRunoffRisk(pct: number | null): 'low' | 'medium' | 'high' | 'unknown' {
+  if (typeof pct !== 'number') return 'unknown';
+  if (pct > 80) return 'high';
+  if (pct > 65) return 'medium';
+  return 'low';
+}
+
 // ─── Zone IDs ─────────────────────────────────────────────────────────────────
 // Mirrors the SYDNEY_BEDS IDs so mapZonesToSydneyLayout() maps them correctly.
 
@@ -113,14 +136,21 @@ export function buildReading(
 ): LatestReading {
   const zones: ZoneReading[] = zoneIds.map((id) => {
     const s = states.get(id) ?? { moisture: 40, temp: 19, phase: 0 };
+    const moisturePct = parseFloat(s.moisture.toFixed(1));
     return {
       zone_id: id,
+      zone_name: id,
+      location_type: classifyZone(id),
       node_id: `sim-node-${id}`,
       greenhouse_id: ghId,
-      soil_moisture_pct: parseFloat(s.moisture.toFixed(1)),
+      plant_profile_id: null,
+      plant_name: null,
+      soil_moisture_pct: moisturePct,
       soil_moisture_raw: Math.round(4095 - (s.moisture / 100) * 3000),
       soil_temp_c: s.temp,
       soil_temp_status: s.temp < 10 ? 'cold' : s.temp > 35 ? 'hot' : 'ok',
+      moisture_status: deriveMoistureStatus(moisturePct),
+      runoff_risk: deriveRunoffRisk(moisturePct),
     };
   });
 
@@ -148,20 +178,47 @@ export function buildReading(
     source: 'rpi',
   };
 
+  const allMoistures = zones.map((z) => z.soil_moisture_pct);
+  const allTemps     = zones.map((z) => z.soil_temp_c);
+  const zonesDry     = zones.filter((z) => z.moisture_status === 'dry').length;
+  const zonesWet     = zones.filter((z) => z.moisture_status === 'wet').length;
+  const zonesHealthy = zones.filter((z) => z.moisture_status === 'ok').length;
+
   return {
-    greenhouse_id: ghId,
-    timestamp: timestamp.toISOString(),
-    mode: 'simulation',
-    zone_count: zones.length,
+    greenhouse_id:   ghId,
+    greenhouse_name: ghId === 'sydney-greenhouse' ? 'Sydney Greenhouse' : ghId === 'truro-greenhouse' ? 'Truro Greenhouse' : ghId,
+    location: null,
+    timestamp:       timestamp.toISOString(),
+    mode:            'simulation',
+    zone_count:      zones.length,
     zones,
     environment,
-    env_temp_c: environment.air_temp_c,
+    // external_weather is null in client simulation — EnvironmentView fetches it separately
+    external_weather: null,
+    env_temp_c:      environment.air_temp_c,
     env_humidity_pct: environment.humidity_pct,
+    system: {
+      rpi_online:         false,
+      esp_nodes_online:   0,
+      esp_nodes_expected: 0,
+      missing_nodes:      [],
+      battery_status:     null,
+    },
     summary: {
-      avg_inside_soil_moisture_pct: avg(insideZones.map((zone) => zone.soil_moisture_pct)),
+      zone_count:                    zones.length,
+      active_zone_count:             zones.filter((z) => z.soil_moisture_pct !== null).length,
+      avg_inside_soil_moisture_pct:  avg(insideZones.map((zone) => zone.soil_moisture_pct)),
       avg_outside_soil_moisture_pct: avg(outsideZones.map((zone) => zone.soil_moisture_pct)),
-      avg_inside_soil_temp_c: avg(insideZones.map((zone) => zone.soil_temp_c)),
-      avg_outside_soil_temp_c: avg(outsideZones.map((zone) => zone.soil_temp_c)),
+      avg_inside_soil_temp_c:        avg(insideZones.map((zone) => zone.soil_temp_c)),
+      avg_outside_soil_temp_c:       avg(outsideZones.map((zone) => zone.soil_temp_c)),
+      avg_all_soil_moisture_pct:     avg(allMoistures),
+      avg_all_soil_temp_c:           avg(allTemps),
+      zones_need_water:  zonesDry,
+      zones_too_wet:     zonesWet,
+      zones_healthy:     zonesHealthy,
+      runoff_risk:       zonesWet / Math.max(zones.length, 1) > 0.5 ? 'high'
+                           : zonesWet / Math.max(zones.length, 1) > 0.25 ? 'medium'
+                           : 'low',
     },
   };
 }
