@@ -62,13 +62,16 @@ export function subscribeToLatestReading(
  * readings / greenhouse_id ASC + timestamp DESC — Firestore will prompt
  * with a console link to create it on first run if missing).
  *
+ * @param cutoffTimestamp  ISO 8601 string — only readings at or after this time
+ *                         are returned. Compatible with the existing composite index.
  * @returns Firestore unsubscribe fn, or null if Firebase is not configured.
  */
 export function subscribeToReadingsHistory(
   greenhouseId: string,
   onData: (readings: LatestReading[]) => void,
-  limitCount = 200,
+  limitCount = 5000,
   onError?: () => void,
+  cutoffTimestamp?: string,
 ): Unsubscribe | null {
   const db = getDb();
   if (!db) {
@@ -78,12 +81,14 @@ export function subscribeToReadingsHistory(
     return null;
   }
 
-  const q = query(
-    collection(db, 'readings'),
+  const constraints = [
     where('greenhouse_id', '==', greenhouseId),
+    ...(cutoffTimestamp ? [where('timestamp', '>=', cutoffTimestamp)] : []),
     orderBy('timestamp', 'desc'),
     limit(limitCount),
-  );
+  ] as const;
+
+  const q = query(collection(db, 'readings'), ...constraints);
 
   return onSnapshot(
     q,

@@ -22,13 +22,14 @@ export const TIME_RANGE_LABELS: Record<TimeRange, string> = {
 };
 
 // How many readings to request from Firestore per range.
-// Backend sends one reading every ~5 s in simulation mode.
+// At 5-second intervals: 24 h = 17,280 readings; use generous caps so charts
+// show real history without hitting Firestore read limits too hard.
 const RANGE_LIMIT: Record<TimeRange, number> = {
-  '24h': 200,
-  '7d':  400,
-  '30d': 600,
-  '3m':  900,
-  '1y':  1200,
+  '24h': 5000,
+  '7d':  10000,
+  '30d': 20000,
+  '3m':  30000,
+  '1y':  50000,
 };
 
 const RANGE_HOURS: Record<TimeRange, number> = {
@@ -178,6 +179,11 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       b.extHumSum += xh; b.extHumCount++;
     }
 
+    let classifiedMoistureIn = false;
+    let classifiedMoistureOut = false;
+    let classifiedTempIn = false;
+    let classifiedTempOut = false;
+
     for (const zone of reading.zones ?? []) {
       const m = zone.soil_moisture_pct;
       const t = zone.soil_temp_c;
@@ -186,14 +192,42 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
 
       if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) {
         b.moistureSum += m; b.moistureCount++;
-        if (inside)  { b.moistureInSum  += m; b.moistureInCount++;  }
-        if (outside) { b.moistureOutSum += m; b.moistureOutCount++; }
+        if (inside)  { b.moistureInSum  += m; b.moistureInCount++;  classifiedMoistureIn  = true; }
+        if (outside) { b.moistureOutSum += m; b.moistureOutCount++; classifiedMoistureOut = true; }
       }
       // Skip DS18B20 error sentinels (-127 = disconnected, 85 = power-on default)
       if (typeof t === 'number' && isFinite(t) && t !== -127 && t !== 85 && t > -40 && t < 80) {
         b.tempSum += t; b.tempCount++;
-        if (inside)  { b.tempInSum  += t; b.tempInCount++;  }
-        if (outside) { b.tempOutSum += t; b.tempOutCount++; }
+        if (inside)  { b.tempInSum  += t; b.tempInCount++;  classifiedTempIn  = true; }
+        if (outside) { b.tempOutSum += t; b.tempOutCount++; classifiedTempOut = true; }
+      }
+    }
+
+    // Fallback for old readings whose zone IDs (e.g. "zone-01-1") don't match
+    // GH / OUTDOOR patterns — use pre-computed summary averages instead.
+    const sm = reading.summary;
+    if (!classifiedMoistureIn) {
+      const v = sm?.avg_inside_soil_moisture_pct ?? sm?.avg_all_soil_moisture_pct;
+      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= 100) {
+        b.moistureInSum += v; b.moistureInCount++;
+      }
+    }
+    if (!classifiedMoistureOut) {
+      const v = sm?.avg_outside_soil_moisture_pct;
+      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= 100) {
+        b.moistureOutSum += v; b.moistureOutCount++;
+      }
+    }
+    if (!classifiedTempIn) {
+      const v = sm?.avg_inside_soil_temp_c ?? sm?.avg_all_soil_temp_c;
+      if (typeof v === 'number' && isFinite(v) && v > -40 && v < 80) {
+        b.tempInSum += v; b.tempInCount++;
+      }
+    }
+    if (!classifiedTempOut) {
+      const v = sm?.avg_outside_soil_temp_c;
+      if (typeof v === 'number' && isFinite(v) && v > -40 && v < 80) {
+        b.tempOutSum += v; b.tempOutCount++;
       }
     }
   }
@@ -247,11 +281,15 @@ export function useReadingsHistory(
     setLoading(true);
     setAllReadings([]);
 
+    const cutoffMs = Date.now() - RANGE_HOURS[range] * 3_600_000;
+    const cutoffISO = new Date(cutoffMs).toISOString();
+
     const unsub = subscribeToReadingsHistory(
       greenhouseId,
       (r) => { setAllReadings(r); setLoading(false); },
       RANGE_LIMIT[range],
       () => { setLoading(false); }, // stop loading on Firestore error / missing index
+      cutoffISO,
     );
 
     return () => { unsub?.(); };
