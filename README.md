@@ -31,11 +31,14 @@ The backend binds to `0.0.0.0` and prints both the local and LAN URLs at startup
 
 **Backend** (from `raspberry-pi/`):
 ```powershell
-USE_SIMULATION=true node server.js
+cd raspberry-pi
+$env:USE_SIMULATION="true"
+node server.js
 ```
 
 **Frontend** (from `mobile-app/`):
 ```powershell
+cd mobile-app
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
