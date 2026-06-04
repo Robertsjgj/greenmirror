@@ -41,3 +41,4 @@ firebase-service-account.json
 *-service-account.json
 serviceAccountKey.json.claude/
 *.zip
+.claude/
