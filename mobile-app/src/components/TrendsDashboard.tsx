@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
-  LineChart, Line, CartesianGrid,
-  XAxis, YAxis, Tooltip, ResponsiveContainer,
+  LineChart, Line, BarChart, Bar, ComposedChart,
+  CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ReferenceArea, ReferenceLine,
 } from 'recharts';
 import {
   useReadingsHistory,
@@ -52,6 +53,81 @@ const TOOLTIP_LABELS: Record<string, { label: string; unit: string }> = {
   envTempC:           { label: 'Air temp (RPi)',     unit: '°C' },
   envHumidityPct:     { label: 'Humidity (RPi)',     unit: '%'  },
 };
+
+// ─── Chart bucketing helpers (plants & watering tabs) ────────────────────────
+
+function _p2(n: number) { return String(n).padStart(2, '0'); }
+
+function _bKey(ts: number, range: TimeRange): string {
+  const d = new Date(ts);
+  if (range === '24h') return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}T${_p2(d.getHours())}`;
+  if (range === '3m' || range === '1y') {
+    const mon = new Date(d);
+    mon.setDate(d.getDate() - (d.getDay() + 6) % 7);
+    mon.setHours(0, 0, 0, 0);
+    return `${mon.getFullYear()}-${_p2(mon.getMonth()+1)}-${_p2(mon.getDate())}`;
+  }
+  return `${d.getFullYear()}-${_p2(d.getMonth()+1)}-${_p2(d.getDate())}`;
+}
+
+function _bLabel(ts: number, range: TimeRange): string {
+  const d = new Date(ts);
+  if (range === '24h') { const h = d.getHours(); return `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}`; }
+  return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+}
+
+function buildPlantChartData(
+  plantId: string,
+  allZones: VisualZone[],
+  readings: LatestReading[],
+  range: TimeRange,
+): Array<{ label: string; ts: number; moisture: number; temp: number | null }> {
+  const backendIds = new Set(
+    allZones.filter(z => z.assignedPlant === plantId && z.backendZoneId).map(z => z.backendZoneId!),
+  );
+  if (!backendIds.size) return [];
+  type B = { mSum: number; mCount: number; tSum: number; tCount: number; ts: number; label: string };
+  const buckets = new Map<string, B>();
+  for (const r of readings) {
+    if (!r.timestamp) continue;
+    const ts = new Date(r.timestamp).getTime();
+    if (!ts || isNaN(ts)) continue;
+    for (const z of r.zones ?? []) {
+      if (!backendIds.has(z.zone_id)) continue;
+      const key = _bKey(ts, range);
+      if (!buckets.has(key)) buckets.set(key, { mSum: 0, mCount: 0, tSum: 0, tCount: 0, ts, label: _bLabel(ts, range) });
+      const b = buckets.get(key)!;
+      b.ts = Math.max(b.ts, ts);
+      const m = z.soil_moisture_pct;
+      const t = z.soil_temp_c;
+      if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) { b.mSum += m; b.mCount++; }
+      if (typeof t === 'number' && isFinite(t) && t > -40 && t < 80 && t !== -127 && t !== 85) { b.tSum += t; b.tCount++; }
+    }
+  }
+  return [...buckets.values()]
+    .filter(b => b.mCount > 0)
+    .map(b => ({ label: b.label, ts: b.ts, moisture: parseFloat((b.mSum / b.mCount).toFixed(1)), temp: b.tCount > 0 ? parseFloat((b.tSum / b.tCount).toFixed(1)) : null }))
+    .sort((a, b) => a.ts - b.ts);
+}
+
+function buildWateringChartData(
+  events: ActivityEntry[],
+  range: TimeRange,
+): Array<{ label: string; ts: number; count: number; totalMl: number }> {
+  type B = { count: number; totalMl: number; ts: number; label: string };
+  const buckets = new Map<string, B>();
+  for (const e of events) {
+    const ts = new Date(e.timestamp).getTime();
+    if (!ts || isNaN(ts)) continue;
+    const key = _bKey(ts, range);
+    if (!buckets.has(key)) buckets.set(key, { count: 0, totalMl: 0, ts, label: _bLabel(ts, range) });
+    const b = buckets.get(key)!;
+    b.count++;
+    b.totalMl += e.amountMl ?? 0;
+    b.ts = Math.max(b.ts, ts);
+  }
+  return [...buckets.values()].sort((a, b) => a.ts - b.ts);
+}
 
 function tooltipFormatter(value: number, name: string): [string, string] {
   const info = TOOLTIP_LABELS[name] ?? { label: name, unit: '' };
@@ -436,6 +512,9 @@ export function TrendsDashboard({
   const uniquePlants = new Set((zones ?? []).map((z) => z.assignedPlant).filter(Boolean)).size;
   const zonesWithReadings = (zones ?? []).filter((z) => z.hasReading).length;
 
+  // Always computed — calling useMemoFilteredZones conditionally inside JSX breaks hooks rules
+  const filteredZones = useMemoFilteredZones(sortedZones, zoneSearch);
+
   if (!open) return null;
 
   return (
@@ -505,7 +584,7 @@ export function TrendsDashboard({
         {/* ══ ZONES ═══════════════════════════════════════════════════════════ */}
         {activeTab === 'zones' && (
           <ZonesSection
-            filteredZones={useMemoFilteredZones(sortedZones, zoneSearch)}
+            filteredZones={filteredZones}
             allCount={(zones ?? []).length}
             search={zoneSearch}
             onSearch={setZoneSearch}
@@ -514,10 +593,24 @@ export function TrendsDashboard({
         )}
 
         {/* ══ PLANTS ══════════════════════════════════════════════════════════ */}
-        {activeTab === 'plants' && <PlantsSection plantGroups={plantGroups} />}
+        {activeTab === 'plants' && (
+          <PlantsSection
+            plantGroups={plantGroups}
+            readings={readings}
+            zones={zones ?? []}
+            range={range}
+            onRangeChange={setRange}
+          />
+        )}
 
         {/* ══ WATERING ════════════════════════════════════════════════════════ */}
-        {activeTab === 'watering' && <WateringSection wateringEvents={wateringEvents} />}
+        {activeTab === 'watering' && (
+          <WateringSection
+            wateringEvents={wateringEvents}
+            range={range}
+            onRangeChange={setRange}
+          />
+        )}
 
         {/* ══ RESEARCH ════════════════════════════════════════════════════════ */}
         {activeTab === 'research' && (
@@ -843,19 +936,45 @@ function ZonesSection({ filteredZones, allCount, search, onSearch, lastWateredBy
 
 // ─── Plants ───────────────────────────────────────────────────────────────────
 
-function PlantsSection({ plantGroups }: { plantGroups: PlantGroup[] }) {
+function PlantsSection({ plantGroups, readings, zones, range, onRangeChange }: {
+  plantGroups: PlantGroup[];
+  readings: LatestReading[];
+  zones: VisualZone[];
+  range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
+}) {
   if (plantGroups.length === 0) {
     return <EmptyCard icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." />;
   }
   return (
     <>
+      {/* Range picker */}
+      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {RANGE_OPTIONS.map((r) => (
+          <button key={r.id} onClick={() => onRangeChange(r.id)} style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 8, border: '1.5px solid',
+            borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
+            background: range === r.id ? 'var(--primary-soft)' : 'transparent',
+            color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
+            fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+          }}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+
       {plantGroups.map((g) => {
         const avg = g.moistureCount > 0 ? g.totalMoisture / g.moistureCount : 0;
         const urgentColor = g.needsWater > 0 ? '#f59e0b' : g.tooWet > 0 ? '#0ea5e9' : '#22c55e';
-        const urgentLabel = g.needsWater > 0 ? 'Drying fast' : g.tooWet > 0 ? 'Too wet' : 'Stable';
+        const urgentLabel = g.needsWater > 0 ? 'Needs water' : g.tooWet > 0 ? 'Too wet' : 'Stable';
+        const chartData = buildPlantChartData(g.profile.id, zones, readings, range);
+        const hasChart = chartData.length >= 2;
+        const hasTemp = chartData.some(p => p.temp !== null);
+
         return (
           <div key={g.profile.id} className="gm-card" style={{ padding: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>
                 {g.profile.icon ?? '🌱'}
               </div>
@@ -869,15 +988,65 @@ function PlantsSection({ plantGroups }: { plantGroups: PlantGroup[] }) {
                 </div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 20, fontWeight: 800, color: urgentColor }}>{avg.toFixed(0)}%</div>
-                <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>avg</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: urgentColor, fontFamily: "'Baloo 2', system-ui" }}>{avg.toFixed(0)}%</div>
+                <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>avg now</div>
               </div>
             </div>
-            <div style={{ marginTop: 12, position: 'relative', height: 8, borderRadius: 4, background: 'var(--line)' }}>
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${g.profile.moistureMin}%`, width: `${g.profile.moistureMax - g.profile.moistureMin}%`, background: '#22c55e22', borderRadius: 4 }} />
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: `${Math.min(100, avg)}%`, background: urgentColor, borderRadius: 4, transition: 'width 0.4s' }} />
-            </div>
-            <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
+
+            {/* Moisture + Temp chart */}
+            {hasChart ? (
+              <>
+                <ResponsiveContainer width="100%" height={190}>
+                  <ComposedChart data={chartData} margin={{ top: 6, right: hasTemp ? 36 : 4, left: -20, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                    <YAxis
+                      yAxisId="pct" domain={[0, 100]}
+                      tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
+                      tickLine={false} axisLine={false}
+                      tickFormatter={(v: number) => `${v}%`}
+                    />
+                    {hasTemp && (
+                      <YAxis
+                        yAxisId="temp" orientation="right" domain={[0, 'auto']} width={36}
+                        tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
+                        tickLine={false} axisLine={false}
+                        tickFormatter={(v: number) => `${v}°`}
+                      />
+                    )}
+                    <Tooltip
+                      contentStyle={tooltipStyle}
+                      formatter={(value: number, name: string) => {
+                        if (name === 'moisture') return [`${value}%`, 'Soil moisture'];
+                        if (name === 'temp')     return [`${value}°C`, 'Soil temp'];
+                        return [value, name];
+                      }}
+                      labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 10 }}
+                    />
+                    {/* Shaded target range */}
+                    <ReferenceArea yAxisId="pct" y1={g.profile.moistureMin} y2={g.profile.moistureMax} fill="#22c55e" fillOpacity={0.09} />
+                    <ReferenceLine yAxisId="pct" y={g.profile.moistureMin} stroke="#22c55e" strokeDasharray="4 2" strokeWidth={1} opacity={0.55} label={{ value: `${g.profile.moistureMin}%`, position: 'insideBottomLeft', fontSize: 9, fill: '#22c55e' }} />
+                    <ReferenceLine yAxisId="pct" y={g.profile.moistureMax} stroke="#22c55e" strokeDasharray="4 2" strokeWidth={1} opacity={0.55} label={{ value: `${g.profile.moistureMax}%`, position: 'insideTopLeft', fontSize: 9, fill: '#22c55e' }} />
+                    <Line yAxisId="pct"  type="monotone" dataKey="moisture" name="moisture" stroke={urgentColor} strokeWidth={2.5} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: urgentColor }} />
+                    {hasTemp && (
+                      <Line yAxisId="temp" type="monotone" dataKey="temp" name="temp" stroke="#94a3b8" strokeWidth={1.5} dot={false} strokeDasharray="4 2" activeDot={{ r: 3, strokeWidth: 0, fill: '#94a3b8' }} />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
+                  <LegendDot color={urgentColor} label="Soil moisture" />
+                  {hasTemp && <LegendDot color="#94a3b8" label="Soil temp" dashed />}
+                  <LegendDot color="#22c55e" label={`Target ${g.profile.moistureMin}–${g.profile.moistureMax}%`} />
+                </div>
+              </>
+            ) : (
+              <div style={{ height: 64, display: 'grid', placeItems: 'center', background: 'var(--bg-sub)', borderRadius: 12, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>
+                📡 Not enough history — chart appears after a few readings
+              </div>
+            )}
+
+            {/* Zone status pills */}
+            <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
               {g.needsWater > 0 && <CountPill value={g.needsWater} label="need water" color="#f59e0b" />}
               {g.tooWet > 0    && <CountPill value={g.tooWet}    label="too wet"    color="#0ea5e9" />}
               {g.good > 0      && <CountPill value={g.good}      label="healthy"    color="#22c55e" />}
@@ -894,20 +1063,21 @@ function PlantsSection({ plantGroups }: { plantGroups: PlantGroup[] }) {
 
 // ─── Watering ─────────────────────────────────────────────────────────────────
 
-function WateringSection({ wateringEvents }: { wateringEvents: ActivityEntry[] }) {
+function WateringSection({ wateringEvents, range, onRangeChange }: {
+  wateringEvents: ActivityEntry[];
+  range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
+}) {
   if (wateringEvents.length === 0) {
     return (
-      <>
-        <EmptyCard icon="💧" title="No watering events yet" sub="Water zones from Today's Tasks or from the Map tab to build your watering history." />
-        <div className="gm-card" style={{ padding: 14 }}>
-          <DashLabel>Watering response</DashLabel>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.5 }}>
-            Recovery curves (before → 1h → 6h → 24h) will appear here once you have watering events and live sensor readings in the same time window.
-          </div>
-        </div>
-      </>
+      <EmptyCard
+        icon="💧"
+        title="No watering events yet"
+        sub="Water zones from Today's Tasks or from the Map tab to build your watering history."
+      />
     );
   }
+
   const byZone = new Map<string, { count: number; lastTs: string; plantName?: string; totalMl: number }>();
   wateringEvents.forEach((e) => {
     const key = e.visualZoneId ?? 'unknown';
@@ -917,16 +1087,126 @@ function WateringSection({ wateringEvents }: { wateringEvents: ActivityEntry[] }
     z.totalMl += e.amountMl ?? 0;
     if (new Date(e.timestamp) > new Date(z.lastTs)) z.lastTs = e.timestamp;
   });
+
+  const chartData = buildWateringChartData(wateringEvents, range);
+  const hasVol = wateringEvents.some(e => (e.amountMl ?? 0) > 0);
+  const totalMl = wateringEvents.reduce((s, e) => s + (e.amountMl ?? 0), 0);
+
   return (
     <>
+      {/* Summary strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+        {[
+          { val: wateringEvents.length, label: 'EVENTS',    color: '#0ea5e9' },
+          { val: byZone.size,           label: 'ZONES',     color: '#0ea5e9' },
+          { val: totalMl > 0 ? `${(totalMl / 1000).toFixed(1)}L` : '—', label: 'VOLUME', color: '#0ea5e9' },
+        ].map(({ val, label, color }) => (
+          <div key={label} style={{ background: 'var(--card)', border: '1.5px solid var(--line)', borderRadius: 14, padding: '12px 10px', textAlign: 'center' }}>
+            <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 22, fontWeight: 800, color }}>{val}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-3)', marginTop: 2 }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Range picker */}
+      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none' }}>
+        {RANGE_OPTIONS.map((r) => (
+          <button key={r.id} onClick={() => onRangeChange(r.id)} style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 8, border: '1.5px solid',
+            borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
+            background: range === r.id ? 'var(--primary-soft)' : 'transparent',
+            color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
+            fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+          }}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Watering activity bar chart */}
+      {chartData.length >= 1 && (
+        <div className="gm-card" style={{ padding: '16px 14px 20px' }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>
+            Watering Activity
+          </div>
+          {chartData.length < 2 ? (
+            <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, padding: '12px 0' }}>
+              Log watering events across multiple days to see the pattern chart.
+            </div>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={210}>
+                <BarChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 4 }} barSize={18}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false}
+                    tickFormatter={(v: number) => hasVol ? `${v}ml` : `${v}`}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'totalMl') return [`${value}ml`, 'Volume watered'];
+                      if (name === 'count')   return [value, 'Events'];
+                      return [value, name];
+                    }}
+                    labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 10 }}
+                  />
+                  <Bar
+                    dataKey={hasVol ? 'totalMl' : 'count'}
+                    name={hasVol ? 'totalMl' : 'count'}
+                    fill="#0ea5e9" radius={[5, 5, 0, 0]} fillOpacity={0.85}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'center', marginTop: 4 }}>
+                {hasVol ? 'Volume watered (ml) per period' : 'Watering events per period'}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Zone frequency visual */}
+      <div className="gm-card" style={{ padding: 14 }}>
+        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>
+          By Zone
+        </div>
+        {[...byZone.entries()].map(([zoneId, info]) => {
+          const barPct = Math.round((info.count / Math.max(...[...byZone.values()].map(v => v.count))) * 100);
+          return (
+            <div key={zoneId} style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)' }}>
+                  {zoneId}
+                  {info.plantName && <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-3)' }}> · {info.plantName}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {info.totalMl > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: '#0ea5e9' }}>{info.totalMl}ml</span>}
+                  <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--ink-2)' }}>{info.count}×</span>
+                </div>
+              </div>
+              <div style={{ height: 6, background: 'var(--line)', borderRadius: 99, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${barPct}%`, background: '#0ea5e9', borderRadius: 99 }} />
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>
+                last {fmtRelative(info.lastTs)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Recent events */}
       <div className="gm-card" style={{ padding: '0 14px' }}>
-        <DashLabel>Recent watering events</DashLabel>
+        <DashLabel>Recent events</DashLabel>
         {wateringEvents.slice(0, 10).map((e, i) => (
           <div key={e.id} style={{
             display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0',
             borderBottom: i < Math.min(wateringEvents.length, 10) - 1 ? '1px solid var(--line)' : 'none',
           }}>
-            <span style={{ fontSize: 16, flexShrink: 0 }}>💧</span>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: '#e0f2fe', display: 'grid', placeItems: 'center', fontSize: 13, flexShrink: 0 }}>💧</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {e.visualZoneId ?? 'Zone'}
@@ -934,35 +1214,11 @@ function WateringSection({ wateringEvents }: { wateringEvents: ActivityEntry[] }
               </div>
               <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{fmtRelative(e.timestamp)}</div>
             </div>
-            {e.amountMl && <div style={{ fontSize: 12, fontWeight: 800, color: '#0ea5e9', flexShrink: 0 }}>{e.amountMl}ml</div>}
+            {e.amountMl && (
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#0ea5e9', flexShrink: 0 }}>{e.amountMl}ml</div>
+            )}
           </div>
         ))}
-      </div>
-      <div className="gm-card" style={{ padding: '0 14px' }}>
-        <DashLabel>By zone</DashLabel>
-        {[...byZone.entries()].map(([zoneId, info], i, arr) => (
-          <div key={zoneId} style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0',
-            borderBottom: i < arr.length - 1 ? '1px solid var(--line)' : 'none',
-          }}>
-            <span style={{ fontSize: 16 }}>🗺️</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)' }}>
-                {zoneId}{info.plantName && <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {info.plantName}</span>}
-              </div>
-              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
-                {info.count} event{info.count !== 1 ? 's' : ''} · last {fmtRelative(info.lastTs)}
-                {info.totalMl > 0 && ` · ${info.totalMl}ml total`}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="gm-card" style={{ padding: 14 }}>
-        <DashLabel>Watering response curves</DashLabel>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.5 }}>
-          Before → 1h → 6h → 24h recovery charts require correlated moisture readings in the same time window as watering events. Ensure your ESP32 is sending readings continuously.
-        </div>
       </div>
     </>
   );
