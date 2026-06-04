@@ -39,4 +39,5 @@ Thumbs.db
 # Firebase service account key files (never commit)
 firebase-service-account.json
 *-service-account.json
-serviceAccountKey.json
+serviceAccountKey.json.claude/
+*.zip
