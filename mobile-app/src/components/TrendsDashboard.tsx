@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, ComposedChart,
+  LineChart, Line, BarChart, Bar,
   CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ReferenceArea, ReferenceLine,
+  ReferenceArea,
 } from 'recharts';
 import {
   useReadingsHistory,
@@ -33,25 +33,12 @@ const RANGE_OPTIONS: { id: TimeRange; label: string }[] = [
 ];
 
 // Static hex — CSS vars don't resolve reliably inside SVG/recharts
-const MOISTURE_IN_COLOR  = '#0ea5e9';  // soil moisture inside GH — solid blue
-const MOISTURE_OUT_COLOR = '#93c5fd';  // soil moisture outside  — light blue dashed
-const TEMP_IN_COLOR      = '#22c55e';  // soil temp inside GH    — solid green
-const TEMP_OUT_COLOR     = '#86efac';  // soil temp outside       — light green dashed
-const ENV_TEMP_COLOR     = '#f59e0b';  // RPi air temp            — amber
-const ENV_HUM_COLOR      = '#a855f7';  // RPi air humidity        — purple
-// Aliases used by health/stats sections
-const MOISTURE_COLOR = MOISTURE_IN_COLOR;
-const TEMP_COLOR     = TEMP_IN_COLOR;
+const MOISTURE_COLOR = '#0ea5e9';  // soil moisture — blue
+const TEMP_COLOR     = '#22c55e';  // soil temp     — green
 
 const TOOLTIP_LABELS: Record<string, { label: string; unit: string }> = {
-  avgMoisture:        { label: 'Avg moisture',       unit: '%'  },
-  avgTemp:            { label: 'Avg soil temp',      unit: '°C' },
-  avgSoilMoistureIn:  { label: 'Moisture (inside)',  unit: '%'  },
-  avgSoilMoistureOut: { label: 'Moisture (outside)', unit: '%'  },
-  avgSoilTempIn:      { label: 'Soil temp (inside)', unit: '°C' },
-  avgSoilTempOut:     { label: 'Soil temp (outside)',unit: '°C' },
-  envTempC:           { label: 'Air temp (RPi)',     unit: '°C' },
-  envHumidityPct:     { label: 'Humidity (RPi)',     unit: '%'  },
+  avgMoisture: { label: 'Avg moisture',  unit: '%'  },
+  avgTemp:     { label: 'Avg soil temp', unit: '°C' },
 };
 
 // ─── Chart bucketing helpers (plants & watering tabs) ────────────────────────
@@ -157,6 +144,87 @@ function getMoistureStatus(moisture: number, profile: PlantProfile | null) {
   return { label: 'Good', color: '#22c55e' };
 }
 
+// Friendly status used for zone rows + plant cards — plain words only
+function getSimpleStatus(moisture: number | null, profile: PlantProfile | null) {
+  if (moisture === null) return { label: 'No data', color: '#94a3b8' };
+  if (profile) {
+    if (moisture < profile.moistureMin) return { label: 'Needs water', color: '#f59e0b' };
+    if (moisture > profile.moistureMax) return { label: 'Too wet',     color: '#0ea5e9' };
+    return { label: 'Good', color: '#22c55e' };
+  }
+  if (moisture < 25) return { label: 'Needs water', color: '#f59e0b' };
+  if (moisture > 80) return { label: 'Too wet',     color: '#0ea5e9' };
+  return { label: 'Good', color: '#22c55e' };
+}
+
+// Simple moisture trend from a first→last delta over the period
+type TrendInfo = { label: string; icon: string; color: string } | null;
+function moistureTrend(delta: number | null, mode: 'zone' | 'plant' = 'zone'): TrendInfo {
+  if (delta === null) return null;
+  if (delta <= -3) return { label: mode === 'plant' ? 'Drying'    : 'Getting drier',  icon: '↓', color: '#f59e0b' };
+  if (delta >= 3)  return { label: mode === 'plant' ? 'Improving' : 'Getting wetter', icon: '↑', color: '#0ea5e9' };
+  return { label: 'Stable', icon: '→', color: '#22c55e' };
+}
+
+const RANGE_WORD: Record<TimeRange, string> = {
+  '24h': 'last 24 hours', '7d': 'last week', '30d': 'last month', '3m': 'last 3 months', '1y': 'last year',
+};
+
+// First→last moisture delta from a zone's raw history
+function historyDelta(history: Array<{ ts: number; moisture: number }> | undefined | null): number | null {
+  if (!history || history.length < 2) return null;
+  return parseFloat((history[history.length - 1].moisture - history[0].moisture).toFixed(1));
+}
+
+// Bucket one zone's raw readings into moisture-only chart points
+function buildZoneChartData(
+  backendId: string,
+  readings: LatestReading[],
+  range: TimeRange,
+): Array<{ label: string; ts: number; moisture: number }> {
+  const buckets = new Map<string, { sum: number; count: number; ts: number; label: string }>();
+  for (const r of readings) {
+    if (!r.timestamp) continue;
+    const ts = new Date(r.timestamp).getTime();
+    if (!ts || isNaN(ts)) continue;
+    for (const z of r.zones ?? []) {
+      if (z.zone_id !== backendId) continue;
+      const m = z.soil_moisture_pct;
+      if (typeof m !== 'number' || !isFinite(m) || m < 0 || m > 100) continue;
+      const key = _bKey(ts, range);
+      if (!buckets.has(key)) buckets.set(key, { sum: 0, count: 0, ts, label: _bLabel(ts, range) });
+      const b = buckets.get(key)!;
+      b.sum += m; b.count++; b.ts = Math.max(b.ts, ts);
+    }
+  }
+  return [...buckets.values()]
+    .map((b) => ({ label: b.label, ts: b.ts, moisture: parseFloat((b.sum / b.count).toFixed(1)) }))
+    .sort((a, b) => a.ts - b.ts);
+}
+
+// Plain-language sentence for a selected zone
+function zoneSentence(name: string, statusLabel: string, trend: TrendInfo, range: TimeRange): string {
+  const word = RANGE_WORD[range];
+  let s: string;
+  if (!trend)                              s = `Not enough history yet for ${name}.`;
+  else if (trend.label === 'Getting drier')  s = `${name} has been drying out over the ${word}.`;
+  else if (trend.label === 'Getting wetter') s = `${name} has been getting wetter over the ${word}.`;
+  else                                       s = `${name} has stayed steady over the ${word}.`;
+  if (statusLabel === 'Needs water') s += ' It is below its target — time to water.';
+  else if (statusLabel === 'Too wet') s += ' It is a little too wet right now.';
+  else if (statusLabel === 'Good')    s += ' It is sitting comfortably in range.';
+  return s;
+}
+
+// Plain-language sentence for a selected plant type
+function plantSentence(name: string, statusLabel: string, trend: TrendInfo): string {
+  if (statusLabel === 'Needs water') return `${name} are running dry — some beds need water.`;
+  if (statusLabel === 'Too wet')     return `${name} are a little too wet right now.`;
+  if (trend?.label === 'Drying')     return `${name} are slowly drying but still okay.`;
+  if (trend?.label === 'Improving')  return `${name} are recovering nicely.`;
+  return `${name} are mostly stable today.`;
+}
+
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
 interface ZoneWithStats {
@@ -166,11 +234,6 @@ interface ZoneWithStats {
   label: string;
   color: string;
   urgency: number;
-}
-
-interface ZoneWithChange extends ZoneWithStats {
-  delta: number | null;           // moisture change over period (negative = drying)
-  ratePerHour: number | null;     // %/hour (negative = drying)
 }
 
 interface PlantGroup {
@@ -277,37 +340,6 @@ export function TrendsDashboard({
       })
       .sort((a, b) => b.urgency - a.urgency || a.moisture - b.moisture);
   }, [zones, profilesById]);
-
-  // Zone changes — sorted by absolute rate of change
-  const zoneChanges: ZoneWithChange[] = useMemo(() => {
-    return sortedZones
-      .map((zs) => {
-        const backendId = zs.zone.backendZoneId;
-        const history = backendId ? zoneHistory.get(backendId) : null;
-        let delta: number | null = null;
-        let ratePerHour: number | null = null;
-        if (history && history.length >= 2) {
-          const first = history[0];
-          const last  = history[history.length - 1];
-          const hours = (last.ts - first.ts) / 3_600_000;
-          if (hours >= 0.1) {
-            delta = last.moisture - first.moisture;
-            ratePerHour = delta / hours;
-          }
-        }
-        return { ...zs, delta, ratePerHour };
-      })
-      .sort((a, b) => {
-        // Primary: fastest drying first; secondary: urgency
-        const rA = a.ratePerHour ?? 0;
-        const rB = b.ratePerHour ?? 0;
-        // Zones with no rate data go last
-        if (a.ratePerHour === null && b.ratePerHour === null) return b.urgency - a.urgency;
-        if (a.ratePerHour === null) return 1;
-        if (b.ratePerHour === null) return -1;
-        return Math.abs(rB) - Math.abs(rA);
-      });
-  }, [sortedZones, zoneHistory]);
 
   // Plant groups
   const plantGroups: PlantGroup[] = useMemo(() => {
@@ -448,64 +480,12 @@ export function TrendsDashboard({
     const first = trendData[0];
     const last  = trendData[trendData.length - 1];
     const mDelta = last.avgMoisture - first.avgMoisture;
-    const tDelta = last.avgTemp - first.avgTemp;
-    if (mDelta < -15 && tDelta > 2) return 'Temperature rose while moisture dropped — heat is accelerating drying.';
-    if (mDelta < -15) return 'Significant moisture loss over this period. Zones may need attention soon.';
-    if (mDelta < -5)  return 'Steady moisture decline. Monitor closely and consider watering soon.';
-    if (mDelta > 12)  return 'Moisture levels recovered — likely following a recent watering event.';
-    if (mDelta > 4)   return 'Gradual moisture rise detected. Conditions are improving.';
-    return 'Conditions remained relatively stable across this period.';
+    if (mDelta < -12) return 'Moisture has been dropping. Check the dry zones — some beds may need water soon.';
+    if (mDelta < -4)  return 'Moisture is slowly going down. Keep an eye on the drier zones.';
+    if (mDelta > 10)  return 'Moisture has gone up — watering looks like it helped.';
+    if (mDelta > 4)   return 'Moisture is rising. Things are getting better.';
+    return 'Greenhouse moisture has stayed steady. Nothing needs attention right now.';
   }, [trendData]);
-
-  // Greenhouse insights
-  const ghInsights = useMemo((): string[] => {
-    const result: string[] = [];
-    // Fastest-drying zone
-    const drying = zoneChanges.find((z) => z.ratePerHour !== null && z.ratePerHour < -1.5);
-    if (drying) {
-      result.push(
-        `${drying.zone.displayLabel ?? drying.zone.visualLabel} is drying fastest` +
-        ` (${Math.abs(drying.ratePerHour!).toFixed(1)}%/hr).`,
-      );
-    }
-    // Plant group needing most water
-    const dryGroup = plantGroups.find((g) => g.needsWater > 0);
-    if (dryGroup) {
-      result.push(
-        `${dryGroup.profile.name} zones need attention — ` +
-        `${dryGroup.needsWater} of ${dryGroup.count} below target moisture.`,
-      );
-    }
-    // Stable plant group
-    const stable = plantGroups.find((g) => g.needsWater === 0 && g.tooWet === 0 && g.good > 0);
-    if (stable) {
-      result.push(`${stable.profile.name} is stable — all ${stable.good} zone${stable.good > 1 ? 's' : ''} within range.`);
-    }
-    // Temp/moisture trend correlation
-    if (trendData.length >= 3) {
-      const first = trendData[0];
-      const last  = trendData[trendData.length - 1];
-      const mDrop = first.avgMoisture - last.avgMoisture;
-      const tRise = last.avgTemp - first.avgTemp;
-      if (mDrop > 8 && tRise > 1.5) {
-        result.push('Temperature increases are correlating with faster moisture loss.');
-      }
-    }
-    // Watering effect
-    if (wateringResponses.length > 0) {
-      const r = wateringResponses[0];
-      if (r.peakPct !== null && r.peakPct - r.beforePct > 10) {
-        result.push(`Watering ${r.zoneId} raised moisture by ${Math.round(r.peakPct - r.beforePct)}%.`);
-      }
-    }
-    if (result.length === 0 && statusCounts.healthy > 0) {
-      result.push('All tracked zones are within their target moisture ranges. Well done!');
-    }
-    if (result.length === 0) {
-      result.push('Collect more sensor history to unlock greenhouse behavior insights.');
-    }
-    return result.slice(0, 5);
-  }, [zoneChanges, plantGroups, trendData, wateringResponses, statusCounts]);
 
   // Research stats
   const totalSamples = trendData.reduce((s, p) => s + p.sampleCount, 0);
@@ -577,7 +557,6 @@ export function TrendsDashboard({
             onRangeChange={setRange}
             simHistory={simHistory}
             chartInsight={chartInsight}
-            ghInsights={ghInsights}
           />
         )}
 
@@ -589,6 +568,10 @@ export function TrendsDashboard({
             search={zoneSearch}
             onSearch={setZoneSearch}
             lastWateredByZone={lastWateredByZone}
+            zoneHistory={zoneHistory}
+            readings={readings}
+            range={range}
+            onRangeChange={setRange}
           />
         )}
 
@@ -607,6 +590,7 @@ export function TrendsDashboard({
         {activeTab === 'watering' && (
           <WateringSection
             wateringEvents={wateringEvents}
+            wateringResponses={wateringResponses}
             range={range}
             onRangeChange={setRange}
           />
@@ -654,20 +638,19 @@ interface OverviewSectionProps {
   onRangeChange: (r: TimeRange) => void;
   simHistory?: LatestReading[];
   chartInsight: string | null;
-  ghInsights: string[];
 }
 
 function OverviewSection({
   statusCounts, historicalStatusCounts,
   avgMoisturePct, avgTempC,
   trendData, isLoading, range, onRangeChange, simHistory,
-  chartInsight, ghInsights,
+  chartInsight,
 }: OverviewSectionProps) {
   const totalSamples = trendData.reduce((s, p) => s + p.sampleCount, 0);
   const bucketNoun   = range === '24h' ? 'hr' : (range === '3m' || range === '1y') ? 'wk' : 'day';
   const hasTrendData = trendData.length >= 2;
   const noHistory    = !hasTrendData && !isLoading;
-  const insights     = ghInsights.slice(0, 3);
+  const hasTemp      = trendData.some((p) => p.avgTemp > 0);
 
   return (
     <>
@@ -770,9 +753,9 @@ function OverviewSection({
           </div>
         ) : (
           <>
-            {/* 6-series chart: left Y=% (moisture+humidity), right Y=°C (soil+air temp) */}
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={trendData} margin={{ top: 8, right: 4, left: -18, bottom: 4 }}>
+            {/* One clean chart — avg moisture (+ optional avg soil temp). No dashed lines. */}
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={trendData} margin={{ top: 8, right: hasTemp ? 6 : 4, left: -18, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
                 <XAxis
                   dataKey="label"
@@ -781,7 +764,6 @@ function OverviewSection({
                   axisLine={false}
                   interval="preserveStartEnd"
                 />
-                {/* Left axis: % values (moisture 0-100, humidity 0-100) */}
                 <YAxis
                   yAxisId="pct"
                   domain={[0, 100]}
@@ -790,53 +772,35 @@ function OverviewSection({
                   axisLine={false}
                   tickFormatter={(v: number) => `${v}%`}
                 />
-                {/* Right axis: °C values (soil temp + RPi air temp) */}
-                <YAxis
-                  yAxisId="temp"
-                  orientation="right"
-                  domain={[0, 'auto']}
-                  width={40}
-                  tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v: number) => `${v}°`}
-                />
+                {hasTemp && (
+                  <YAxis
+                    yAxisId="temp"
+                    orientation="right"
+                    domain={[0, 'auto']}
+                    width={40}
+                    tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v: number) => `${v}°`}
+                  />
+                )}
                 <Tooltip
                   contentStyle={tooltipStyle}
                   formatter={tooltipFormatter}
                   labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
                 />
-                {/* All 6 lines always rendered — series without data sit flat at 0 */}
-                <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureIn"  stroke={MOISTURE_IN_COLOR}  strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_IN_COLOR  }} />
-                <Line yAxisId="pct"  type="monotone" dataKey="avgSoilMoistureOut" stroke={MOISTURE_OUT_COLOR} strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_OUT_COLOR }} />
-                <Line yAxisId="pct"  type="monotone" dataKey="envHumidityPct"     stroke={ENV_HUM_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_HUM_COLOR      }} />
-                <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempIn"      stroke={TEMP_IN_COLOR}      strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_IN_COLOR      }} />
-                <Line yAxisId="temp" type="monotone" dataKey="avgSoilTempOut"     stroke={TEMP_OUT_COLOR}     strokeWidth={2.5} dot={false} strokeDasharray="5 3" activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_OUT_COLOR     }} />
-                <Line yAxisId="temp" type="monotone" dataKey="envTempC"           stroke={ENV_TEMP_COLOR}     strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: ENV_TEMP_COLOR     }} />
+                <Line yAxisId="pct" type="monotone" dataKey="avgMoisture" stroke={MOISTURE_COLOR} strokeWidth={3} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: MOISTURE_COLOR }} />
+                {hasTemp && (
+                  <Line yAxisId="temp" type="monotone" dataKey="avgTemp" stroke={TEMP_COLOR} strokeWidth={3} dot={false} activeDot={{ r: 5, strokeWidth: 0, fill: TEMP_COLOR }} />
+                )}
               </LineChart>
             </ResponsiveContainer>
 
-            {/* Legend — always all 6 */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 14px', marginTop: 10, marginBottom: 2 }}>
-              <LegendDot color={MOISTURE_IN_COLOR}  label="Moisture (GH)"      />
-              <LegendDot color={MOISTURE_OUT_COLOR} label="Moisture (outdoor)" dashed />
-              <LegendDot color={ENV_HUM_COLOR}      label="Humidity (RPi)"     />
-              <LegendDot color={TEMP_IN_COLOR}      label="Soil temp (GH)"     />
-              <LegendDot color={TEMP_OUT_COLOR}     label="Soil temp (outdoor)" dashed />
-              <LegendDot color={ENV_TEMP_COLOR}     label="Air temp (RPi)"     />
+            {/* Simple legend — at most two lines */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '6px 18px', marginTop: 10 }}>
+              <LegendDot color={MOISTURE_COLOR} label="Avg moisture" />
+              {hasTemp && <LegendDot color={TEMP_COLOR} label="Avg soil temp" />}
             </div>
-
-            {/* Chart insight + reading count */}
-            {chartInsight && (
-              <div style={{
-                marginTop: 10, padding: '8px 12px',
-                background: 'var(--bg-sub, #f1ede6)', borderRadius: 10,
-                fontSize: 12, color: 'var(--ink-2)', fontWeight: 600,
-                lineHeight: 1.5, fontStyle: 'italic',
-              }}>
-                {chartInsight}
-              </div>
-            )}
             <div style={{ fontSize: 10, color: '#b0b8c1', fontWeight: 600, textAlign: 'right', marginTop: 6 }}>
               {totalSamples} readings · {trendData.length} {bucketNoun}{trendData.length !== 1 ? 's' : ''}
             </div>
@@ -844,36 +808,43 @@ function OverviewSection({
         )}
       </div>
 
-      {/* ── Section 3: Insight Summary — one card per insight ───────────── */}
-      {insights.map((text, i) => (
-        <div key={i} className="gm-card" style={{
+      {/* ── Section 3: One plain-language insight card ──────────────────── */}
+      {hasTrendData && chartInsight && (
+        <div className="gm-card" style={{
           padding: '14px 16px', flexShrink: 0,
           display: 'flex', gap: 12, alignItems: 'flex-start',
         }}>
-          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>
-            {i === 0 ? '💡' : i === 1 ? '🌿' : '📊'}
-          </span>
+          <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>💡</span>
           <div style={{
             fontSize: 13, fontWeight: 600, color: 'var(--ink)',
             lineHeight: 1.65, flex: 1, minWidth: 0,
           }}>
-            {text}
+            {chartInsight}
           </div>
         </div>
-      ))}
+      )}
     </>
   );
 }
 
 // ─── Zones ────────────────────────────────────────────────────────────────────
 
-function ZonesSection({ filteredZones, allCount, search, onSearch, lastWateredByZone }: {
+function ZonesSection({ filteredZones, allCount, search, onSearch, lastWateredByZone, zoneHistory, readings, range, onRangeChange }: {
   filteredZones: ZoneWithStats[];
   allCount: number;
   search: string;
   onSearch: (v: string) => void;
   lastWateredByZone: Map<string, string>;
+  zoneHistory: Map<string, Array<{ ts: number; moisture: number }>>;
+  readings: LatestReading[];
+  range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
 }) {
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+
+  // Selected zone — falls back to the first (most urgent) so a chart is always shown
+  const selected = filteredZones.find((z) => z.zone.visualLabel === selectedLabel) ?? filteredZones[0] ?? null;
+
   return (
     <>
       <div style={{ position: 'relative' }}>
@@ -889,41 +860,63 @@ function ZonesSection({ filteredZones, allCount, search, onSearch, lastWateredBy
           }}
         />
       </div>
+
+      {/* ── Selected zone detail: header + one moisture chart + plain sentence ── */}
+      {selected && (
+        <ZoneDetailCard
+          zs={selected}
+          history={selected.zone.backendZoneId ? zoneHistory.get(selected.zone.backendZoneId) : null}
+          readings={readings}
+          range={range}
+          onRangeChange={onRangeChange}
+        />
+      )}
+
       <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, padding: '0 2px' }}>
-        {filteredZones.length} of {allCount} zone{allCount !== 1 ? 's' : ''}
+        Tap a zone · {filteredZones.length} of {allCount} zone{allCount !== 1 ? 's' : ''}
       </div>
       {filteredZones.length === 0 ? (
         <EmptyCard icon="🗺️" title="No zones found" sub="Try a different search term." />
       ) : (
         <div className="gm-card" style={{ padding: '0 14px' }}>
-          {filteredZones.map(({ zone, profile, moisture, label, color }, i) => {
+          {filteredZones.map(({ zone, profile, moisture }, i) => {
+            const status = getSimpleStatus(zone.hasReading ? moisture : null, profile);
+            const trend = moistureTrend(historyDelta(zone.backendZoneId ? zoneHistory.get(zone.backendZoneId) : null));
             const lastWatered = zone.visualLabel ? lastWateredByZone.get(zone.visualLabel) : null;
+            const isSel = selected?.zone.visualLabel === zone.visualLabel;
             return (
-              <div key={zone.visualLabel} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0',
-                borderBottom: i < filteredZones.length - 1 ? '1px solid var(--line)' : 'none',
-              }}>
-                <div style={{ width: 34, height: 34, borderRadius: 9, background: color + '18', display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0 }}>
+              <div
+                key={zone.visualLabel}
+                onClick={() => setSelectedLabel(zone.visualLabel)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '10px 8px', margin: '0 -8px',
+                  cursor: 'pointer', borderRadius: 12,
+                  background: isSel ? 'var(--primary-soft)' : 'transparent',
+                  borderBottom: i < filteredZones.length - 1 ? '1px solid var(--line)' : 'none',
+                }}
+              >
+                <div style={{ width: 34, height: 34, borderRadius: 9, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0 }}>
                   {profile?.icon ?? '🌱'}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {zone.displayLabel ?? zone.visualLabel}
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
+                  <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {profile ? `${profile.name} · target ${profile.moistureMin}–${profile.moistureMax}%` : 'No plant assigned'}
                     {lastWatered && ` · watered ${fmtRelative(lastWatered)}`}
                   </div>
-                  <div style={{ marginTop: 5, height: 4, borderRadius: 2, background: 'var(--line)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${Math.min(100, moisture)}%`, background: color, borderRadius: 2, transition: 'width 0.4s' }} />
-                  </div>
+                  {trend && (
+                    <div style={{ fontSize: 10, fontWeight: 800, color: trend.color, marginTop: 3 }}>
+                      {trend.icon} {trend.label}
+                    </div>
+                  )}
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color }}>{moisture.toFixed(0)}%</div>
-                  <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 5, background: color + '18', color }}>{label}</span>
-                  {zone.soilTempC !== null && (
-                    <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>{zone.soilTempC.toFixed(1)}°C</div>
-                  )}
+                  <div style={{ fontSize: 15, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui" }}>
+                    {zone.hasReading ? `${moisture.toFixed(0)}%` : '—'}
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 5, background: status.color + '18', color: status.color, whiteSpace: 'nowrap', display: 'inline-block' }}>{status.label}</span>
                 </div>
               </div>
             );
@@ -934,22 +927,47 @@ function ZonesSection({ filteredZones, allCount, search, onSearch, lastWateredBy
   );
 }
 
-// ─── Plants ───────────────────────────────────────────────────────────────────
-
-function PlantsSection({ plantGroups, readings, zones, range, onRangeChange }: {
-  plantGroups: PlantGroup[];
+// One selected zone: header, single moisture line chart, soil-temp text, plain sentence
+function ZoneDetailCard({ zs, history, readings, range, onRangeChange }: {
+  zs: ZoneWithStats;
+  history: Array<{ ts: number; moisture: number }> | null | undefined;
   readings: LatestReading[];
-  zones: VisualZone[];
   range: TimeRange;
   onRangeChange: (r: TimeRange) => void;
 }) {
-  if (plantGroups.length === 0) {
-    return <EmptyCard icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." />;
-  }
+  const { zone, profile, moisture } = zs;
+  const name = zone.displayLabel ?? zone.visualLabel;
+  const status = getSimpleStatus(zone.hasReading ? moisture : null, profile);
+  const trend = moistureTrend(historyDelta(history));
+  const chartData = useMemo(
+    () => zone.backendZoneId ? buildZoneChartData(zone.backendZoneId, readings, range) : [],
+    [zone.backendZoneId, readings, range],
+  );
+  const hasChart = chartData.length >= 2;
+
   return (
-    <>
+    <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 12, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>
+          {profile?.icon ?? '🌱'}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 17, color: 'var(--ink)' }}>{name}</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>
+            {profile ? `${profile.name} · target ${profile.moistureMin}–${profile.moistureMax}%` : 'No plant assigned'}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 25, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>
+            {zone.hasReading ? `${moisture.toFixed(0)}%` : '—'}
+          </div>
+          <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 5, background: status.color + '18', color: status.color }}>{status.label}</span>
+        </div>
+      </div>
+
       {/* Range picker */}
-      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none' }}>
+      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none', marginBottom: 10 }}>
         {RANGE_OPTIONS.map((r) => (
           <button key={r.id} onClick={() => onRangeChange(r.id)} style={{
             flexShrink: 0, padding: '4px 10px', borderRadius: 8, border: '1.5px solid',
@@ -963,108 +981,213 @@ function PlantsSection({ plantGroups, readings, zones, range, onRangeChange }: {
         ))}
       </div>
 
-      {plantGroups.map((g) => {
-        const avg = g.moistureCount > 0 ? g.totalMoisture / g.moistureCount : 0;
-        const urgentColor = g.needsWater > 0 ? '#f59e0b' : g.tooWet > 0 ? '#0ea5e9' : '#22c55e';
-        const urgentLabel = g.needsWater > 0 ? 'Needs water' : g.tooWet > 0 ? 'Too wet' : 'Stable';
-        const chartData = buildPlantChartData(g.profile.id, zones, readings, range);
-        const hasChart = chartData.length >= 2;
-        const hasTemp = chartData.some(p => p.temp !== null);
+      {/* One simple moisture chart — moisture only */}
+      {hasChart ? (
+        <>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={chartData} margin={{ top: 6, right: 6, left: -18, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${v}%`} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(value: number) => [`${value}%`, 'Soil moisture']}
+                labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 10 }}
+              />
+              {profile && <ReferenceArea y1={profile.moistureMin} y2={profile.moistureMax} fill="#22c55e" fillOpacity={0.09} />}
+              <Line type="monotone" dataKey="moisture" stroke={status.color} strokeWidth={3} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: status.color }} />
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+            <LegendDot color={status.color} label="Soil moisture" />
+            {profile && <LegendDot color="#22c55e" label={`Target ${profile.moistureMin}–${profile.moistureMax}%`} />}
+          </div>
+        </>
+      ) : (
+        <div style={{ padding: '18px 12px', display: 'grid', placeItems: 'center', background: 'var(--bg-sub)', borderRadius: 12, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
+          📡 More trends will appear as sensors collect data.
+        </div>
+      )}
 
-        return (
-          <div key={g.profile.id} className="gm-card" style={{ padding: 14 }}>
-            {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>
+      {/* Soil temp as plain text — not on the chart */}
+      {zone.soilTempC !== null && (
+        <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, marginTop: 8 }}>
+          🌡 Soil temp now: <span style={{ color: 'var(--ink-2)' }}>{zone.soilTempC.toFixed(1)}°C</span>
+        </div>
+      )}
+
+      {/* Plain-language sentence */}
+      <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--bg-sub, #f1ede6)', borderRadius: 10, fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600, lineHeight: 1.5 }}>
+        {zoneSentence(name, status.label, trend, range)}
+      </div>
+    </div>
+  );
+}
+
+// ─── Plants ───────────────────────────────────────────────────────────────────
+
+function plantGroupStatus(g: PlantGroup) {
+  if (g.needsWater > 0) return { label: 'Needs water', color: '#f59e0b' };
+  if (g.tooWet > 0)     return { label: 'Too wet',     color: '#0ea5e9' };
+  return { label: 'Good', color: '#22c55e' };
+}
+
+function PlantsSection({ plantGroups, readings, zones, range, onRangeChange }: {
+  plantGroups: PlantGroup[];
+  readings: LatestReading[];
+  zones: VisualZone[];
+  range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
+}) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  if (plantGroups.length === 0) {
+    return <EmptyCard icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." />;
+  }
+
+  const selected = plantGroups.find((g) => g.profile.id === selectedId) ?? plantGroups[0];
+
+  return (
+    <>
+      {/* ── Selected plant: header + one moisture line + plain sentence ── */}
+      <PlantDetailCard g={selected} readings={readings} zones={zones} range={range} onRangeChange={onRangeChange} />
+
+      {/* ── Tappable plant list ── */}
+      <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 700, padding: '0 2px' }}>Tap a plant type</div>
+      <div className="gm-card" style={{ padding: '0 14px' }}>
+        {plantGroups.map((g, i) => {
+          const avg = g.moistureCount > 0 ? g.totalMoisture / g.moistureCount : 0;
+          const status = plantGroupStatus(g);
+          const isSel = selected.profile.id === g.profile.id;
+          return (
+            <div
+              key={g.profile.id}
+              onClick={() => setSelectedId(g.profile.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 11, padding: '11px 8px', margin: '0 -8px',
+                cursor: 'pointer', borderRadius: 12,
+                background: isSel ? 'var(--primary-soft)' : 'transparent',
+                borderBottom: i < plantGroups.length - 1 ? '1px solid var(--line)' : 'none',
+              }}
+            >
+              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 19, flexShrink: 0 }}>
                 {g.profile.icon ?? '🌱'}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>{g.profile.name}</div>
-                  <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 7, background: urgentColor + '18', color: urgentColor }}>{urgentLabel}</span>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 2 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--ink)' }}>{g.profile.name}</div>
+                <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
                   {g.count} zone{g.count !== 1 ? 's' : ''} · target {g.profile.moistureMin}–{g.profile.moistureMax}%
                 </div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color: urgentColor, fontFamily: "'Baloo 2', system-ui" }}>{avg.toFixed(0)}%</div>
-                <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600 }}>avg now</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui" }}>{avg.toFixed(0)}%</div>
+                <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 5, background: status.color + '18', color: status.color, whiteSpace: 'nowrap', display: 'inline-block' }}>{status.label}</span>
               </div>
             </div>
-
-            {/* Moisture + Temp chart */}
-            {hasChart ? (
-              <>
-                <ResponsiveContainer width="100%" height={190}>
-                  <ComposedChart data={chartData} margin={{ top: 6, right: hasTemp ? 36 : 4, left: -20, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-                    <YAxis
-                      yAxisId="pct" domain={[0, 100]}
-                      tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
-                      tickLine={false} axisLine={false}
-                      tickFormatter={(v: number) => `${v}%`}
-                    />
-                    {hasTemp && (
-                      <YAxis
-                        yAxisId="temp" orientation="right" domain={[0, 'auto']} width={36}
-                        tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
-                        tickLine={false} axisLine={false}
-                        tickFormatter={(v: number) => `${v}°`}
-                      />
-                    )}
-                    <Tooltip
-                      contentStyle={tooltipStyle}
-                      formatter={(value: number, name: string) => {
-                        if (name === 'moisture') return [`${value}%`, 'Soil moisture'];
-                        if (name === 'temp')     return [`${value}°C`, 'Soil temp'];
-                        return [value, name];
-                      }}
-                      labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 10 }}
-                    />
-                    {/* Shaded target range */}
-                    <ReferenceArea yAxisId="pct" y1={g.profile.moistureMin} y2={g.profile.moistureMax} fill="#22c55e" fillOpacity={0.09} />
-                    <ReferenceLine yAxisId="pct" y={g.profile.moistureMin} stroke="#22c55e" strokeDasharray="4 2" strokeWidth={1} opacity={0.55} label={{ value: `${g.profile.moistureMin}%`, position: 'insideBottomLeft', fontSize: 9, fill: '#22c55e' }} />
-                    <ReferenceLine yAxisId="pct" y={g.profile.moistureMax} stroke="#22c55e" strokeDasharray="4 2" strokeWidth={1} opacity={0.55} label={{ value: `${g.profile.moistureMax}%`, position: 'insideTopLeft', fontSize: 9, fill: '#22c55e' }} />
-                    <Line yAxisId="pct"  type="monotone" dataKey="moisture" name="moisture" stroke={urgentColor} strokeWidth={2.5} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: urgentColor }} />
-                    {hasTemp && (
-                      <Line yAxisId="temp" type="monotone" dataKey="temp" name="temp" stroke="#94a3b8" strokeWidth={1.5} dot={false} strokeDasharray="4 2" activeDot={{ r: 3, strokeWidth: 0, fill: '#94a3b8' }} />
-                    )}
-                  </ComposedChart>
-                </ResponsiveContainer>
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
-                  <LegendDot color={urgentColor} label="Soil moisture" />
-                  {hasTemp && <LegendDot color="#94a3b8" label="Soil temp" dashed />}
-                  <LegendDot color="#22c55e" label={`Target ${g.profile.moistureMin}–${g.profile.moistureMax}%`} />
-                </div>
-              </>
-            ) : (
-              <div style={{ height: 64, display: 'grid', placeItems: 'center', background: 'var(--bg-sub)', borderRadius: 12, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>
-                📡 Not enough history — chart appears after a few readings
-              </div>
-            )}
-
-            {/* Zone status pills */}
-            <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
-              {g.needsWater > 0 && <CountPill value={g.needsWater} label="need water" color="#f59e0b" />}
-              {g.tooWet > 0    && <CountPill value={g.tooWet}    label="too wet"    color="#0ea5e9" />}
-              {g.good > 0      && <CountPill value={g.good}      label="healthy"    color="#22c55e" />}
-            </div>
-            {g.profile.notes && (
-              <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 10, fontStyle: 'italic', lineHeight: 1.4 }}>{g.profile.notes}</div>
-            )}
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </>
+  );
+}
+
+// One selected plant type: header, single moisture line (one line only), plain sentence
+function PlantDetailCard({ g, readings, zones, range, onRangeChange }: {
+  g: PlantGroup;
+  readings: LatestReading[];
+  zones: VisualZone[];
+  range: TimeRange;
+  onRangeChange: (r: TimeRange) => void;
+}) {
+  const avg = g.moistureCount > 0 ? g.totalMoisture / g.moistureCount : 0;
+  const status = plantGroupStatus(g);
+  const chartData = useMemo(() => buildPlantChartData(g.profile.id, zones, readings, range), [g.profile.id, zones, readings, range]);
+  const hasChart = chartData.length >= 2;
+  const delta = chartData.length >= 2 ? chartData[chartData.length - 1].moisture - chartData[0].moisture : null;
+  const trend = moistureTrend(delta, 'plant');
+
+  return (
+    <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>
+          {g.profile.icon ?? '🌱'}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 17, color: 'var(--ink)' }}>{g.profile.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>
+            {g.count} zone{g.count !== 1 ? 's' : ''} · target {g.profile.moistureMin}–{g.profile.moistureMax}%
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 25, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{avg.toFixed(0)}%</div>
+          <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 5, background: status.color + '18', color: status.color }}>{status.label}</span>
+        </div>
+      </div>
+
+      {/* Range picker */}
+      <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none', marginBottom: 10 }}>
+        {RANGE_OPTIONS.map((r) => (
+          <button key={r.id} onClick={() => onRangeChange(r.id)} style={{
+            flexShrink: 0, padding: '4px 10px', borderRadius: 8, border: '1.5px solid',
+            borderColor: range === r.id ? 'var(--primary)' : 'var(--line)',
+            background: range === r.id ? 'var(--primary-soft)' : 'transparent',
+            color: range === r.id ? 'var(--primary)' : 'var(--ink-3)',
+            fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+          }}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {/* One simple moisture line only (no temp, no dashed lines) */}
+      {hasChart ? (
+        <>
+          <ResponsiveContainer width="100%" height={190}>
+            <LineChart data={chartData} margin={{ top: 6, right: 6, left: -18, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e8e4dc" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => `${v}%`} />
+              <Tooltip
+                contentStyle={tooltipStyle}
+                formatter={(value: number) => [`${value}%`, 'Avg moisture']}
+                labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 10 }}
+              />
+              <ReferenceArea y1={g.profile.moistureMin} y2={g.profile.moistureMax} fill="#22c55e" fillOpacity={0.09} />
+              <Line type="monotone" dataKey="moisture" stroke={status.color} strokeWidth={3} dot={false} activeDot={{ r: 4, strokeWidth: 0, fill: status.color }} />
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+            <LegendDot color={status.color} label="Avg moisture" />
+            <LegendDot color="#22c55e" label={`Target ${g.profile.moistureMin}–${g.profile.moistureMax}%`} />
+          </div>
+        </>
+      ) : (
+        <div style={{ padding: '18px 12px', display: 'grid', placeItems: 'center', background: 'var(--bg-sub)', borderRadius: 12, fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'center', lineHeight: 1.5 }}>
+          📡 More trends will appear as sensors collect data.
+        </div>
+      )}
+
+      {/* Zone status pills */}
+      <div style={{ display: 'flex', gap: 14, marginTop: 12 }}>
+        {g.needsWater > 0 && <CountPill value={g.needsWater} label="need water" color="#f59e0b" />}
+        {g.tooWet > 0    && <CountPill value={g.tooWet}    label="too wet"    color="#0ea5e9" />}
+        {g.good > 0      && <CountPill value={g.good}      label="healthy"    color="#22c55e" />}
+      </div>
+
+      {/* Plain-language sentence */}
+      <div style={{ marginTop: 10, padding: '10px 12px', background: 'var(--bg-sub, #f1ede6)', borderRadius: 10, fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600, lineHeight: 1.5 }}>
+        {plantSentence(g.profile.name, status.label, trend)}
+      </div>
+    </div>
   );
 }
 
 // ─── Watering ─────────────────────────────────────────────────────────────────
 
-function WateringSection({ wateringEvents, range, onRangeChange }: {
+function WateringSection({ wateringEvents, wateringResponses, range, onRangeChange }: {
   wateringEvents: ActivityEntry[];
+  wateringResponses: WateringResponse[];
   range: TimeRange;
   onRangeChange: (r: TimeRange) => void;
 }) {
@@ -1094,6 +1217,21 @@ function WateringSection({ wateringEvents, range, onRangeChange }: {
 
   return (
     <>
+      {/* ── Did watering help? Before/after moisture cards ── */}
+      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '0 2px' }}>
+        Did watering help? 💧
+      </div>
+      {wateringResponses.length > 0 ? (
+        wateringResponses.map((r, i) => <WaterHelpCard key={r.event.id ?? i} r={r} />)
+      ) : (
+        <div className="gm-card" style={{ padding: '14px 16px', display: 'flex', gap: 11, alignItems: 'flex-start' }}>
+          <span style={{ fontSize: 15, flexShrink: 0, marginTop: 1 }}>📡</span>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+            Before/after results will appear here once sensors record moisture around your watering times.
+          </div>
+        </div>
+      )}
+
       {/* Summary strip */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
         {[
@@ -1168,10 +1306,10 @@ function WateringSection({ wateringEvents, range, onRangeChange }: {
         </div>
       )}
 
-      {/* Zone frequency visual */}
+      {/* Last watered by zone */}
       <div className="gm-card" style={{ padding: 14 }}>
         <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>
-          By Zone
+          Last watered by zone
         </div>
         {[...byZone.entries()].map(([zoneId, info]) => {
           const barPct = Math.round((info.count / Math.max(...[...byZone.values()].map(v => v.count))) * 100);
@@ -1221,6 +1359,49 @@ function WateringSection({ wateringEvents, range, onRangeChange }: {
         ))}
       </div>
     </>
+  );
+}
+
+// One before/after watering result — answers "did watering help?" in plain words
+function WaterHelpCard({ r }: { r: WateringResponse }) {
+  const after = r.peakPct ?? r.after6h ?? r.after12h;
+  const diff = after !== null ? after - r.beforePct : null;
+  let result: { label: string; color: string; icon: string };
+  if (diff === null)      result = { label: 'No reading yet', color: '#94a3b8', icon: '⏳' };
+  else if (diff >= 8)     result = { label: 'Watering helped', color: '#22c55e', icon: '✅' };
+  else if (diff >= 2)     result = { label: 'Small rise',      color: '#0ea5e9', icon: '💧' };
+  else                    result = { label: 'Little change',   color: '#f59e0b', icon: '➖' };
+
+  const plantName = r.event.plantName;
+  return (
+    <div className="gm-card" style={{ padding: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <span style={{ fontSize: 16 }}>💧</span>
+        <div style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--ink)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {r.zoneId}{plantName && <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {plantName}</span>}
+        </div>
+        <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 8, background: result.color + '18', color: result.color, whiteSpace: 'nowrap' }}>
+          {result.icon} {result.label}
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <BeforeAfterTile label="Before watering" value={`${Math.round(r.beforePct)}%`} color="#94a3b8" />
+        <span style={{ fontSize: 18, color: 'var(--ink-3)', fontWeight: 800 }}>→</span>
+        <BeforeAfterTile label="After watering" value={after !== null ? `${Math.round(after)}%` : '—'} color={result.color} />
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--ink-3)', fontWeight: 600, marginTop: 8 }}>
+        Watered {fmtRelative(r.event.timestamp)}
+      </div>
+    </div>
+  );
+}
+
+function BeforeAfterTile({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div style={{ flex: 1, background: 'var(--bg-sub, #f1ede6)', borderRadius: 12, padding: '12px 10px', textAlign: 'center' }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--ink-3)', marginTop: 5 }}>{label}</div>
+    </div>
   );
 }
 
