@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard,
+  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading,
 } from './TrendsCharts';
 import type { ChartSeries } from './TrendsCharts';
 import { relTime } from './trendsModel';
@@ -17,7 +17,8 @@ import type {
 } from './trendsModel';
 import type { TimeRange } from '../../hooks/useReadingsHistory';
 
-interface TabProps { gm: GreenhouseModel; range: TimeRange; setRange: (r: TimeRange) => void; }
+interface TabProps { gm: GreenhouseModel; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; }
+type ListTabProps = TabProps & { selected: string | null; onSelect: (id: string) => void; onBack: () => void };
 
 const RANGE_WORD: Record<TimeRange, string> = {
   '24h': 'last 24 hours', '7d': 'last week', '30d': 'last month', '3m': 'last 3 months', '1y': 'last year',
@@ -60,8 +61,8 @@ function TrendText({ trend, suffix }: { trend: Trend; suffix?: string }) {
 }
 
 // ══ OVERVIEW · greenhouse report card ════════════════════════════════════════
-function HealthChip({ icon, count, label, prev, goodWhenUp }: {
-  icon: string; count: number; label: string; prev: number | null; goodWhenUp: boolean;
+function HealthChip({ color, count, label, prev, goodWhenUp = false }: {
+  color: string; count: number; label: string; prev: number | null; goodWhenUp?: boolean;
 }) {
   const delta = prev === null ? null : count - prev;
   let deltaEl;
@@ -72,10 +73,12 @@ function HealthChip({ icon, count, label, prev, goodWhenUp }: {
     deltaEl = <span style={{ color: good ? '#16a34a' : '#ef4444' }}>{up ? '↑' : '↓'} {Math.abs(delta)} since yesterday</span>;
   }
   return (
-    <div style={{ textAlign: 'center', padding: '12px 6px 10px', background: icon + '14', borderRadius: 14 }}>
-      <div style={{ display: 'grid', placeItems: 'center', marginBottom: 4 }}><Droplet color={icon} size={20} /></div>
-      <div style={{ fontSize: 24, fontWeight: 800, color: icon, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{count}</div>
-      <div style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 800, marginTop: 4 }}>{label}</div>
+    <div style={{ textAlign: 'center', padding: '12px 6px 10px', background: color + '14', borderRadius: 14 }}>
+      <div style={{ display: 'grid', placeItems: 'center', marginBottom: 5 }}>
+        <span style={{ width: 18, height: 18, borderRadius: '50%', background: color, display: 'block' }} />
+      </div>
+      <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{count}</div>
+      <div style={{ fontSize: 11, color: 'var(--ink-2)', fontWeight: 800, marginTop: 4, lineHeight: 1.2 }}>{label}</div>
       <div style={{ fontSize: 9, fontWeight: 700, marginTop: 4, lineHeight: 1.3 }}>{deltaEl}</div>
     </div>
   );
@@ -89,7 +92,7 @@ function ghInsight(d: { moisture: number; temp: number | null }, counts: HealthC
   return 'Conditions stayed fairly steady across the greenhouse.';
 }
 
-export function OverviewView({ gm, range, setRange }: TabProps) {
+export function OverviewView({ gm, range, setRange, loading }: TabProps) {
   const s = useMemo(() => gm.genGreenhouseSeries(range), [gm, range]);
   const counts = gm.healthCounts();
   const prev = gm.prevHealthCounts();
@@ -121,9 +124,9 @@ export function OverviewView({ gm, range, setRange }: TabProps) {
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
         <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>Greenhouse Health</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
-          <HealthChip icon="#ef4444" count={counts.need}     label="Need Water" prev={prev?.need ?? null}     goodWhenUp={false} />
-          <HealthChip icon="#f59e0b" count={counts.watching} label="Watching"   prev={prev?.watching ?? null} goodWhenUp={false} />
-          <HealthChip icon="#16a34a" count={counts.healthy}  label="Healthy"    prev={prev?.healthy ?? null}  goodWhenUp={true} />
+          <HealthChip color="#16a34a" count={counts.healthy}  label="Healthy"         prev={prev?.healthy ?? null}  goodWhenUp />
+          <HealthChip color="#f59e0b" count={counts.watching} label="Monitor"         prev={prev?.watching ?? null} />
+          <HealthChip color="#ef4444" count={counts.need}     label="Needs Attention" prev={prev?.need ?? null} />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <div style={{ background: 'var(--bg-sub)', borderRadius: 12, padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -150,7 +153,9 @@ export function OverviewView({ gm, range, setRange }: TabProps) {
         <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '0 2px', marginBottom: 10 }}>Greenhouse Trend</div>
         <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
         {s.length < 2 ? (
-          <EmptyHint icon="📡" title="No trend data yet" sub="More trends will appear as sensors collect data." />
+          loading
+            ? <ChartLoading height={210} />
+            : <EmptyHint icon="📡" title="No trend data yet" sub="More trends will appear as sensors collect data." />
         ) : (
           <>
             <div style={{ display: 'flex', gap: 16, margin: '0 4px 8px' }}>
@@ -173,14 +178,13 @@ export function OverviewView({ gm, range, setRange }: TabProps) {
 }
 
 // ══ ZONES · list → detail ════════════════════════════════════════════════════
-export function ZonesView({ gm, range, setRange }: TabProps) {
-  const [selected, setSelected] = useState<string | null>(null);
+export function ZonesView({ gm, range, setRange, loading, selected, onSelect, onBack }: ListTabProps) {
   const items = gm.zoneList();
   const sel = selected ? items.find((it) => it.zone.backendId === selected) : null;
 
-  if (sel) return <ZoneDetail gm={gm} item={sel} range={range} setRange={setRange} onBack={() => setSelected(null)} />;
+  if (sel) return <ZoneDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} />;
 
-  return <ZoneList items={items} onPick={(z) => setSelected(z.backendId)} />;
+  return <ZoneList items={items} onPick={(z) => onSelect(z.backendId)} />;
 }
 
 function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneList']>; onPick: (z: ZoneLite) => void }) {
@@ -267,8 +271,8 @@ function StatRow({ icon, label, value, color, last }: { icon: string; label: str
   );
 }
 
-function ZoneDetail({ gm, item, range, setRange, onBack }: {
-  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['zoneList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; onBack: () => void;
+function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
+  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['zoneList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
 }) {
   const { zone, cur, status, trend } = item;
   const s = useMemo(() => gm.genZoneSeries(zone, range), [gm, zone, range]);
@@ -320,6 +324,8 @@ function ZoneDetail({ gm, item, range, setRange, onBack }: {
               {plant && <LegendDot color="#16a34a" label={`Target range (${plant.moistureMin}–${plant.moistureMax}%)`} dashed />}
             </div>
           </>
+        ) : loading ? (
+          <ChartLoading height={205} />
         ) : (
           <div style={{ padding: '14px 0' }}>
             <EmptyHint icon="🌱" title="No trend data yet" sub="We need more sensor readings to show trends for this zone." />
@@ -344,21 +350,20 @@ function ZoneDetail({ gm, item, range, setRange, onBack }: {
 }
 
 // ══ PLANTS · list → detail ═══════════════════════════════════════════════════
-export function PlantsView({ gm, range, setRange }: TabProps) {
-  const [selected, setSelected] = useState<string | null>(null);
+export function PlantsView({ gm, range, setRange, loading, selected, onSelect, onBack }: ListTabProps) {
   const items = gm.plantList();
   const sel = selected ? items.find((it) => it.plant.id === selected) : null;
 
   if (items.length === 0) {
     return <Page><EmptyHint icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." /></Page>;
   }
-  if (sel) return <PlantDetail gm={gm} item={sel} range={range} setRange={setRange} onBack={() => setSelected(null)} />;
+  if (sel) return <PlantDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} />;
 
   return (
     <Page>
       <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', padding: '0 2px' }}>Plant Groups</div>
       {items.map(({ plant, agg, status, trend }) => (
-        <div key={plant.id} onClick={() => setSelected(plant.id)} className="gm-card"
+        <div key={plant.id} onClick={() => onSelect(plant.id)} className="gm-card"
           style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
           <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>{plant.icon}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -385,8 +390,8 @@ function plantInsight(name: string, status: SimpleStatus, trend: Trend): string 
   return `${name} are mostly stable this week. Keep up the good watering routine!`;
 }
 
-function PlantDetail({ gm, item, range, setRange, onBack }: {
-  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['plantList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; onBack: () => void;
+function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
+  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['plantList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
 }) {
   const { plant, agg, status, trend } = item;
   const s = useMemo(() => gm.genPlantSeries(plant.id, range), [gm, plant.id, range]);
@@ -425,6 +430,8 @@ function PlantDetail({ gm, item, range, setRange, onBack }: {
               <LegendDot color="#0ea5e9" label="Average moisture (%)" />
             </div>
           </>
+        ) : loading ? (
+          <ChartLoading height={205} />
         ) : (
           <EmptyHint icon="🌱" title="No trend data yet" sub="More trends will appear as sensors collect data." />
         )}

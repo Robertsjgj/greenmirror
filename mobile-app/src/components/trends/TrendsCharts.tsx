@@ -307,6 +307,20 @@ export function Insight({ icon, children }: { icon: string; children: ReactNode 
   );
 }
 
+export function ChartLoading({ height = 205 }: { height?: number }) {
+  return (
+    <div style={{ height, display: 'grid', placeItems: 'center', gap: 10 }}>
+      <svg width="30" height="30" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="none" stroke="#e2e8f0" strokeWidth="3" />
+        <path d="M21 12a9 9 0 0 0-9-9" fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinecap="round">
+          <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite" />
+        </path>
+      </svg>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)' }}>Loading…</div>
+    </div>
+  );
+}
+
 export function EmptyHint({ icon, title, sub }: { icon: string; title: string; sub: string }) {
   return (
     <div className="gm-card" style={{ padding: 24, textAlign: 'center', color: 'var(--ink-3)' }}>

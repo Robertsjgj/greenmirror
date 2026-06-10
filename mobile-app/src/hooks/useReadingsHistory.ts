@@ -264,12 +264,20 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
+// Session cache of the last snapshot per greenhouse+range. Re-selecting a range
+// you've already viewed paints instantly from cache while the live subscription
+// refreshes it in the background — so switching ranges feels immediate and the
+// "loading" state only shows the first time a range is opened.
+const readingsCache = new Map<string, LatestReading[]>();
+const cacheKeyOf = (ghId: string | null, range: TimeRange) => (ghId ? `${ghId}|${range}` : '');
+
 export function useReadingsHistory(
   greenhouseId: string | null,
   range: TimeRange,
 ): { readings: LatestReading[]; trendData: TrendPoint[]; loading: boolean } {
-  const [allReadings, setAllReadings] = useState<LatestReading[]>([]);
-  const [loading, setLoading] = useState(true);
+  const initialKey = cacheKeyOf(greenhouseId, range);
+  const [allReadings, setAllReadings] = useState<LatestReading[]>(() => readingsCache.get(initialKey) ?? []);
+  const [loading, setLoading] = useState<boolean>(() => !!greenhouseId && !readingsCache.has(initialKey));
 
   useEffect(() => {
     if (!greenhouseId) {
@@ -278,15 +286,23 @@ export function useReadingsHistory(
       return;
     }
 
-    setLoading(true);
-    setAllReadings([]);
+    const key = cacheKeyOf(greenhouseId, range);
+    const cached = readingsCache.get(key);
+    if (cached) {
+      // Instant paint from cache; subscription below keeps it fresh.
+      setAllReadings(cached);
+      setLoading(false);
+    } else {
+      setAllReadings([]);
+      setLoading(true);
+    }
 
     const cutoffMs = Date.now() - RANGE_HOURS[range] * 3_600_000;
     const cutoffISO = new Date(cutoffMs).toISOString();
 
     const unsub = subscribeToReadingsHistory(
       greenhouseId,
-      (r) => { setAllReadings(r); setLoading(false); },
+      (r) => { readingsCache.set(key, r); setAllReadings(r); setLoading(false); },
       RANGE_LIMIT[range],
       () => { setLoading(false); }, // stop loading on Firestore error / missing index
       cutoffISO,
