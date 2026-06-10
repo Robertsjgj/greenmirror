@@ -76,6 +76,38 @@ export interface WateringStats {
 }
 
 export type MonthBar = { label: string; ml: number; n: number; [k: string]: number | string };
+export type WeekBar = { label: string; n: number; ml: number; [k: string]: number | string };
+
+export interface SimpleStatus { kind: 'need' | 'wet' | 'healthy'; label: string; color: string; }
+export interface Trend { label: string; arrow: string; color: string; dir: 'down' | 'up' | 'flat'; }
+export interface HealthCounts { need: number; watching: number; healthy: number; }
+export interface GhDelta { moisture: number; temp: number | null; }
+export interface ZoneListItem { zone: ZoneLite; cur: CurrentReading; status: SimpleStatus; trend: Trend; }
+export interface ZoneDetailStats { trendPct: number; ratePerHour: number | null; readingCount: number; }
+export interface PlantAgg { count: number; moisture: number; temp: number | null; need: number; wet: number; good: number; }
+export interface PlantListItem { plant: PlantLite; agg: PlantAgg; status: SimpleStatus; trend: Trend; }
+export interface WaterWeekSummary { count: number; totalMl: number; zones: number; }
+export interface WaterResult {
+  id: string; zoneId: string; zoneLabel: string; plantName: string | null;
+  t: number; before: number; after: number | null; amountMl: number;
+  result: { label: string; color: string };
+}
+
+const NEED_COLOR = '#ef4444', WATCH_COLOR = '#f59e0b', GOOD_COLOR = '#16a34a', WET_COLOR = '#0ea5e9';
+
+export function statusOf(m: number, plant: PlantLite | null): SimpleStatus {
+  const s = moistureStatus(m, plant);
+  if (s.tone === 'crit' || s.tone === 'dry') return { kind: 'need', label: 'Needs water', color: NEED_COLOR };
+  if (s.tone === 'wet')                       return { kind: 'wet',  label: 'Too wet',     color: WET_COLOR };
+  return { kind: 'healthy', label: 'Good', color: GOOD_COLOR };
+}
+
+export function trendOf(deltaPct: number | null, mode: 'zone' | 'plant'): Trend {
+  if (deltaPct === null) return { label: 'No data', arrow: '–', color: 'var(--ink-3)', dir: 'flat' };
+  if (deltaPct <= -3) return { label: mode === 'plant' ? 'Drying'    : 'Getting drier',  arrow: '↓', color: NEED_COLOR, dir: 'down' };
+  if (deltaPct >= 3)  return { label: mode === 'plant' ? 'Improving' : 'Getting wetter', arrow: '↑', color: WET_COLOR,  dir: 'up' };
+  return { label: 'Stable', arrow: '→', color: GOOD_COLOR, dir: 'flat' };
+}
 
 export interface GreenhouseModel {
   NOW: number;
@@ -90,11 +122,22 @@ export interface GreenhouseModel {
   genPlantSeries: (plantId: string, range: TimeRange) => SeriesPoint[];
   genGreenhouseSeries: (range: TimeRange) => SeriesPoint[];
   currentReading: (z: ZoneLite) => CurrentReading;
+  healthCounts: () => HealthCounts;
+  prevHealthCounts: () => HealthCounts | null;
+  avgMoisture: number;
+  avgTemp: number | null;
+  ghDelta: (range: TimeRange) => GhDelta;
+  zoneList: () => ZoneListItem[];
+  zoneDetailStats: (z: ZoneLite, range: TimeRange) => ZoneDetailStats;
+  plantList: () => PlantListItem[];
   WATERING: WateringEvt[];
   buildHeatmap: () => HeatmapData;
   buildMonthly: () => MonthBar[];
+  buildWeekly: (n?: number) => WeekBar[];
   wateringStats: () => WateringStats;
   wateringByZone: () => ZoneWaterAgg[];
+  waterThisWeek: () => WaterWeekSummary;
+  waterResults: (limit?: number) => WaterResult[];
 }
 
 // Distinct, harmonious overlay palette (matches prototype)
@@ -263,7 +306,103 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
     };
   };
 
+  // ── Per-zone raw moisture history (for trend / rate / readings count) ────--
+  const zoneHist = new Map<string, { ts: number; moisture: number }[]>();
+  for (const r of readings) {
+    if (!r.timestamp) continue;
+    const ts = new Date(r.timestamp).getTime();
+    if (!ts || isNaN(ts)) continue;
+    for (const z of r.zones ?? []) {
+      const m = z.soil_moisture_pct;
+      if (typeof m !== 'number' || !isFinite(m) || m < 0 || m > 100) continue;
+      if (!zoneHist.has(z.zone_id)) zoneHist.set(z.zone_id, []);
+      zoneHist.get(z.zone_id)!.push({ ts, moisture: m });
+    }
+  }
+  for (const arr of zoneHist.values()) arr.sort((a, b) => a.ts - b.ts);
+
+  const histDelta = (id: string): number | null => {
+    const h = zoneHist.get(id);
+    if (!h || h.length < 2) return null;
+    return r1(h[h.length - 1].moisture - h[0].moisture);
+  };
+
+  // ── Greenhouse health (report-card counts + yesterday deltas) ────────────--
+  function countAt(pick: (id: string) => number | null): HealthCounts {
+    let need = 0, watching = 0, healthy = 0;
+    ZONES.forEach((z) => {
+      const m = pick(z.backendId);
+      if (m === null) return;
+      const s = statusOf(m, z.plantId ? PLANT_BY_ID[z.plantId] ?? null : null);
+      if (s.kind === 'need') need++; else if (s.kind === 'wet') watching++; else healthy++;
+    });
+    return { need, watching, healthy };
+  }
+  const healthCounts = () => countAt((id) => latestByZone.get(id)?.moisture ?? null);
+  const prevHealthCounts = (): HealthCounts | null => {
+    const counts = countAt((id) => { const h = zoneHist.get(id); return h && h.length >= 2 ? h[0].moisture : null; });
+    return (counts.need + counts.watching + counts.healthy) > 0 ? counts : null;
+  };
+
+  // Live greenhouse averages
+  let mSum = 0, mN = 0, tSum = 0, tN = 0;
+  ZONES.forEach((z) => {
+    const l = latestByZone.get(z.backendId);
+    if (l?.moisture != null) { mSum += l.moisture; mN++; }
+    if (l?.temp != null) { tSum += l.temp; tN++; }
+  });
+  const avgMoisture = mN ? Math.round(mSum / mN) : 0;
+  const avgTemp = tN ? Math.round(tSum / tN * 10) / 10 : null;
+
+  const ghDelta = (range: TimeRange): GhDelta => {
+    const s = bucketSeries(range, () => true);
+    if (s.length < 2) return { moisture: 0, temp: null };
+    const f = s[0], l = s[s.length - 1];
+    return { moisture: Math.round(l.moisture - f.moisture), temp: (f.temp != null && l.temp != null) ? r1(l.temp - f.temp) : null };
+  };
+
+  const zoneList = (): ZoneListItem[] => ZONES.map((zone) => {
+    const cur = currentReading(zone);
+    return { zone, cur, status: statusOf(cur.moisture, cur.plant), trend: trendOf(histDelta(zone.backendId), 'zone') };
+  });
+
+  const zoneDetailStats = (z: ZoneLite): ZoneDetailStats => {
+    const h = zoneHist.get(z.backendId);
+    const readingCount = h?.length ?? 0;
+    if (!h || h.length < 2) return { trendPct: 0, ratePerHour: null, readingCount };
+    const delta = h[h.length - 1].moisture - h[0].moisture;
+    const hours = (h[h.length - 1].ts - h[0].ts) / 3_600_000;
+    return { trendPct: Math.round(delta), ratePerHour: hours >= 0.1 ? r1(delta / hours) : null, readingCount };
+  };
+
+  const plantAgg = (plant: PlantLite): PlantAgg => {
+    const members = ZONES.filter((z) => z.plantId === plant.id);
+    let ms = 0, ts = 0, tc = 0, need = 0, wet = 0, good = 0, n = 0;
+    members.forEach((z) => {
+      const c = currentReading(z); ms += c.moisture; n++;
+      if (c.temp != null) { ts += c.temp; tc++; }
+      if (c.moisture < plant.moistureMin) need++; else if (c.moisture > plant.moistureMax) wet++; else good++;
+    });
+    return { count: members.length, moisture: n ? Math.round(ms / n) : 0, temp: tc ? r1(ts / tc) : null, need, wet, good };
+  };
+
+  const plantList = (): PlantListItem[] => PLANTS.map((plant) => {
+    const agg = plantAgg(plant);
+    const ids = ZONES.filter((z) => z.plantId === plant.id).map((z) => z.backendId);
+    const deltas = ids.map(histDelta).filter((d): d is number => d !== null);
+    const avgDelta = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : null;
+    const status: SimpleStatus = agg.need > 0
+      ? { kind: 'need', label: 'Needs water', color: NEED_COLOR }
+      : agg.wet > 0
+        ? { kind: 'wet', label: 'Too wet', color: WET_COLOR }
+        : { kind: 'healthy', label: 'Good', color: GOOD_COLOR };
+    return { plant, agg, status, trend: trendOf(avgDelta, 'plant') };
+  });
+
   // ── Watering aggregates ────────────────────────────────────────────────--
+  const visualToBackend = new Map<string, string>();
+  ZONES.forEach((z) => visualToBackend.set(z.visualLabel, z.backendId));
+
   const WATERING: WateringEvt[] = wateringEvents
     .map((e) => ({
       id: e.id,
@@ -349,11 +488,65 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
     return { total, vol, thisWeek, lastWeek, longestGap, mostActive: { label: best.label, n: best.n }, activeDays, avgInterval };
   }
 
+  function buildWeekly(n = 8): WeekBar[] {
+    const out: WeekBar[] = [];
+    for (let k = n - 1; k >= 0; k--) {
+      const end = new Date(NOW); end.setHours(0, 0, 0, 0); end.setDate(end.getDate() - k * 7);
+      const start = new Date(end); start.setDate(start.getDate() - 6);
+      let ml = 0, ct = 0;
+      WATERING.forEach((e) => { if (e.t >= start.getTime() && e.t <= end.getTime() + D) { ml += e.amountMl; ct++; } });
+      out.push({ label: `${MONTH_SHORT[start.getMonth()]} ${start.getDate()}`, n: ct, ml });
+    }
+    return out;
+  }
+
+  function waterThisWeek(): WaterWeekSummary {
+    const since = NOW - 7 * D;
+    const recent = WATERING.filter((e) => e.t > since);
+    return { count: recent.length, totalMl: recent.reduce((s, e) => s + e.amountMl, 0), zones: new Set(recent.map((e) => e.zoneId)).size };
+  }
+
+  function waterResults(limit = 6): WaterResult[] {
+    const sorted = [...wateringEvents].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    const out: WaterResult[] = [];
+    for (const e of sorted) {
+      if (out.length >= limit) break;
+      const backendId = e.backendZoneId ?? (e.visualZoneId ? visualToBackend.get(e.visualZoneId) : undefined);
+      const h = backendId ? zoneHist.get(backendId) : null;
+      if (!h || h.length < 2) continue;
+      const evtTs = new Date(e.timestamp).getTime();
+      const nearest = (target: number, win: number): number | null => {
+        let best: number | null = null, bd = Infinity;
+        for (const r of h) { const d = Math.abs(r.ts - target); if (d < win && d < bd) { bd = d; best = r.moisture; } }
+        return best;
+      };
+      const before = nearest(evtTs - 20 * 60_000, 90 * 60_000);
+      if (before === null) continue;
+      const post = h.filter((r) => r.ts > evtTs && r.ts < evtTs + 2 * 3_600_000);
+      const peak = post.length ? Math.max(...post.map((r) => r.moisture)) : null;
+      const after = peak ?? nearest(evtTs + 6 * 3_600_000, 2 * 3_600_000);
+      if (after === null) continue;
+      const diff = after - before;
+      const result = diff >= 8 ? { label: 'Watering helped', color: GOOD_COLOR }
+        : diff >= 2 ? { label: 'Small improvement', color: WATCH_COLOR }
+        : { label: 'No clear change', color: 'var(--ink-3)' };
+      out.push({
+        id: e.id, zoneId: e.visualZoneId ?? backendId ?? 'Zone', zoneLabel: e.visualZoneId ?? backendId ?? 'Zone',
+        plantName: e.plantName ?? null, t: evtTs, before: Math.round(before), after: Math.round(after),
+        amountMl: e.amountMl ?? 0, result,
+      });
+    }
+    return out;
+  }
+
   return {
     NOW, PLANTS, PLANT_BY_ID, ZONES, ZONE_BY_ID, SERIES_COLORS,
     hasHistory: readings.length > 0,
     readingCount: readings.length,
     genZoneSeries, genPlantSeries, genGreenhouseSeries, currentReading,
-    WATERING, buildHeatmap, buildMonthly, wateringStats, wateringByZone,
+    healthCounts, prevHealthCounts, avgMoisture, avgTemp, ghDelta,
+    zoneList, zoneDetailStats, plantList,
+    WATERING, buildHeatmap, buildMonthly, buildWeekly, wateringStats, wateringByZone,
+    waterThisWeek, waterResults,
   };
 }

@@ -59,10 +59,11 @@ export interface LineChartProps {
   bands?: Band[];
   height?: number;
   showRightAxis?: boolean;
+  dots?: boolean;
 }
 
 export function LineChart({
-  series, xLabels, leftDom, rightDom, leftUnit = '%', rightUnit = '°', bands = [], height = 220, showRightAxis = true,
+  series, xLabels, leftDom, rightDom, leftUnit = '%', rightUnit = '°', bands = [], height = 220, showRightAxis = true, dots = false,
 }: LineChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -92,8 +93,11 @@ export function LineChart({
       onMouseMove={onMove} onMouseLeave={() => setHover(null)} onTouchStart={onMove} onTouchMove={onMove}>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: 'block', overflow: 'visible' }}>
         {bands.map((b, i) => (
-          <rect key={'b' + i} x={padL} y={yL(b.to)} width={plotW} height={Math.max(0, yL(b.from) - yL(b.to))}
-            fill={b.color} opacity="0.10" />
+          <g key={'b' + i}>
+            <rect x={padL} y={yL(b.to)} width={plotW} height={Math.max(0, yL(b.from) - yL(b.to))} fill={b.color} opacity="0.10" />
+            <line x1={padL} x2={W - padR} y1={yL(b.to)} y2={yL(b.to)} stroke={b.color} strokeWidth="1" strokeDasharray="4 3" opacity="0.55" />
+            <line x1={padL} x2={W - padR} y1={yL(b.from)} y2={yL(b.from)} stroke={b.color} strokeWidth="1" strokeDasharray="4 3" opacity="0.55" />
+          </g>
         ))}
         {leftTicks.map((v, i) => (
           <g key={'lt' + i}>
@@ -113,6 +117,13 @@ export function LineChart({
           return <path key={s.key} d={smoothPath(pts)} fill="none" stroke={s.color} strokeWidth={s.width || 2.4}
             strokeLinecap="round" strokeLinejoin="round" strokeDasharray={s.dashed ? '5 4' : undefined} opacity={s.faint ? 0.4 : 1} />;
         })}
+        {dots && series.map((s) => s.faint ? null : (
+          <g key={'d' + s.key}>
+            {s.data.map((d, i) => (
+              <circle key={i} cx={xAt(i)} cy={(s.axis === 'R' ? yR : yL)(d.value)} r="2.6" fill="#fff" stroke={s.color} strokeWidth="1.8" />
+            ))}
+          </g>
+        ))}
         {hover != null && (
           <g>
             <line x1={xAt(hover)} x2={xAt(hover)} y1={padT} y2={H - padB} stroke="#9aa3ad" strokeWidth="1" strokeDasharray="2 2" />

@@ -12,17 +12,16 @@ import type { PlantProfile } from '../plantProfiles';
 import type { ActivityEntry } from '../activityLog';
 import { buildGreenhouseModel } from './trends/trendsModel';
 import {
-  OverviewView, ZonesView, PlantsView, WateringView, ResearchView,
+  OverviewView, ZonesView, PlantsView, WateringView,
 } from './trends/TrendsViews';
 
-type DashTab = 'overview' | 'zones' | 'plants' | 'watering' | 'research';
+type DashTab = 'overview' | 'zones' | 'plants' | 'watering';
 
 const DASH_TABS: { id: DashTab; label: string }[] = [
   { id: 'overview',  label: '📊 Overview'  },
   { id: 'zones',     label: '🗺 Zones'      },
   { id: 'plants',    label: '🌿 Plants'     },
   { id: 'watering',  label: '💧 Watering'   },
-  { id: 'research',  label: '🔬 Research'   },
 ];
 
 interface TrendsDashboardProps {
@@ -51,8 +50,7 @@ export function TrendsDashboard({
   onClose,
 }: TrendsDashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
-  const [range, setRange] = useState<TimeRange>('7d');
-  const [metric, setMetric] = useState<string>('both');
+  const [range, setRange] = useState<TimeRange>('24h');
 
   // Time-series history — only queries Firestore while the dashboard is open
   const { readings: firestoreReadings, loading } = useReadingsHistory(
@@ -78,7 +76,7 @@ export function TrendsDashboard({
 
   if (!open) return null;
 
-  const tabProps = { gm, range, setRange, metric, setMetric };
+  const tabProps = { gm, range, setRange };
 
   return (
     <div style={{
@@ -136,7 +134,6 @@ export function TrendsDashboard({
             {activeTab === 'zones'    && <ZonesView    {...tabProps} />}
             {activeTab === 'plants'   && <PlantsView   {...tabProps} />}
             {activeTab === 'watering' && <WateringView gm={gm} />}
-            {activeTab === 'research' && <ResearchView gm={gm} range={range} />}
           </>
         )}
         <div style={{ height: 28 }} />
