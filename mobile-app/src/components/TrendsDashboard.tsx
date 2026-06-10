@@ -53,12 +53,11 @@ export function TrendsDashboard({
   const [range, setRange] = useState<TimeRange>('24h');
 
   // Time-series history — only queries Firestore while the dashboard is open
-  const { readings: firestoreReadings, loading } = useReadingsHistory(
+  const { readings: firestoreReadings } = useReadingsHistory(
     simHistory ? null : (open ? greenhouseId : null),
     range,
   );
   const readings = useMemo(() => simHistory ?? firestoreReadings, [simHistory, firestoreReadings]);
-  const isLoading = simHistory ? false : loading;
 
   // Watering events (full history — model aggregates the heatmap/stats itself)
   const wateringEvents = useMemo(() => {
@@ -122,21 +121,13 @@ export function TrendsDashboard({
         ))}
       </div>
 
-      {/* ── Scrollable body ─────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 13 }}>
-        {isLoading && readings.length === 0 ? (
-          <div style={{ height: 260, display: 'grid', placeItems: 'center', color: 'var(--ink-3)', fontSize: 12, fontWeight: 600 }}>
-            ⏳ Loading greenhouse history…
-          </div>
-        ) : (
-          <>
-            {activeTab === 'overview' && <OverviewView {...tabProps} />}
-            {activeTab === 'zones'    && <ZonesView    {...tabProps} />}
-            {activeTab === 'plants'   && <PlantsView   {...tabProps} />}
-            {activeTab === 'watering' && <WateringView gm={gm} />}
-          </>
-        )}
-        <div style={{ height: 28 }} />
+      {/* ── Scrollable body — plain scroll container (no flex, so cards keep
+            their natural height and never get shrink-clipped) ─────────────── */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch' }}>
+        {activeTab === 'overview' && <OverviewView {...tabProps} />}
+        {activeTab === 'zones'    && <ZonesView    {...tabProps} />}
+        {activeTab === 'plants'   && <PlantsView   {...tabProps} />}
+        {activeTab === 'watering' && <WateringView gm={gm} />}
       </div>
     </div>
   );

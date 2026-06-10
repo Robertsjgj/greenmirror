@@ -22,14 +22,14 @@ export const TIME_RANGE_LABELS: Record<TimeRange, string> = {
 };
 
 // How many readings to request from Firestore per range.
-// At 5-second intervals: 24 h = 17,280 readings; use generous caps so charts
-// show real history without hitting Firestore read limits too hard.
+// Charts bucket readings into ~30 points, so we don't need every raw sample —
+// modest caps keep the first paint fast (no long "loading history" wait).
 const RANGE_LIMIT: Record<TimeRange, number> = {
-  '24h': 5000,
-  '7d':  10000,
-  '30d': 20000,
-  '3m':  30000,
-  '1y':  50000,
+  '24h': 1500,
+  '7d':  2500,
+  '30d': 4000,
+  '3m':  6000,
+  '1y':  9000,
 };
 
 const RANGE_HOURS: Record<TimeRange, number> = {

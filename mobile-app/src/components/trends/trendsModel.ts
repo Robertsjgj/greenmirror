@@ -172,20 +172,6 @@ export function relTime(t: number, now: number = Date.now()): string {
 }
 
 // ── Bucketing ───────────────────────────────────────────────────────────────
-function p2(n: number) { return String(n).padStart(2, '0'); }
-
-function bucketKey(ts: number, range: TimeRange): string {
-  const d = new Date(ts);
-  if (range === '24h') return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}`;
-  if (range === '3m' || range === '1y') {
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    monday.setHours(0, 0, 0, 0);
-    return `${monday.getFullYear()}-${p2(monday.getMonth()+1)}-${p2(monday.getDate())}`;
-  }
-  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
-}
-
 function bucketLabel(ts: number, range: TimeRange): string {
   const d = new Date(ts);
   if (range === '24h') { const h = d.getHours(); return `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`; }
@@ -249,29 +235,44 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
     if (z.backendZoneId) latestByZone.set(z.backendZoneId, { moisture: z.soilMoisturePct, temp: z.soilTempC });
   });
 
+  // Adaptive bucketer: averages each reading's matching zones, then splits the
+  // ACTUAL data span into even slices. This always yields a multi-point chart
+  // whenever ≥2 readings exist in the window — even if they're recent/clustered
+  // (fixed calendar buckets used to collapse fresh data to a single point).
   function bucketSeries(range: TimeRange, accept: (zoneId: string) => boolean): SeriesPoint[] {
-    type B = { mSum: number; mCount: number; tSum: number; tCount: number; ts: number };
-    const buckets = new Map<string, B>();
+    const raw: { ts: number; m: number; t: number | null }[] = [];
     for (const r of readings) {
       if (!r.timestamp) continue;
       const ts = new Date(r.timestamp).getTime();
       if (!ts || isNaN(ts)) continue;
-      const key = bucketKey(ts, range);
-      let b = buckets.get(key);
-      if (!b) { b = { mSum: 0, mCount: 0, tSum: 0, tCount: 0, ts }; buckets.set(key, b); }
-      b.ts = Math.max(b.ts, ts);
+      let mSum = 0, mC = 0, tSum = 0, tC = 0;
       for (const z of r.zones ?? []) {
         if (!accept(z.zone_id)) continue;
         const m = z.soil_moisture_pct;
-        if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) { b.mSum += m; b.mCount++; }
+        if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) { mSum += m; mC++; }
         const t = z.soil_temp_c;
-        if (typeof t === 'number' && isFinite(t) && t !== -127 && t !== 85 && t > -40 && t < 80) { b.tSum += t; b.tCount++; }
+        if (typeof t === 'number' && isFinite(t) && t !== -127 && t !== 85 && t > -40 && t < 80) { tSum += t; tC++; }
       }
+      if (mC > 0) raw.push({ ts, m: mSum / mC, t: tC > 0 ? tSum / tC : null });
     }
-    const pts = [...buckets.values()]
-      .filter((b) => b.mCount > 0)
-      .sort((a, b) => a.ts - b.ts)
-      .map((b) => ({ t: b.ts, moisture: r1(b.mSum / b.mCount), temp: b.tCount > 0 ? r1(b.tSum / b.tCount) : null }));
+    if (raw.length < 2) return [];
+    raw.sort((a, b) => a.ts - b.ts);
+    const minTs = raw[0].ts, maxTs = raw[raw.length - 1].ts, span = maxTs - minTs;
+    if (span <= 0) return [];
+    const N = Math.min(30, Math.max(6, raw.length));
+    const step = span / N;
+    type B = { mSum: number; mC: number; tSum: number; tC: number; ts: number };
+    const slots: (B | undefined)[] = new Array(N);
+    for (const p of raw) {
+      let idx = Math.floor((p.ts - minTs) / step);
+      if (idx >= N) idx = N - 1; if (idx < 0) idx = 0;
+      let b = slots[idx];
+      if (!b) { b = { mSum: 0, mC: 0, tSum: 0, tC: 0, ts: 0 }; slots[idx] = b; }
+      b.mSum += p.m; b.mC++; if (p.t != null) { b.tSum += p.t; b.tC++; } b.ts = Math.max(b.ts, p.ts);
+    }
+    const pts = slots
+      .filter((b): b is B => !!b)
+      .map((b) => ({ t: b.ts, moisture: r1(b.mSum / b.mC), temp: b.tC > 0 ? r1(b.tSum / b.tC) : null }));
     return withTicks(pts, range);
   }
 

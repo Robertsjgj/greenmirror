@@ -6,6 +6,7 @@
    ────────────────────────────────────────────────────────────────────────── */
 
 import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard,
 } from './TrendsCharts';
@@ -25,6 +26,12 @@ const RANGE_SHORT: Record<TimeRange, string> = { '24h': '24h', '7d': '7d', '30d'
 const TODAY_WORD: Record<TimeRange, string> = {
   '24h': 'today', '7d': 'this week', '30d': 'this month', '3m': 'this quarter', '1y': 'this year',
 };
+
+// Padded vertical stack. Lives inside the dashboard's plain scroll container,
+// so its height is content-driven and children never get shrink-clipped.
+function Page({ children, gap = 13 }: { children: ReactNode; gap?: number }) {
+  return <div style={{ padding: '14px 16px 36px', display: 'flex', flexDirection: 'column', gap }}>{children}</div>;
+}
 
 // small coloured water droplet
 function Droplet({ color, size = 18 }: { color: string; size?: number }) {
@@ -109,7 +116,7 @@ export function OverviewView({ gm, range, setRange }: TabProps) {
   const tDeltaTxt = delta.temp == null ? '' : `${delta.temp > 0 ? '↑ ' : delta.temp < 0 ? '↓ ' : ''}${Math.abs(delta.temp)}°C ${TODAY_WORD[range]}`;
 
   return (
-    <>
+    <Page>
       {/* Greenhouse Health */}
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
         <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>Greenhouse Health</div>
@@ -161,7 +168,7 @@ export function OverviewView({ gm, range, setRange }: TabProps) {
           </>
         )}
       </div>
-    </>
+    </Page>
   );
 }
 
@@ -189,41 +196,46 @@ function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneLi
 
   return (
     <>
-      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', padding: '0 2px' }}>All Zones</div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ position: 'relative', flex: 1 }}>
-          <span style={{ position: 'absolute', top: '50%', left: 13, transform: 'translateY(-50%)', fontSize: 13 }}>🔍</span>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search zone…"
-            style={{ width: '100%', padding: '11px 12px 11px 36px', boxSizing: 'border-box', background: 'var(--card)', border: '1.5px solid var(--line)', borderRadius: 13, fontSize: 12.5, outline: 'none', fontWeight: 600, color: 'var(--ink)', fontFamily: 'inherit' }} />
+      {/* Sticky header — stays put while the list scrolls */}
+      <div style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg, #f8f5ef)', padding: '14px 16px 12px', boxShadow: '0 1px 0 var(--line)' }}>
+        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', marginBottom: 10 }}>All Zones</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+            <span style={{ position: 'absolute', top: '50%', left: 13, transform: 'translateY(-50%)', fontSize: 13 }}>🔍</span>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search zone…"
+              style={{ width: '100%', padding: '11px 12px 11px 36px', boxSizing: 'border-box', background: 'var(--card)', border: '1.5px solid var(--line)', borderRadius: 13, fontSize: 12.5, outline: 'none', fontWeight: 600, color: 'var(--ink)', fontFamily: 'inherit' }} />
+          </div>
+          <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}
+            style={{ flexShrink: 0, border: '1.5px solid var(--line)', borderRadius: 13, background: 'var(--card)', padding: '0 10px', fontSize: 12.5, fontWeight: 800, color: 'var(--ink-2)', fontFamily: 'inherit', cursor: 'pointer' }}>
+            <option value="all">All</option>
+            <option value="need">Needs water</option>
+            <option value="wet">Too wet</option>
+            <option value="healthy">Healthy</option>
+          </select>
         </div>
-        <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}
-          style={{ border: '1.5px solid var(--line)', borderRadius: 13, background: 'var(--card)', padding: '0 10px', fontSize: 12.5, fontWeight: 800, color: 'var(--ink-2)', fontFamily: 'inherit', cursor: 'pointer' }}>
-          <option value="all">All</option>
-          <option value="need">Needs water</option>
-          <option value="wet">Too wet</option>
-          <option value="healthy">Healthy</option>
-        </select>
       </div>
 
-      {list.length === 0 ? (
-        <EmptyHint icon="🗺️" title="No zones found" sub="Try a different search or filter." />
-      ) : list.map(({ zone, cur, status, trend }) => (
-        <div key={zone.backendId} onClick={() => onPick(zone)} className="gm-card"
-          style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
-          <div style={{ width: 40, height: 40, borderRadius: 11, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 20, flexShrink: 0 }}>
-            {cur.plant?.icon ?? '🌱'}
+      <div style={{ padding: '12px 16px 36px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {list.length === 0 ? (
+          <EmptyHint icon="🗺️" title="No zones found" sub="Try a different search or filter." />
+        ) : list.map(({ zone, cur, status, trend }) => (
+          <div key={zone.backendId} onClick={() => onPick(zone)} className="gm-card"
+            style={{ padding: '14px 14px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 21, flexShrink: 0 }}>
+              {cur.plant?.icon ?? '🌱'}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{zone.label}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cur.plant?.name ?? 'Empty'}</div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 96 }}>
+              <div style={{ fontSize: 19, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{cur.moisture}%</div>
+              <StatusPill status={status} />
+              <TrendText trend={trend} />
+            </div>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)' }}>{zone.label}</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{cur.plant?.name ?? 'Empty'}</div>
-          </div>
-          <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{cur.moisture}%</div>
-            <StatusPill status={status} />
-            <TrendText trend={trend} />
-          </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </>
   );
 }
@@ -275,7 +287,7 @@ function ZoneDetail({ gm, item, range, setRange, onBack }: {
   const rateLabel = rate == null ? 'Change rate' : rate < 0 ? 'Drying rate' : rate > 0 ? 'Wetting rate' : 'Change rate';
 
   return (
-    <>
+    <Page>
       <BackLink label="All zones" onBack={onBack} />
 
       {/* Header + key stats */}
@@ -327,7 +339,7 @@ function ZoneDetail({ gm, item, range, setRange, onBack }: {
           </div>
         </>
       )}
-    </>
+    </Page>
   );
 }
 
@@ -338,12 +350,12 @@ export function PlantsView({ gm, range, setRange }: TabProps) {
   const sel = selected ? items.find((it) => it.plant.id === selected) : null;
 
   if (items.length === 0) {
-    return <EmptyHint icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." />;
+    return <Page><EmptyHint icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." /></Page>;
   }
   if (sel) return <PlantDetail gm={gm} item={sel} range={range} setRange={setRange} onBack={() => setSelected(null)} />;
 
   return (
-    <>
+    <Page>
       <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', padding: '0 2px' }}>Plant Groups</div>
       {items.map(({ plant, agg, status, trend }) => (
         <div key={plant.id} onClick={() => setSelected(plant.id)} className="gm-card"
@@ -361,7 +373,7 @@ export function PlantsView({ gm, range, setRange }: TabProps) {
         </div>
       ))}
       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'center', padding: '4px 0 2px' }}>Tap a plant to see its trend over time.</div>
-    </>
+    </Page>
   );
 }
 
@@ -382,7 +394,7 @@ function PlantDetail({ gm, item, range, setRange, onBack }: {
   const series: ChartSeries[] = [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, label: d.label })) }];
 
   return (
-    <>
+    <Page>
       <BackLink label="All plants" onBack={onBack} />
 
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
@@ -419,7 +431,7 @@ function PlantDetail({ gm, item, range, setRange, onBack }: {
       </div>
 
       {hasChart && <Insight icon="🌿">{plantInsight(plant.name, status, trend)}</Insight>}
-    </>
+    </Page>
   );
 }
 
@@ -430,11 +442,11 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
   const weekly = useMemo(() => gm.buildWeekly(8), [gm]);
 
   if (gm.WATERING.length === 0) {
-    return <EmptyHint icon="💧" title="No watering yet" sub="Water zones from Today's Tasks or the Map tab to build your watering history." />;
+    return <Page><EmptyHint icon="💧" title="No watering yet" sub="Water zones from Today's Tasks or the Map tab to build your watering history." /></Page>;
   }
 
   return (
-    <>
+    <Page>
       {/* This week summary */}
       <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', padding: '0 2px' }}>This Week</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
@@ -494,6 +506,6 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
       )}
 
       <Insight icon="🌿">Consistent watering keeps your plants happy and healthy! 🌿</Insight>
-    </>
+    </Page>
   );
 }
