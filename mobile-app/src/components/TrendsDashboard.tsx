@@ -7,6 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useReadingsHistory } from '../hooks/useReadingsHistory';
 import type { TimeRange } from '../hooks/useReadingsHistory';
+import { useDataMode } from '../hooks/useDataMode';
+import { genMockDataset } from '../mockData';
 import type { VisualZone, LatestReading } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
 import type { ActivityEntry } from '../activityLog';
@@ -37,6 +39,25 @@ interface TrendsDashboardProps {
   onClose: () => void;
 }
 
+function DashModeButton({ active, onClick, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '4px 10px', borderRadius: 9, border: '1.5px solid',
+        borderColor: active ? 'var(--primary)' : 'var(--line)',
+        background: active ? 'var(--primary-soft)' : 'transparent',
+        color: active ? 'var(--primary)' : 'var(--ink-3)',
+        fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function TrendsDashboard({
   open,
   greenhouseId,
@@ -53,30 +74,41 @@ export function TrendsDashboard({
   const [range, setRange] = useState<TimeRange>('24h');
   const [selZone, setSelZone] = useState<string | null>(null);
   const [selPlant, setSelPlant] = useState<string | null>(null);
+  const [dataMode, setDataMode] = useDataMode();
+  const isDummy = dataMode === 'dummy';
+
+  // Dummy (sample) data is the default. In dummy mode the whole model is built
+  // from one self-consistent mock greenhouse, so every tab below renders sample
+  // data that looks exactly like real readings.
+  const mock = useMemo(() => (isDummy ? genMockDataset(range, greenhouseId) : null), [isDummy, range, greenhouseId]);
 
   // Time-series history — Firestore quota protection: pass null (→ no listener,
-  // no reads) unless the dashboard is actually open, so history loads only when
-  // Trends is opened and the listener is detached the moment it closes.
+  // no reads) unless the dashboard is actually open and using real data, so
+  // history loads only when needed and detaches the moment Trends closes.
   const { readings: firestoreReadings, loading } = useReadingsHistory(
-    simHistory ? null : (open ? greenhouseId : null),
+    simHistory || isDummy ? null : (open ? greenhouseId : null),
     range,
   );
-  const readings = useMemo(() => simHistory ?? firestoreReadings, [simHistory, firestoreReadings]);
-  const chartLoading = simHistory ? false : loading;
+  const readings = useMemo(
+    () => (mock ? mock.readings : (simHistory ?? firestoreReadings)),
+    [mock, simHistory, firestoreReadings],
+  );
+  const chartLoading = isDummy || simHistory ? false : loading;
 
   // Watering events (full history — model aggregates the heatmap/stats itself)
   const wateringEvents = useMemo(() => {
+    if (mock) return mock.wateringEvents;
     const src = firestoreActivity.length > 0 ? firestoreActivity : activityLog;
     return src.filter((e) => e.type === 'watering');
-  }, [activityLog, firestoreActivity]);
+  }, [mock, activityLog, firestoreActivity]);
 
   const gm = useMemo(() => buildGreenhouseModel({
-    zones: zones ?? [],
-    profilesById: profilesById ?? new Map(),
-    plantProfiles,
+    zones: mock ? mock.zones : (zones ?? []),
+    profilesById: mock ? mock.profilesById : (profilesById ?? new Map()),
+    plantProfiles: mock ? mock.plantProfiles : plantProfiles,
     readings,
     wateringEvents,
-  }), [zones, profilesById, plantProfiles, readings, wateringEvents]);
+  }), [mock, zones, profilesById, plantProfiles, readings, wateringEvents]);
 
   // ── Hardware/browser Back button ──────────────────────────────────────────
   // While open, push a history entry so Back steps within Trends (detail → list
@@ -132,7 +164,25 @@ export function TrendsDashboard({
             <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{greenhouseName}</div>
           )}
         </div>
+        {/* Sample (dummy) vs Live (real) data toggle */}
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <DashModeButton active={isDummy} onClick={() => setDataMode('dummy')}>Sample</DashModeButton>
+          <DashModeButton active={!isDummy} onClick={() => setDataMode('real')}>Live</DashModeButton>
+        </div>
       </div>
+
+      {/* Clear banner whenever these views are sample data, not the real greenhouse. */}
+      {isDummy && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
+          padding: '8px 16px', background: '#fef3c7', borderBottom: '1px solid #fcd34d',
+        }}>
+          <span style={{ fontSize: 14 }}>🧪</span>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: '#92400e' }}>
+            Sample data — not from your greenhouse. Tap “Live” to use real sensor data.
+          </span>
+        </div>
+      )}
 
       {/* ── Tab bar ────────────────────────────────────────────────────────── */}
       <div style={{

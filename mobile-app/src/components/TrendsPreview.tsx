@@ -5,6 +5,8 @@ import {
 } from 'recharts';
 import { useReadingsHistory, buildTrendData } from '../hooks/useReadingsHistory';
 import type { TimeRange } from '../hooks/useReadingsHistory';
+import { useDataMode } from '../hooks/useDataMode';
+import { genMockDataset } from '../mockData';
 import type { LatestReading, VisualZone } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
 
@@ -52,27 +54,39 @@ export function TrendsPreview({
   zones, profilesById, greenhouseId, simHistory, onOpenDashboard,
 }: TrendsPreviewProps) {
   const [range, setRange] = useState<TimeRange>('24h');
+  const [dataMode, setDataMode] = useDataMode();
+  const isDummy = dataMode === 'dummy';
+
+  // Dummy (sample) data is the default. In dummy mode every value below comes
+  // from one self-consistent mock greenhouse (discrete-time readings → same
+  // pipeline as real). The header toggle flips between mock and real data.
+  const mock = useMemo(() => (isDummy ? genMockDataset(range) : null), [isDummy, range]);
+  const effZones = useMemo(() => (mock ? mock.zones : (zones ?? [])), [mock, zones]);
+  const effProfiles = useMemo(
+    () => (mock ? mock.profilesById : (profilesById ?? new Map<string, PlantProfile>())),
+    [mock, profilesById],
+  );
 
   // ── Greenhouse health snapshot (current readings) ──────────────────────────
   const health = useMemo(() => {
     let need = 0, watch = 0, healthy = 0;
-    (zones ?? []).forEach((z) => {
+    effZones.forEach((z) => {
       if (!z.hasReading || z.soilMoisturePct === null) return;
-      const profile = z.assignedPlant ? profilesById?.get(z.assignedPlant) ?? null : null;
+      const profile = z.assignedPlant ? effProfiles.get(z.assignedPlant) ?? null : null;
       const cls = classifyHealth(z.soilMoisturePct, profile);
       if (cls === 'need') need++;
       else if (cls === 'watch') watch++;
       else healthy++;
     });
     return { need, watch, healthy, total: need + watch + healthy };
-  }, [zones, profilesById]);
+  }, [effZones, effProfiles]);
 
   // ── Plant groups (only used to phrase insights) ─────────────────────────────
   const plantGroups = useMemo(() => {
     const groups = new Map<string, { name: string; count: number; needsWater: number; tooWet: number }>();
-    (zones ?? []).forEach((z) => {
+    effZones.forEach((z) => {
       if (!z.assignedPlant || !z.hasReading || z.soilMoisturePct === null) return;
-      const profile = profilesById?.get(z.assignedPlant);
+      const profile = effProfiles.get(z.assignedPlant);
       if (!profile) return;
       if (!groups.has(z.assignedPlant)) {
         groups.set(z.assignedPlant, { name: profile.name, count: 0, needsWater: 0, tooWet: 0 });
@@ -83,36 +97,40 @@ export function TrendsPreview({
       else if (z.soilMoisturePct > profile.moistureMax) g.tooWet++;
     });
     return [...groups.values()];
-  }, [zones, profilesById]);
+  }, [effZones, effProfiles]);
 
   // ── Moisture trend preview (greenhouse average over time) ───────────────────
   const { trendData: firestoreTrends } = useReadingsHistory(
-    simHistory ? null : (greenhouseId ?? null),
+    simHistory || isDummy ? null : (greenhouseId ?? null),
     range,
   );
-  const trendData = useMemo(
+  const realTrend = useMemo(
     () => (simHistory ? buildTrendData(simHistory, range) : firestoreTrends),
     [simHistory, firestoreTrends, range],
   );
+  // Mock chart points come from the SAME buildTrendData bucketer as real data,
+  // so the discrete sample cadence + watering saw-tooth render true to life.
+  const chartData = mock ? buildTrendData(mock.readings, range) : realTrend;
+  const healthDisplay = health;
 
   // Temporary diagnostics for the Home Sensor Trends preview chart.
-  // (See readingsService / rollupsService logs for raw vs rollup doc counts and
-  //  useReadingsHistory for whether the raw-readings fallback kicked in.)
   useEffect(() => {
     console.info('[TrendsPreview] home chart', {
+      dataMode,
       greenhouseId: greenhouseId ?? '(none)',
-      source: simHistory ? 'simHistory' : 'firestore',
+      source: isDummy ? 'mock' : simHistory ? 'simHistory' : 'firestore',
       range,
-      chartPoints: trendData.length,
-      zonesWithReadings: (zones ?? []).filter((z) => z.hasReading && z.soilMoisturePct !== null).length,
+      realChartPoints: realTrend.length,
+      chartPoints: chartData.length,
+      zonesWithReadings: effZones.filter((z) => z.hasReading && z.soilMoisturePct !== null).length,
     });
-  }, [greenhouseId, simHistory, range, trendData.length, zones]);
+  }, [dataMode, isDummy, greenhouseId, simHistory, range, realTrend.length, chartData.length, effZones]);
 
   // Trend direction: compare first vs last average. Drives line colour + insight.
   const trendDelta = useMemo(() => {
-    if (trendData.length < 2) return null;
-    return trendData[trendData.length - 1].avgMoisture - trendData[0].avgMoisture;
-  }, [trendData]);
+    if (chartData.length < 2) return null;
+    return chartData[chartData.length - 1].avgMoisture - chartData[0].avgMoisture;
+  }, [chartData]);
 
   const trendMood = trendDelta === null ? 'flat'
     : trendDelta <= -4 ? 'down'
@@ -125,14 +143,14 @@ export function TrendsPreview({
       ? { text: 'Improving', color: GOOD_COLOR }
       : { text: 'Stable', color: GOOD_COLOR };
 
-  // ── Insights (2–3 plain sentences from the calculations above) ──────────────
+  // ── Insights (2–3 plain sentences derived from the data above) ──────────────
   const insights = useMemo(() => {
     const out: string[] = [];
 
     // 1) Overall direction
     if (trendMood === 'down') out.push('Moisture is slipping across the greenhouse — some beds may need water soon.');
     else if (trendMood === 'up') out.push('Moisture has improved across most zones recently.');
-    else if (trendData.length >= 2) out.push('Most zones stayed steady over this period.');
+    else if (chartData.length >= 2) out.push('Most zones stayed steady over this period.');
 
     // 2) Driest / wettest plant group
     const driest = [...plantGroups].sort((a, b) => b.needsWater - a.needsWater)[0];
@@ -151,9 +169,11 @@ export function TrendsPreview({
     }
 
     return out.slice(0, 3);
-  }, [trendMood, trendData.length, plantGroups, health]);
+  }, [trendMood, chartData.length, plantGroups, health]);
 
-  const hasData = health.total > 0 || trendData.length > 0;
+  // In dummy mode we always have data to show. In real mode, fall back to the
+  // empty state only when there are genuinely no readings.
+  const hasData = isDummy || healthDisplay.total > 0 || chartData.length > 0;
 
   return (
     <div>
@@ -172,6 +192,31 @@ export function TrendsPreview({
         </button>
       </div>
 
+      {/* Data-source toggle — sample (dummy) vs live (real Firebase) data. */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px 10px' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>
+          {isDummy ? 'Showing sample data' : 'Showing live data'}
+        </span>
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <ModeButton active={isDummy} onClick={() => setDataMode('dummy')}>Sample</ModeButton>
+          <ModeButton active={!isDummy} onClick={() => setDataMode('real')}>Live</ModeButton>
+        </div>
+      </div>
+
+      {/* Clear, unmissable banner whenever the charts below are NOT real data. */}
+      {isDummy && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', marginBottom: 10, borderRadius: 12,
+          background: '#fef3c7', border: '1.5px solid #fcd34d',
+        }}>
+          <span style={{ fontSize: 15 }}>🧪</span>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: '#92400e', lineHeight: 1.35 }}>
+            Sample data — not from your greenhouse. Tap “Live” to use real sensor data.
+          </span>
+        </div>
+      )}
+
       {!hasData ? (
         <div className="gm-card" style={{ padding: 22, textAlign: 'center', color: 'var(--ink-3)' }}>
           <div style={{ fontSize: 28, marginBottom: 6 }}>📊</div>
@@ -186,11 +231,11 @@ export function TrendsPreview({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
           {/* ── CARD 1: Greenhouse health snapshot ─────────────────────────── */}
-          {health.total > 0 && (
+          {healthDisplay.total > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              <SnapshotCard emoji="🔴" label="Need water" count={health.need} color={NEED_COLOR} />
-              <SnapshotCard emoji="🟡" label="Watching"   count={health.watch} color={WATCH_COLOR} />
-              <SnapshotCard emoji="🟢" label="Healthy"    count={health.healthy} color={GOOD_COLOR} />
+              <SnapshotCard emoji="🔴" label="Need water" count={healthDisplay.need} color={NEED_COLOR} />
+              <SnapshotCard emoji="🟡" label="Watching"   count={healthDisplay.watch} color={WATCH_COLOR} />
+              <SnapshotCard emoji="🟢" label="Healthy"    count={healthDisplay.healthy} color={GOOD_COLOR} />
             </div>
           )}
 
@@ -205,12 +250,22 @@ export function TrendsPreview({
                   Average moisture across all active zones
                 </div>
               </div>
-              <span style={{
-                fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 8,
-                background: trendPill.color + '1f', color: trendPill.color, flexShrink: 0, whiteSpace: 'nowrap',
-              }}>
-                {trendPill.text}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                {isDummy && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 800, padding: '3px 7px', borderRadius: 8,
+                    background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap',
+                  }}>
+                    Sample
+                  </span>
+                )}
+                <span style={{
+                  fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 8,
+                  background: trendPill.color + '1f', color: trendPill.color, whiteSpace: 'nowrap',
+                }}>
+                  {trendPill.text}
+                </span>
+              </div>
             </div>
 
             {/* Range selectors */}
@@ -232,13 +287,13 @@ export function TrendsPreview({
               ))}
             </div>
 
-            {trendData.length < 2 ? (
+            {chartData.length < 2 ? (
               <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 12, fontWeight: 600 }}>
                 Not enough readings yet for this range.
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={130}>
-                <AreaChart data={trendData} margin={{ top: 6, right: 4, left: -28, bottom: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 6, right: 4, left: -28, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gmMoistFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={trendColor} stopOpacity={0.22} />
@@ -329,6 +384,25 @@ export function TrendsPreview({
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────--
+
+function ModeButton({ active, onClick, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '4px 11px', borderRadius: 9, border: '1.5px solid',
+        borderColor: active ? 'var(--primary)' : 'var(--line)',
+        background: active ? 'var(--primary-soft)' : 'transparent',
+        color: active ? 'var(--primary)' : 'var(--ink-3)',
+        fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 function SnapshotCard({ emoji, label, count, color }: {
   emoji: string; label: string; count: number; color: string;
