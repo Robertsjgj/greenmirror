@@ -191,7 +191,9 @@ export function GreenhouseTrendCard({ gm, range, setRange, loading }: TabProps) 
   );
 }
 
-export function OverviewView({ gm, range, setRange, loading }: TabProps) {
+// Greenhouse report card (Healthy / Monitor / Needs Attention + avg moisture &
+// temp). Exported so the Home Sensor Trends preview shows the EXACT same card.
+export function GreenhouseHealthCard({ gm, range }: { gm: GreenhouseModel; range: TimeRange }) {
   const counts = gm.healthCounts();
   const prev = gm.prevHealthCounts();
   const delta = gm.ghDelta(range);
@@ -200,36 +202,39 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
   const tDeltaTxt = delta.temp == null ? '' : `${delta.temp > 0 ? '↑ ' : delta.temp < 0 ? '↓ ' : ''}${Math.abs(delta.temp)}°C ${TODAY_WORD[range]}`;
 
   return (
-    <Page>
-      {/* Greenhouse Health */}
-      <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
-        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>Greenhouse Health</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
-          <HealthChip color="#16a34a" count={counts.healthy}  label="Healthy"         prev={prev?.healthy ?? null}  goodWhenUp />
-          <HealthChip color="#f59e0b" count={counts.watching} label="Monitor"         prev={prev?.watching ?? null} />
-          <HealthChip color="#ef4444" count={counts.need}     label="Needs Attention" prev={prev?.need ?? null} />
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          <div style={{ background: 'var(--bg-sub)', borderRadius: 12, padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Droplet color="#0ea5e9" size={22} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 700 }}>Avg soil moisture</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#0ea5e9', fontFamily: "'Baloo 2', system-ui", lineHeight: 1.1 }}>{gm.avgMoisture}%</div>
-              <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700 }}>{mDeltaTxt}</div>
-            </div>
+    <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
+      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>Greenhouse Health</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
+        <HealthChip color="#16a34a" count={counts.healthy}  label="Healthy"         prev={prev?.healthy ?? null}  goodWhenUp />
+        <HealthChip color="#f59e0b" count={counts.watching} label="Monitor"         prev={prev?.watching ?? null} />
+        <HealthChip color="#ef4444" count={counts.need}     label="Needs Attention" prev={prev?.need ?? null} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div style={{ background: 'var(--bg-sub)', borderRadius: 12, padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Droplet color="#0ea5e9" size={22} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 700 }}>Avg soil moisture</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#0ea5e9', fontFamily: "'Baloo 2', system-ui", lineHeight: 1.1 }}>{gm.avgMoisture}%</div>
+            <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700 }}>{mDeltaTxt}</div>
           </div>
-          <div style={{ background: 'var(--bg-sub)', borderRadius: 12, padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 20 }}>🌡</span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 700 }}>Avg soil temp</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b', fontFamily: "'Baloo 2', system-ui", lineHeight: 1.1 }}>{gm.avgTemp != null ? `${gm.avgTemp}°C` : '—'}</div>
-              {tDeltaTxt && <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700 }}>{tDeltaTxt}</div>}
-            </div>
+        </div>
+        <div style={{ background: 'var(--bg-sub)', borderRadius: 12, padding: '11px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 20 }}>🌡</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 700 }}>Avg soil temp</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b', fontFamily: "'Baloo 2', system-ui", lineHeight: 1.1 }}>{gm.avgTemp != null ? `${gm.avgTemp}°C` : '—'}</div>
+            {tDeltaTxt && <div style={{ fontSize: 9, color: 'var(--ink-3)', fontWeight: 700 }}>{tDeltaTxt}</div>}
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Greenhouse Trend */}
+export function OverviewView({ gm, range, setRange, loading }: TabProps) {
+  return (
+    <Page>
+      <GreenhouseHealthCard gm={gm} range={range} />
       <GreenhouseTrendCard gm={gm} range={range} setRange={setRange} loading={loading} />
     </Page>
   );
