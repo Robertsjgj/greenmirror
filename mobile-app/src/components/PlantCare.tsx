@@ -366,6 +366,7 @@ export function PlantCare({
       <TrendsPreview
         zones={zones}
         profilesById={profilesById}
+        plantProfiles={plantProfiles}
         greenhouseId={greenhouseId}
         simHistory={simHistory}
         onOpenDashboard={onOpenTrends}

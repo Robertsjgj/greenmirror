@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading,
+  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading, tempDomain,
 } from './TrendsCharts';
 import type { ChartSeries } from './TrendsCharts';
 import { relTime } from './trendsModel';
@@ -80,6 +80,24 @@ function StatusPill({ status, big }: { status: SimpleStatus; big?: boolean }) {
   );
 }
 
+// Moisture ⇄ Temperature switch for the Zones / Plants detail charts.
+type Metric = 'moist' | 'temp';
+function MetricSwitch({ value, onChange }: { value: Metric; onChange: (v: Metric) => void }) {
+  const opts: [Metric, string][] = [['moist', '💧 Moisture'], ['temp', '🌡 Temp']];
+  return (
+    <div style={{ display: 'inline-flex', padding: 3, background: 'var(--bg-sub)', borderRadius: 999, flexShrink: 0 }}>
+      {opts.map(([id, lbl]) => (
+        <button key={id} onClick={() => onChange(id)} style={{
+          padding: '5px 11px', borderRadius: 999, fontSize: 11, fontWeight: 800, border: 'none', cursor: 'pointer',
+          fontFamily: 'inherit',
+          background: value === id ? 'var(--card)' : 'transparent', color: value === id ? 'var(--ink)' : 'var(--ink-3)',
+          boxShadow: value === id ? '0 1px 3px rgba(0,0,0,.12)' : 'none',
+        }}>{lbl}</button>
+      ))}
+    </div>
+  );
+}
+
 function TrendText({ trend, suffix }: { trend: Trend; suffix?: string }) {
   return (
     <span style={{ fontSize: 11, fontWeight: 800, color: trend.color, whiteSpace: 'nowrap' }}>
@@ -120,10 +138,11 @@ function ghInsight(d: { moisture: number; temp: number | null }, counts: HealthC
   return 'Conditions stayed fairly steady across the greenhouse.';
 }
 
-export function OverviewView({ gm, range, setRange, loading }: TabProps) {
+// Greenhouse average moisture (+ optional soil temp) over time. Exported so the
+// Home Sensor Trends preview renders the EXACT same chart as this Overview tab.
+export function GreenhouseTrendCard({ gm, range, setRange, loading }: TabProps) {
   const s = useMemo(() => gm.genGreenhouseSeries(range), [gm, range]);
   const counts = gm.healthCounts();
-  const prev = gm.prevHealthCounts();
   const delta = gm.ghDelta(range);
   const hasTemp = s.some((d) => d.temp != null);
 
@@ -143,6 +162,39 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
   if (hasTemp) series.push({ key: 't', name: 'Avg soil temp', color: '#16a34a', axis: 'R', width: 2.6, data: s.map((d) => ({ value: d.temp ?? 0, t: d.t })) });
 
   const lastTs = s.length ? s[s.length - 1].t : null;
+
+  return (
+    <div className="gm-card" style={{ padding: '14px 12px 16px' }}>
+      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '0 2px', marginBottom: 10 }}>Greenhouse Trend</div>
+      <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
+      {s.length < 2 ? (
+        loading
+          ? <ChartLoading height={210} />
+          : <EmptyHint icon="📡" title="No trend data yet" sub="More trends will appear as sensors collect data." />
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 16, margin: '0 4px 8px' }}>
+            <LegendDot color="#0ea5e9" label="Avg moisture (%)" />
+            {hasTemp && <LegendDot color="#16a34a" label="Avg soil temp (°C)" />}
+          </div>
+          <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
+            leftDom={[0, 100]} rightDom={td} height={210} showRightAxis={hasTemp} dots />
+          <div style={{ margin: '12px 4px 0' }}>
+            <Insight icon="🌿">{ghInsight(delta, counts)}</Insight>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'right', marginTop: 8, paddingRight: 4 }}>
+            {lastTs ? `Updated ${relTime(lastTs, gm.NOW)} · ` : ''}{gm.readingCount.toLocaleString()} readings
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function OverviewView({ gm, range, setRange, loading }: TabProps) {
+  const counts = gm.healthCounts();
+  const prev = gm.prevHealthCounts();
+  const delta = gm.ghDelta(range);
 
   const mDeltaTxt = `${delta.moisture > 0 ? '↑ ' : delta.moisture < 0 ? '↓ ' : ''}${Math.abs(delta.moisture)}% ${TODAY_WORD[range]}`;
   const tDeltaTxt = delta.temp == null ? '' : `${delta.temp > 0 ? '↑ ' : delta.temp < 0 ? '↓ ' : ''}${Math.abs(delta.temp)}°C ${TODAY_WORD[range]}`;
@@ -178,30 +230,7 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
       </div>
 
       {/* Greenhouse Trend */}
-      <div className="gm-card" style={{ padding: '14px 12px 16px' }}>
-        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '0 2px', marginBottom: 10 }}>Greenhouse Trend</div>
-        <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
-        {s.length < 2 ? (
-          loading
-            ? <ChartLoading height={210} />
-            : <EmptyHint icon="📡" title="No trend data yet" sub="More trends will appear as sensors collect data." />
-        ) : (
-          <>
-            <div style={{ display: 'flex', gap: 16, margin: '0 4px 8px' }}>
-              <LegendDot color="#0ea5e9" label="Avg moisture (%)" />
-              {hasTemp && <LegendDot color="#16a34a" label="Avg soil temp (°C)" />}
-            </div>
-            <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
-              leftDom={[0, 100]} rightDom={td} height={210} showRightAxis={hasTemp} dots />
-            <div style={{ margin: '12px 4px 0' }}>
-              <Insight icon="🌿">{ghInsight(delta, counts)}</Insight>
-            </div>
-            <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'right', marginTop: 8, paddingRight: 4 }}>
-              {lastTs ? `Updated ${relTime(lastTs, gm.NOW)} · ` : ''}{gm.readingCount.toLocaleString()} readings
-            </div>
-          </>
-        )}
-      </div>
+      <GreenhouseTrendCard gm={gm} range={range} setRange={setRange} loading={loading} />
     </Page>
   );
 }
@@ -304,14 +333,21 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
   gm: GreenhouseModel; item: ReturnType<GreenhouseModel['zoneList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
 }) {
   const { zone, cur, status, trend } = item;
+  const [metric, setMetric] = useState<Metric>('moist');
   const s = useMemo(() => gm.genZoneSeries(zone, range), [gm, zone, range]);
   const stats = gm.zoneDetailStats(zone, range);
-  const hasChart = s.length >= 2;
   const plant = cur.plant;
 
+  const isTemp = metric === 'temp';
+  const tempData = s.filter((d) => d.temp != null).map((d) => ({ value: d.temp as number, t: d.t }));
+  const hasChart = isTemp ? tempData.length >= 2 : s.length >= 2;
+
   const axis = buildAxis(range, gm.NOW);
-  const series: ChartSeries[] = [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
-  const bands = plant ? [{ from: plant.moistureMin, to: plant.moistureMax, color: '#16a34a' }] : [];
+  const series: ChartSeries[] = isTemp
+    ? [{ key: 't', name: 'Soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: tempData }]
+    : [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
+  const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, 100];
+  const bands = !isTemp && plant ? [{ from: plant.moistureMin, to: plant.moistureMax, color: '#16a34a' }] : [];
 
   const insight = trend.dir === 'down' ? `This bed has been drying over the ${RANGE_WORD[range]}.`
     : trend.dir === 'up' ? `This bed has been getting wetter over the ${RANGE_WORD[range]}.`
@@ -341,24 +377,35 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
         </div>
       </div>
 
-      {/* Moisture chart */}
+      {/* Moisture / temperature chart */}
       <div className="gm-card" style={{ padding: '14px 12px 16px' }}>
-        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 15.5, color: 'var(--ink)', padding: '0 2px', marginBottom: 10 }}>Moisture over time</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px', marginBottom: 10 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>
+            {isTemp ? 'Temperature over time' : 'Moisture over time'}
+          </div>
+          <MetricSwitch value={metric} onChange={setMetric} />
+        </div>
         <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
         {hasChart ? (
           <>
             <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
-              leftDom={[0, 100]} rightDom={[0, 100]} bands={bands} height={205} showRightAxis={false} dots />
+              leftDom={leftDom} rightDom={[0, 100]} leftUnit={isTemp ? '°' : '%'} bands={bands} height={205} showRightAxis={false} dots />
             <div style={{ display: 'flex', gap: 16, margin: '10px 4px 0', flexWrap: 'wrap' }}>
-              <LegendDot color="#0ea5e9" label="Soil moisture (%)" />
-              {plant && <LegendDot color="#16a34a" label={`Target range (${plant.moistureMin}–${plant.moistureMax}%)`} dashed />}
+              {isTemp ? (
+                <LegendDot color="#f59e0b" label="Soil temp (°C)" />
+              ) : (
+                <>
+                  <LegendDot color="#0ea5e9" label="Soil moisture (%)" />
+                  {plant && <LegendDot color="#16a34a" label={`Target range (${plant.moistureMin}–${plant.moistureMax}%)`} dashed />}
+                </>
+              )}
             </div>
           </>
         ) : loading ? (
           <ChartLoading height={205} />
         ) : (
           <div style={{ padding: '14px 0' }}>
-            <EmptyHint icon="🌱" title="No trend data yet" sub="We need more sensor readings to show trends for this zone." />
+            <EmptyHint icon={isTemp ? '🌡' : '🌱'} title="No trend data yet" sub={`We need more sensor readings to show ${isTemp ? 'temperature' : 'moisture'} trends for this zone.`} />
             <button onClick={onBack} style={{ width: '100%', marginTop: 12, padding: '13px', borderRadius: 999, border: 'none', background: 'var(--primary)', color: '#fff', fontWeight: 800, fontSize: 14, fontFamily: 'inherit', cursor: 'pointer' }}>View zone list</button>
           </div>
         )}
@@ -424,10 +471,16 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
   gm: GreenhouseModel; item: ReturnType<GreenhouseModel['plantList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
 }) {
   const { plant, agg, status, trend } = item;
+  const [metric, setMetric] = useState<Metric>('moist');
   const s = useMemo(() => gm.genPlantSeries(plant.id, range), [gm, plant.id, range]);
-  const hasChart = s.length >= 2;
+  const isTemp = metric === 'temp';
+  const tempData = s.filter((d) => d.temp != null).map((d) => ({ value: d.temp as number, t: d.t }));
+  const hasChart = isTemp ? tempData.length >= 2 : s.length >= 2;
   const axis = buildAxis(range, gm.NOW);
-  const series: ChartSeries[] = [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
+  const series: ChartSeries[] = isTemp
+    ? [{ key: 't', name: 'Avg soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: tempData }]
+    : [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
+  const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, 100];
 
   return (
     <Page>
@@ -451,20 +504,25 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
       </div>
 
       <div className="gm-card" style={{ padding: '14px 12px 16px' }}>
-        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 15.5, color: 'var(--ink)', padding: '0 2px', marginBottom: 10 }}>Average moisture over time</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 2px', marginBottom: 10 }}>
+          <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 15.5, color: 'var(--ink)' }}>
+            {isTemp ? 'Average temperature over time' : 'Average moisture over time'}
+          </div>
+          <MetricSwitch value={metric} onChange={setMetric} />
+        </div>
         <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
         {hasChart ? (
           <>
             <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
-              leftDom={[0, 100]} rightDom={[0, 100]} height={205} showRightAxis={false} dots />
+              leftDom={leftDom} rightDom={[0, 100]} leftUnit={isTemp ? '°' : '%'} height={205} showRightAxis={false} dots />
             <div style={{ display: 'flex', gap: 16, margin: '10px 4px 0' }}>
-              <LegendDot color="#0ea5e9" label="Average moisture (%)" />
+              <LegendDot color={isTemp ? '#f59e0b' : '#0ea5e9'} label={isTemp ? 'Average soil temp (°C)' : 'Average moisture (%)'} />
             </div>
           </>
         ) : loading ? (
           <ChartLoading height={205} />
         ) : (
-          <EmptyHint icon="🌱" title="No trend data yet" sub="More trends will appear as sensors collect data." />
+          <EmptyHint icon={isTemp ? '🌡' : '🌱'} title="No trend data yet" sub="More trends will appear as sensors collect data." />
         )}
       </div>
 

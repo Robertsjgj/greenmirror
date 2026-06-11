@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  AreaChart, Area,
-  XAxis, YAxis, Tooltip, ResponsiveContainer,
-} from 'recharts';
-import { useReadingsHistory, buildTrendData } from '../hooks/useReadingsHistory';
+import { useReadingsHistory } from '../hooks/useReadingsHistory';
 import type { TimeRange } from '../hooks/useReadingsHistory';
 import { useDataMode } from '../hooks/useDataMode';
 import { genMockDataset } from '../mockData';
+import { buildGreenhouseModel } from './trends/trendsModel';
+import { GreenhouseTrendCard } from './trends/TrendsViews';
 import type { LatestReading, VisualZone } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
 
 interface TrendsPreviewProps {
   zones?: VisualZone[];
   profilesById?: Map<string, PlantProfile>;
+  /** Full plant profile list — needed to build the trend model in live mode. */
+  plantProfiles?: PlantProfile[];
   /** Greenhouse ID — drives the moisture trend preview chart. */
   greenhouseId?: string;
   /** Simulation history — when present, the chart uses this instead of Firestore. */
@@ -47,11 +47,8 @@ const NEED_COLOR = '#ef4444';
 const WATCH_COLOR = '#f59e0b';
 const GOOD_COLOR  = '#22c55e';
 
-const RANGES: TimeRange[] = ['24h', '7d', '30d'];
-const RANGE_LABEL: Record<string, string> = { '24h': '24h', '7d': '7D', '30d': '30D' };
-
 export function TrendsPreview({
-  zones, profilesById, greenhouseId, simHistory, onOpenDashboard,
+  zones, profilesById, plantProfiles, greenhouseId, simHistory, onOpenDashboard,
 }: TrendsPreviewProps) {
   const [range, setRange] = useState<TimeRange>('24h');
   const [dataMode, setDataMode] = useDataMode();
@@ -99,18 +96,25 @@ export function TrendsPreview({
     return [...groups.values()];
   }, [effZones, effProfiles]);
 
-  // ── Moisture trend preview (greenhouse average over time) ───────────────────
-  const { trendData: firestoreTrends } = useReadingsHistory(
+  // ── Greenhouse trend model ──────────────────────────────────────────────────
+  // Build the SAME model the Trends dashboard uses, so the Home preview can
+  // render the exact Overview "Greenhouse Trend" chart (GreenhouseTrendCard).
+  const { readings: fsReadings, loading } = useReadingsHistory(
     simHistory || isDummy ? null : (greenhouseId ?? null),
     range,
   );
-  const realTrend = useMemo(
-    () => (simHistory ? buildTrendData(simHistory, range) : firestoreTrends),
-    [simHistory, firestoreTrends, range],
-  );
-  // Mock chart points come from the SAME buildTrendData bucketer as real data,
-  // so the discrete sample cadence + watering saw-tooth render true to life.
-  const chartData = mock ? buildTrendData(mock.readings, range) : realTrend;
+  const readings = useMemo(() => (mock ? mock.readings : (simHistory ?? fsReadings)), [mock, simHistory, fsReadings]);
+  const gm = useMemo(() => buildGreenhouseModel({
+    zones: effZones,
+    profilesById: effProfiles,
+    plantProfiles: mock ? mock.plantProfiles : (plantProfiles ?? []),
+    readings,
+    wateringEvents: mock ? mock.wateringEvents : [],
+  }), [effZones, effProfiles, plantProfiles, mock, readings]);
+  const chartLoading = isDummy || simHistory ? false : loading;
+
+  // Trend direction (from the same model) → phrases insight #1.
+  const moistureDelta = gm.ghDelta(range).moisture;
   const healthDisplay = health;
 
   // Temporary diagnostics for the Home Sensor Trends preview chart.
@@ -120,37 +124,20 @@ export function TrendsPreview({
       greenhouseId: greenhouseId ?? '(none)',
       source: isDummy ? 'mock' : simHistory ? 'simHistory' : 'firestore',
       range,
-      realChartPoints: realTrend.length,
-      chartPoints: chartData.length,
+      readings: readings.length,
+      readingCount: gm.readingCount,
       zonesWithReadings: effZones.filter((z) => z.hasReading && z.soilMoisturePct !== null).length,
     });
-  }, [dataMode, isDummy, greenhouseId, simHistory, range, realTrend.length, chartData.length, effZones]);
-
-  // Trend direction: compare first vs last average. Drives line colour + insight.
-  const trendDelta = useMemo(() => {
-    if (chartData.length < 2) return null;
-    return chartData[chartData.length - 1].avgMoisture - chartData[0].avgMoisture;
-  }, [chartData]);
-
-  const trendMood = trendDelta === null ? 'flat'
-    : trendDelta <= -4 ? 'down'
-    : trendDelta >= 4 ? 'up'
-    : 'flat';
-  const trendColor = trendMood === 'down' ? WATCH_COLOR : GOOD_COLOR;
-  const trendPill = trendMood === 'down'
-    ? { text: 'Drying out', color: WATCH_COLOR }
-    : trendMood === 'up'
-      ? { text: 'Improving', color: GOOD_COLOR }
-      : { text: 'Stable', color: GOOD_COLOR };
+  }, [dataMode, isDummy, greenhouseId, simHistory, range, readings.length, gm.readingCount, effZones]);
 
   // ── Insights (2–3 plain sentences derived from the data above) ──────────────
   const insights = useMemo(() => {
     const out: string[] = [];
 
     // 1) Overall direction
-    if (trendMood === 'down') out.push('Moisture is slipping across the greenhouse — some beds may need water soon.');
-    else if (trendMood === 'up') out.push('Moisture has improved across most zones recently.');
-    else if (chartData.length >= 2) out.push('Most zones stayed steady over this period.');
+    if (moistureDelta <= -4) out.push('Moisture is slipping across the greenhouse — some beds may need water soon.');
+    else if (moistureDelta >= 4) out.push('Moisture has improved across most zones recently.');
+    else if (gm.hasHistory) out.push('Most zones stayed steady over this period.');
 
     // 2) Driest / wettest plant group
     const driest = [...plantGroups].sort((a, b) => b.needsWater - a.needsWater)[0];
@@ -169,11 +156,11 @@ export function TrendsPreview({
     }
 
     return out.slice(0, 3);
-  }, [trendMood, chartData.length, plantGroups, health]);
+  }, [moistureDelta, gm.hasHistory, plantGroups, health]);
 
   // In dummy mode we always have data to show. In real mode, fall back to the
   // empty state only when there are genuinely no readings.
-  const hasData = isDummy || healthDisplay.total > 0 || chartData.length > 0;
+  const hasData = isDummy || healthDisplay.total > 0 || gm.hasHistory;
 
   return (
     <div>
@@ -239,92 +226,8 @@ export function TrendsPreview({
             </div>
           )}
 
-          {/* ── CARD 2: Greenhouse moisture trend preview ──────────────────── */}
-          <div className="gm-card" style={{ padding: '12px 14px 8px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', fontFamily: "'Baloo 2', system-ui" }}>
-                  Greenhouse Moisture Trend
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
-                  Average moisture across all active zones
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                {isDummy && (
-                  <span style={{
-                    fontSize: 9, fontWeight: 800, padding: '3px 7px', borderRadius: 8,
-                    background: '#fef3c7', color: '#92400e', whiteSpace: 'nowrap',
-                  }}>
-                    Sample
-                  </span>
-                )}
-                <span style={{
-                  fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 8,
-                  background: trendPill.color + '1f', color: trendPill.color, whiteSpace: 'nowrap',
-                }}>
-                  {trendPill.text}
-                </span>
-              </div>
-            </div>
-
-            {/* Range selectors */}
-            <div style={{ display: 'flex', gap: 4, margin: '8px 0 4px' }}>
-              {RANGES.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRange(r)}
-                  style={{
-                    padding: '4px 10px', borderRadius: 9, border: '1.5px solid',
-                    borderColor: range === r ? 'var(--primary)' : 'var(--line)',
-                    background: range === r ? 'var(--primary-soft)' : 'transparent',
-                    color: range === r ? 'var(--primary)' : 'var(--ink-3)',
-                    fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
-                  }}
-                >
-                  {RANGE_LABEL[r]}
-                </button>
-              ))}
-            </div>
-
-            {chartData.length < 2 ? (
-              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 12, fontWeight: 600 }}>
-                Not enough readings yet for this range.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={130}>
-                <AreaChart data={chartData} margin={{ top: 6, right: 4, left: -28, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="gmMoistFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={trendColor} stopOpacity={0.22} />
-                      <stop offset="100%" stopColor={trendColor} stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
-                    tickLine={false} axisLine={false} interval="preserveStartEnd"
-                  />
-                  <YAxis
-                    domain={[0, 100]} tickCount={3}
-                    tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
-                    tickLine={false} axisLine={false}
-                  />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    formatter={(v: number) => [`${v}%`, 'Avg moisture']}
-                    labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
-                  />
-                  <Area
-                    type="monotone" dataKey="avgMoisture"
-                    stroke={trendColor} strokeWidth={2.5}
-                    fill="url(#gmMoistFill)" dot={false}
-                    activeDot={{ r: 4, strokeWidth: 0, fill: trendColor }}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </div>
+          {/* ── CARD 2: Greenhouse trend — the exact Overview chart ───────────── */}
+          <GreenhouseTrendCard gm={gm} range={range} setRange={setRange} loading={chartLoading} />
 
           {/* ── CARD 3: Insights ───────────────────────────────────────────── */}
           {insights.length > 0 && (
@@ -422,12 +325,3 @@ function SnapshotCard({ emoji, label, count, color }: {
     </div>
   );
 }
-
-const tooltipStyle: React.CSSProperties = {
-  background: 'var(--card)',
-  border: '1.5px solid var(--line)',
-  borderRadius: 12,
-  fontSize: 12,
-  fontWeight: 700,
-  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-};

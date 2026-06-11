@@ -44,6 +44,8 @@ export interface ChartSeries {
   width?: number;
   axis: 'L' | 'R';
   faint?: boolean;
+  /** Tooltip unit override (e.g. '°'). Falls back to %/° based on axis side. */
+  unit?: string;
   data: ChartPoint[];
 }
 export interface ChartPoint { value: number; t: number; }
@@ -154,7 +156,7 @@ export function LineChart({
             <div key={'tt' + s.key} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block' }} />
               <span style={{ color: 'var(--ink-2)' }}>{s.name}</span>
-              <span style={{ color: s.color, marginLeft: 'auto' }}>{s.data[hover].value}{s.axis === 'R' ? '°' : '%'}</span>
+              <span style={{ color: s.color, marginLeft: 'auto' }}>{s.data[hover].value}{s.unit ?? (s.axis === 'R' ? '°' : '%')}</span>
             </div>
           ) : null)}
         </div>
