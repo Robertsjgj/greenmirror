@@ -8,7 +8,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { subscribeToReadingsHistory } from '../services/readingsService';
+import { subscribeToReadingsHistory, type Unsubscribe } from '../services/readingsService';
+import { subscribeToRollups, type RollupPeriod } from '../services/rollupsService';
 import type { LatestReading } from '../zoneLayout';
 
 export type TimeRange = '24h' | '7d' | '30d' | '3m' | '1y';
@@ -30,14 +31,31 @@ export const TIME_RANGE_LABELS: Record<TimeRange, string> = {
 // downsample) instead of reading thousands of documents on each open.
 export const HISTORY_QUERY_LIMIT = 500;
 
-// Per-range request size, always clamped to HISTORY_QUERY_LIMIT below. With the
-// backend writing history every ~5 min, ~300 docs already covers a full day.
+// ─── Rollups vs raw readings ──────────────────────────────────────────────────
+// Only 24h reads raw `readings` (full per-zone resolution at ~5 min spacing).
+// Every longer range reads pre-aggregated docs from `readingsRollups` instead —
+// one doc per hour/day — so a year of history is a few hundred reads, not
+// thousands. Rollup docs are LatestReading-shaped, so the bucketing code below
+// consumes them with no special-casing.
+//   7d  → hourly rollups (≤168 docs)
+//   30d / 3m / 1y → daily rollups (≤31 / ≤92 / ≤366 docs)
+const RANGE_ROLLUP: Record<TimeRange, RollupPeriod | null> = {
+  '24h': null,
+  '7d':  'hourly',
+  '30d': 'daily',
+  '3m':  'daily',
+  '1y':  'daily',
+};
+
+// Per-range request size, always clamped to HISTORY_QUERY_LIMIT below. The 24h
+// raw path needs ~300 docs for a full day; rollup paths need only as many docs
+// as there are hours/days in the window.
 const RANGE_LIMIT: Record<TimeRange, number> = {
   '24h': 300,
-  '7d':  HISTORY_QUERY_LIMIT,
-  '30d': HISTORY_QUERY_LIMIT,
-  '3m':  HISTORY_QUERY_LIMIT,
-  '1y':  HISTORY_QUERY_LIMIT,
+  '7d':  200,  // hourly: 7×24 = 168
+  '30d': 40,   // daily: 30
+  '3m':  120,  // daily: ~92
+  '1y':  400,  // daily: ~366
 };
 
 const RANGE_HOURS: Record<TimeRange, number> = {
@@ -323,18 +341,53 @@ export function useReadingsHistory(
     const cutoffMs = Date.now() - RANGE_HOURS[range] * 3_600_000;
     const cutoffISO = new Date(cutoffMs).toISOString();
 
-    const unsub = subscribeToReadingsHistory(
+    const onResult = (r: LatestReading[]) => { readingsCache.set(key, r); setAllReadings(r); setLoading(false); };
+    const onErr = () => { setLoading(false); }; // stop loading on Firestore error / missing index
+
+    // Long ranges read pre-aggregated rollups; only 24h reads raw `readings`.
+    const period = RANGE_ROLLUP[range];
+
+    if (!period) {
+      // 24h → raw readings only.
+      const unsub = subscribeToReadingsHistory(greenhouseId, onResult, limit, onErr, cutoffISO);
+      return () => { unsub?.(); };
+    }
+
+    // 7d / 30d / 3m / 1y → prefer rollups, but FALL BACK to raw `readings` when
+    // rollups are empty (not yet deployed / backfilled) or error out — so the
+    // chart never goes blank just because the rollups collection is empty.
+    let rawUnsub: Unsubscribe | null = null;
+    const startRawFallback = () => {
+      if (rawUnsub) return;
+      // Raw readings are denser than rollups, so allow more docs for coverage —
+      // still hard-capped by HISTORY_QUERY_LIMIT (recency downsample for long ranges).
+      const rawLimit = Math.min(maxDocs ?? HISTORY_QUERY_LIMIT, HISTORY_QUERY_LIMIT);
+      console.info(`[useReadingsHistory] no rollups for ${range} → falling back to raw readings (limit ${rawLimit})`);
+      rawUnsub = subscribeToReadingsHistory(greenhouseId, onResult, rawLimit, onErr, cutoffISO);
+    };
+
+    const rollupUnsub = subscribeToRollups(
       greenhouseId,
-      (r) => { readingsCache.set(key, r); setAllReadings(r); setLoading(false); },
+      period,
+      (r) => {
+        if (r.length > 0) {
+          // Rollups available → use them and tear down any raw fallback.
+          if (rawUnsub) { rawUnsub(); rawUnsub = null; }
+          onResult(r);
+        } else {
+          // Empty rollups → fall back to raw readings.
+          startRawFallback();
+        }
+      },
       limit,
-      () => { setLoading(false); }, // stop loading on Firestore error / missing index
+      () => { startRawFallback(); onErr(); }, // rollup error (e.g. missing index) → raw fallback
       cutoffISO,
     );
 
-    // Cleanup detaches the Firestore listener — called on unmount and whenever
+    // Cleanup detaches both Firestore listeners — called on unmount and whenever
     // greenhouseId/range/limit change (incl. when a panel closes → id = null).
-    return () => { unsub?.(); };
-  }, [greenhouseId, range, limit]);
+    return () => { rollupUnsub?.(); rawUnsub?.(); };
+  }, [greenhouseId, range, limit, maxDocs]);
 
   // Client-side time-range filter (belt-and-suspenders — Firestore already limits by count)
   const cutoff = useMemo(

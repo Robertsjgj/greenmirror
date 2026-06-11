@@ -23,6 +23,15 @@
         { "fieldPath": "greenhouse_id", "order": "ASCENDING" },
         { "fieldPath": "timestamp",     "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "readingsRollups",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "greenhouse_id", "order": "ASCENDING" },
+        { "fieldPath": "period",        "order": "ASCENDING" },
+        { "fieldPath": "timestamp",     "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

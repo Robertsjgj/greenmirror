@@ -26,6 +26,8 @@
 const path = require('path');
 const fs   = require('fs');
 
+const { createRollupWriter } = require('./rollups');
+
 let _saveReading    = async () => {};
 let _firestoreEnabled = false;
 
@@ -155,13 +157,22 @@ function attachSaveReading(admin, db) {
   let lastLiveWrite    = 0;
   let lastHistoryWrite = 0;
 
+  // Rollup writer accumulates EVERY tick (for accurate avg/min/max) and
+  // self-throttles its own writes — so it runs before the throttle gate below.
+  const rollups = createRollupWriter(admin, db);
+
   _saveReading = async (reading) => {
     try {
+      // Feed every tick into the hourly/daily rollups (fire-and-forget).
+      rollups.record(reading).catch((err) =>
+        console.error('[Rollups] record failed (non-fatal):', err.message));
+
       const now = Date.now();
       const writeLive    = now - lastLiveWrite    >= FIRESTORE_LIVE_WRITE_INTERVAL_MS;
       const writeHistory = now - lastHistoryWrite >= FIRESTORE_HISTORY_WRITE_INTERVAL_MS;
 
-      // Both within their throttle window → skip this tick entirely (no reads/writes).
+      // Both within their throttle window → skip the raw-reading writes below
+      // (rollups have already recorded this tick above).
       if (!writeLive && !writeHistory) return;
 
       const ghId = reading.greenhouse_id || 'sydney-greenhouse';

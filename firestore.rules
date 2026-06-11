@@ -10,6 +10,9 @@ service cloud.firestore {
     match /latestReadings/{id}   { allow read, write: if true; }
     match /readings/{id}         { allow read, write: if true; }
 
+    // Hourly / daily reading rollups (written by backend; read by trend charts)
+    match /readingsRollups/{id}  { allow read, write: if true; }
+
     // Greenhouse metadata
     match /greenhouses/{id}      { allow read, write: if true; }
     match /nodes/{id}            { allow read, write: if true; }

@@ -1,82 +1,163 @@
-import { useMemo } from 'react';
-import type { VisualZone } from '../zoneLayout';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  AreaChart, Area,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+} from 'recharts';
+import { useReadingsHistory, buildTrendData } from '../hooks/useReadingsHistory';
+import type { TimeRange } from '../hooks/useReadingsHistory';
+import type { LatestReading, VisualZone } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
 
 interface TrendsPreviewProps {
   zones?: VisualZone[];
   profilesById?: Map<string, PlantProfile>;
+  /** Greenhouse ID — drives the moisture trend preview chart. */
+  greenhouseId?: string;
+  /** Simulation history — when present, the chart uses this instead of Firestore. */
+  simHistory?: LatestReading[];
   onOpenDashboard: () => void;
 }
 
-function zoneStatus(moisture: number, profile: PlantProfile | null): {
-  status: 'critical' | 'dry' | 'wet' | 'good';
-  color: string;
-  label: string;
-  trend: string;
-  urgency: number;
-} {
+// ─── Health classification ─────────────────────────────────────────────────--
+// Three plain-language buckets for the at-a-glance snapshot.
+//   need     — below the plant's target moisture (or generically dry)
+//   watch    — near a target boundary, or holding too much water
+//   healthy  — comfortably inside the target range
+type Health = 'need' | 'watch' | 'healthy';
+
+// How close to a boundary (percentage points) still counts as "Watching".
+const WATCH_MARGIN = 5;
+
+function classifyHealth(moisture: number, profile: PlantProfile | null): Health {
   if (profile) {
-    if (moisture < profile.moistureMin * 0.7) {
-      return { status: 'critical', color: '#ef4444', label: 'Critical', trend: 'Drying fast', urgency: 4 };
-    }
-    if (moisture < profile.moistureMin) {
-      return { status: 'dry', color: '#f59e0b', label: 'Dry', trend: 'Trending dry', urgency: 3 };
-    }
-    if (moisture > profile.moistureMax) {
-      return { status: 'wet', color: '#0ea5e9', label: 'Too wet', trend: 'High moisture', urgency: 2 };
-    }
-    return { status: 'good', color: '#22c55e', label: 'Good', trend: 'Stable', urgency: 0 };
+    if (moisture < profile.moistureMin) return 'need';
+    if (moisture > profile.moistureMax) return 'watch';
+    if (moisture <= profile.moistureMin + WATCH_MARGIN) return 'watch';
+    if (moisture >= profile.moistureMax - WATCH_MARGIN) return 'watch';
+    return 'healthy';
   }
-  if (moisture < 25) return { status: 'dry', color: '#f59e0b', label: 'Dry', trend: 'Trending dry', urgency: 1 };
-  if (moisture > 80) return { status: 'wet', color: '#0ea5e9', label: 'Too wet', trend: 'High moisture', urgency: 1 };
-  return { status: 'good', color: '#22c55e', label: 'Good', trend: 'Stable', urgency: 0 };
+  if (moisture < 25) return 'need';
+  if (moisture < 30 || moisture > 75) return 'watch';
+  return 'healthy';
 }
 
-export function TrendsPreview({ zones, profilesById, onOpenDashboard }: TrendsPreviewProps) {
-  const urgencyZones = useMemo(() => {
-    return (zones ?? [])
-      .filter((z) => z.hasReading && z.soilMoisturePct !== null)
-      .map((z) => {
-        const profile = z.assignedPlant ? profilesById?.get(z.assignedPlant) ?? null : null;
-        const moisture = z.soilMoisturePct ?? 0;
-        const s = zoneStatus(moisture, profile);
-        return { zone: z, profile, moisture, ...s };
-      })
-      .sort((a, b) => b.urgency - a.urgency || a.moisture - b.moisture)
-      .slice(0, 3);
+const NEED_COLOR = '#ef4444';
+const WATCH_COLOR = '#f59e0b';
+const GOOD_COLOR  = '#22c55e';
+
+const RANGES: TimeRange[] = ['24h', '7d', '30d'];
+const RANGE_LABEL: Record<string, string> = { '24h': '24h', '7d': '7D', '30d': '30D' };
+
+export function TrendsPreview({
+  zones, profilesById, greenhouseId, simHistory, onOpenDashboard,
+}: TrendsPreviewProps) {
+  const [range, setRange] = useState<TimeRange>('24h');
+
+  // ── Greenhouse health snapshot (current readings) ──────────────────────────
+  const health = useMemo(() => {
+    let need = 0, watch = 0, healthy = 0;
+    (zones ?? []).forEach((z) => {
+      if (!z.hasReading || z.soilMoisturePct === null) return;
+      const profile = z.assignedPlant ? profilesById?.get(z.assignedPlant) ?? null : null;
+      const cls = classifyHealth(z.soilMoisturePct, profile);
+      if (cls === 'need') need++;
+      else if (cls === 'watch') watch++;
+      else healthy++;
+    });
+    return { need, watch, healthy, total: need + watch + healthy };
   }, [zones, profilesById]);
 
+  // ── Plant groups (only used to phrase insights) ─────────────────────────────
   const plantGroups = useMemo(() => {
-    const groups = new Map<string, {
-      profile: PlantProfile; count: number;
-      totalMoisture: number; moistureCount: number;
-      needsWater: number; tooWet: number;
-    }>();
+    const groups = new Map<string, { name: string; count: number; needsWater: number; tooWet: number }>();
     (zones ?? []).forEach((z) => {
-      if (!z.assignedPlant || !z.hasReading) return;
+      if (!z.assignedPlant || !z.hasReading || z.soilMoisturePct === null) return;
       const profile = profilesById?.get(z.assignedPlant);
       if (!profile) return;
       if (!groups.has(z.assignedPlant)) {
-        groups.set(z.assignedPlant, { profile, count: 0, totalMoisture: 0, moistureCount: 0, needsWater: 0, tooWet: 0 });
+        groups.set(z.assignedPlant, { name: profile.name, count: 0, needsWater: 0, tooWet: 0 });
       }
       const g = groups.get(z.assignedPlant)!;
       g.count++;
-      if (z.soilMoisturePct !== null) {
-        g.totalMoisture += z.soilMoisturePct;
-        g.moistureCount++;
-        if (z.soilMoisturePct < profile.moistureMin) g.needsWater++;
-        else if (z.soilMoisturePct > profile.moistureMax) g.tooWet++;
-      }
+      if (z.soilMoisturePct < profile.moistureMin) g.needsWater++;
+      else if (z.soilMoisturePct > profile.moistureMax) g.tooWet++;
     });
-    return [...groups.values()]
-      .sort((a, b) => (b.needsWater * 2 + b.tooWet) - (a.needsWater * 2 + a.tooWet))
-      .slice(0, 3);
+    return [...groups.values()];
   }, [zones, profilesById]);
 
-  const hasData = urgencyZones.length > 0 || plantGroups.length > 0;
+  // ── Moisture trend preview (greenhouse average over time) ───────────────────
+  const { trendData: firestoreTrends } = useReadingsHistory(
+    simHistory ? null : (greenhouseId ?? null),
+    range,
+  );
+  const trendData = useMemo(
+    () => (simHistory ? buildTrendData(simHistory, range) : firestoreTrends),
+    [simHistory, firestoreTrends, range],
+  );
+
+  // Temporary diagnostics for the Home Sensor Trends preview chart.
+  // (See readingsService / rollupsService logs for raw vs rollup doc counts and
+  //  useReadingsHistory for whether the raw-readings fallback kicked in.)
+  useEffect(() => {
+    console.info('[TrendsPreview] home chart', {
+      greenhouseId: greenhouseId ?? '(none)',
+      source: simHistory ? 'simHistory' : 'firestore',
+      range,
+      chartPoints: trendData.length,
+      zonesWithReadings: (zones ?? []).filter((z) => z.hasReading && z.soilMoisturePct !== null).length,
+    });
+  }, [greenhouseId, simHistory, range, trendData.length, zones]);
+
+  // Trend direction: compare first vs last average. Drives line colour + insight.
+  const trendDelta = useMemo(() => {
+    if (trendData.length < 2) return null;
+    return trendData[trendData.length - 1].avgMoisture - trendData[0].avgMoisture;
+  }, [trendData]);
+
+  const trendMood = trendDelta === null ? 'flat'
+    : trendDelta <= -4 ? 'down'
+    : trendDelta >= 4 ? 'up'
+    : 'flat';
+  const trendColor = trendMood === 'down' ? WATCH_COLOR : GOOD_COLOR;
+  const trendPill = trendMood === 'down'
+    ? { text: 'Drying out', color: WATCH_COLOR }
+    : trendMood === 'up'
+      ? { text: 'Improving', color: GOOD_COLOR }
+      : { text: 'Stable', color: GOOD_COLOR };
+
+  // ── Insights (2–3 plain sentences from the calculations above) ──────────────
+  const insights = useMemo(() => {
+    const out: string[] = [];
+
+    // 1) Overall direction
+    if (trendMood === 'down') out.push('Moisture is slipping across the greenhouse — some beds may need water soon.');
+    else if (trendMood === 'up') out.push('Moisture has improved across most zones recently.');
+    else if (trendData.length >= 2) out.push('Most zones stayed steady over this period.');
+
+    // 2) Driest / wettest plant group
+    const driest = [...plantGroups].sort((a, b) => b.needsWater - a.needsWater)[0];
+    const wettest = [...plantGroups].sort((a, b) => b.tooWet - a.tooWet)[0];
+    if (driest && driest.needsWater > 0) {
+      out.push(`${driest.name} ${driest.needsWater === 1 ? 'bed is' : 'beds are'} drying faster than the others.`);
+    } else if (wettest && wettest.tooWet > 0) {
+      out.push(`${wettest.name} ${wettest.tooWet === 1 ? 'bed is' : 'beds are'} holding a lot of water.`);
+    }
+
+    // 3) Right-now health summary
+    if (health.need > 0) {
+      out.push(`${health.need} zone${health.need === 1 ? '' : 's'} need watering right now.`);
+    } else if (health.total > 0) {
+      out.push('Every zone is sitting in a healthy range right now.');
+    }
+
+    return out.slice(0, 3);
+  }, [trendMood, trendData.length, plantGroups, health]);
+
+  const hasData = health.total > 0 || trendData.length > 0;
 
   return (
     <div>
+      {/* Header (unchanged) */}
       <div style={{ padding: '0 2px 12px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 8 }}>
         <div>
           <h2 className="gm-h2">Sensor Trends 📈</h2>
@@ -103,94 +184,143 @@ export function TrendsPreview({ zones, profilesById, onOpenDashboard }: TrendsPr
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {urgencyZones.length > 0 && (
-            <div className="gm-card" style={{ padding: '0 14px' }}>
-              <SectionLabel>Zones needing attention</SectionLabel>
-              {urgencyZones.map(({ zone, profile, moisture, color, label, trend }, i) => (
-                <div key={zone.visualLabel} style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0',
-                  borderBottom: i < urgencyZones.length - 1 ? '1px solid var(--line)' : 'none',
-                }}>
-                  <div style={{
-                    width: 32, height: 32, borderRadius: 9, flexShrink: 0,
-                    background: color + '18', display: 'grid', placeItems: 'center', fontSize: 15,
-                  }}>
-                    {profile?.icon ?? '🌱'}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {zone.displayLabel ?? zone.visualLabel}
-                      {profile && (
-                        <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {profile.name}</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--ink-3)', marginTop: 1, fontWeight: 600 }}>{trend}</div>
-                  </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 800, color }}>{moisture.toFixed(0)}%</div>
-                    <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 5, background: color + '18', color }}>
-                      {label}
-                    </span>
-                  </div>
+
+          {/* ── CARD 1: Greenhouse health snapshot ─────────────────────────── */}
+          {health.total > 0 && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              <SnapshotCard emoji="🔴" label="Need water" count={health.need} color={NEED_COLOR} />
+              <SnapshotCard emoji="🟡" label="Watching"   count={health.watch} color={WATCH_COLOR} />
+              <SnapshotCard emoji="🟢" label="Healthy"    count={health.healthy} color={GOOD_COLOR} />
+            </div>
+          )}
+
+          {/* ── CARD 2: Greenhouse moisture trend preview ──────────────────── */}
+          <div className="gm-card" style={{ padding: '12px 14px 8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', fontFamily: "'Baloo 2', system-ui" }}>
+                  Greenhouse Moisture Trend
                 </div>
+                <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
+                  Average moisture across all active zones
+                </div>
+              </div>
+              <span style={{
+                fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 8,
+                background: trendPill.color + '1f', color: trendPill.color, flexShrink: 0, whiteSpace: 'nowrap',
+              }}>
+                {trendPill.text}
+              </span>
+            </div>
+
+            {/* Range selectors */}
+            <div style={{ display: 'flex', gap: 4, margin: '8px 0 4px' }}>
+              {RANGES.map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRange(r)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 9, border: '1.5px solid',
+                    borderColor: range === r ? 'var(--primary)' : 'var(--line)',
+                    background: range === r ? 'var(--primary-soft)' : 'transparent',
+                    color: range === r ? 'var(--primary)' : 'var(--ink-3)',
+                    fontSize: 11, fontWeight: 800, fontFamily: 'inherit', cursor: 'pointer',
+                  }}
+                >
+                  {RANGE_LABEL[r]}
+                </button>
               ))}
             </div>
-          )}
 
-          {plantGroups.length > 0 && (
-            <div className="gm-card" style={{ padding: '0 14px' }}>
-              <SectionLabel>Plant behavior</SectionLabel>
-              {plantGroups.map((g, i) => {
-                const avg = g.moistureCount > 0 ? g.totalMoisture / g.moistureCount : 0;
-                const statusLabel = g.needsWater > 0 ? 'Drying fast' : g.tooWet > 0 ? 'Too wet' : 'Stable';
-                const statusColor = g.needsWater > 0 ? '#f59e0b' : g.tooWet > 0 ? '#0ea5e9' : '#22c55e';
-                return (
-                  <div key={g.profile.id} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0',
-                    borderBottom: i < plantGroups.length - 1 ? '1px solid var(--line)' : 'none',
-                  }}>
-                    <div style={{
-                      width: 32, height: 32, borderRadius: 9, flexShrink: 0,
-                      background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 15,
-                    }}>
-                      {g.profile.icon ?? '🌱'}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--ink)' }}>{g.profile.name}</div>
-                      <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>
-                        {g.count} zone{g.count !== 1 ? 's' : ''} · {avg.toFixed(0)}% avg · target {g.profile.moistureMin}–{g.profile.moistureMax}%
-                      </div>
-                    </div>
+            {trendData.length < 2 ? (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 12, fontWeight: 600 }}>
+                Not enough readings yet for this range.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={130}>
+                <AreaChart data={trendData} margin={{ top: 6, right: 4, left: -28, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="gmMoistFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={trendColor} stopOpacity={0.22} />
+                      <stop offset="100%" stopColor={trendColor} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
+                    tickLine={false} axisLine={false} interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    domain={[0, 100]} tickCount={3}
+                    tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
+                    tickLine={false} axisLine={false}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    formatter={(v: number) => [`${v}%`, 'Avg moisture']}
+                    labelStyle={{ color: '#94a3b8', fontWeight: 600, fontSize: 11 }}
+                  />
+                  <Area
+                    type="monotone" dataKey="avgMoisture"
+                    stroke={trendColor} strokeWidth={2.5}
+                    fill="url(#gmMoistFill)" dot={false}
+                    activeDot={{ r: 4, strokeWidth: 0, fill: trendColor }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          {/* ── CARD 3: Insights ───────────────────────────────────────────── */}
+          {insights.length > 0 && (
+            <div className="gm-card" style={{ padding: '12px 14px' }}>
+              <div style={{
+                fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
+                color: 'var(--ink-3)', textTransform: 'uppercase', marginBottom: 8,
+              }}>
+                What&apos;s happening
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {insights.map((text, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                     <span style={{
-                      fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 7,
-                      background: statusColor + '18', color: statusColor, flexShrink: 0,
-                    }}>
-                      {statusLabel}
-                    </span>
+                      width: 6, height: 6, borderRadius: '50%', background: 'var(--primary)',
+                      marginTop: 6, flexShrink: 0,
+                    }} />
+                    <div style={{ fontSize: 12.5, color: 'var(--ink-2)', fontWeight: 600, lineHeight: 1.4 }}>
+                      {text}
+                    </div>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           )}
 
+          {/* ── CARD 4: Open full analysis (primary call to action) ────────── */}
           <button
             onClick={onOpenDashboard}
             style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-              width: '100%', padding: '14px 16px', textAlign: 'left', cursor: 'pointer',
-              background: 'var(--card)', border: '1.5px dashed var(--line)', borderRadius: 16,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+              width: '100%', padding: '16px 18px', textAlign: 'left', cursor: 'pointer',
+              background: 'var(--primary-soft)', border: '1.5px solid var(--primary)', borderRadius: 16,
               boxShadow: 'var(--shadow-sm)',
             }}
           >
             <div>
-              <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 14, color: 'var(--primary)' }}>
-                Open Trends & Analysis
+              <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 15, color: 'var(--primary)' }}>
+                Open Trends &amp; Analysis
               </div>
-              <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 2, fontWeight: 600 }}>
-                Charts, watering response, zone history, research data
+              <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginTop: 3, fontWeight: 600, lineHeight: 1.4 }}>
+                View zone history, plant trends, watering impact, and greenhouse insights.
               </div>
             </div>
-            <span style={{ fontSize: 18, color: 'var(--primary)' }}>→</span>
+            <span style={{
+              width: 34, height: 34, borderRadius: '50%', flexShrink: 0,
+              background: 'var(--primary)', color: '#fff', fontSize: 18,
+              display: 'grid', placeItems: 'center',
+            }}>
+              →
+            </span>
           </button>
         </div>
       )}
@@ -198,14 +328,32 @@ export function TrendsPreview({ zones, profilesById, onOpenDashboard }: TrendsPr
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+// ─── Sub-components ─────────────────────────────────────────────────────────--
+
+function SnapshotCard({ emoji, label, count, color }: {
+  emoji: string; label: string; count: number; color: string;
+}) {
   return (
-    <div style={{
-      fontSize: 10, fontWeight: 800, letterSpacing: '0.1em',
-      color: 'var(--ink-3)', textTransform: 'uppercase',
-      padding: '8px 0 4px',
+    <div className="gm-card" style={{
+      padding: '12px 8px', textAlign: 'center',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
     }}>
-      {children}
+      <div style={{ fontSize: 16, lineHeight: 1 }}>{emoji}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1.1 }}>
+        {count}
+      </div>
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+        {label}
+      </div>
     </div>
   );
 }
+
+const tooltipStyle: React.CSSProperties = {
+  background: 'var(--card)',
+  border: '1.5px solid var(--line)',
+  borderRadius: 12,
+  fontSize: 12,
+  fontWeight: 700,
+  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+};
