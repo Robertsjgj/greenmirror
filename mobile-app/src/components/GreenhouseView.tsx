@@ -79,10 +79,14 @@ export function GreenhouseView({
   const siteInfo = GREENHOUSES[mapKind];
 
   // ── Zone sparkline data (only fetched when zones view is active) ─────────────
+  // Sparklines need only ~60 recent points, so cap the query hard (Firestore
+  // quota protection — see useReadingsHistory / HISTORY_QUERY_LIMIT). Passing
+  // null when not on the zones view tears the listener down entirely.
   const ghId = latestReading?.greenhouse_id ?? null;
   const { readings: historyReadings } = useReadingsHistory(
     viewMode === 'zones' ? ghId : null,
     '24h',
+    60,
   );
 
   // Build per-zone sparkline map from the last ~60 readings (chronological order)

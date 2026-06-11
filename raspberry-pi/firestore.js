@@ -128,29 +128,64 @@ try {
 
 // ─── Write helper ─────────────────────────────────────────────────────────────
 
+// ─── Firestore quota protection (write throttling) ────────────────────────────
+//
+// Sensors tick every ~5s. Writing latestReadings + a history doc on every tick
+// is ~17k writes/day for EACH collection — well past Firestore's free tier
+// (20k writes/day) — and every history write makes the frontend's real-time
+// listeners re-read, which is what pushed daily reads to 132k.
+//
+// So we throttle independently:
+//   • latestReadings/{gh} — overwritten at most every LIVE interval. This is the
+//     remote "current conditions" doc; the local UI shows live data via fast
+//     API polling (no Firestore cost), so 30s staleness here is fine.
+//   • readings/{auto}     — appended at most every HISTORY interval. Trend charts
+//     bucket history into ~30 points, so coarse 1–5 min samples are plenty.
+//
+// Both intervals are env-tunable; see raspberry-pi/.env.example.
+const FIRESTORE_LIVE_WRITE_INTERVAL_MS    = Number(process.env.FIRESTORE_LIVE_WRITE_INTERVAL_MS)    || 30_000;   // 30s
+const FIRESTORE_HISTORY_WRITE_INTERVAL_MS = Number(process.env.FIRESTORE_HISTORY_WRITE_INTERVAL_MS) || 300_000;  // 5 min
+
 function attachSaveReading(admin, db) {
+  console.log(
+    `[Firestore] Write throttle — latestReadings every ${FIRESTORE_LIVE_WRITE_INTERVAL_MS / 1000}s`,
+    `· history every ${FIRESTORE_HISTORY_WRITE_INTERVAL_MS / 1000}s`,
+  );
+
+  let lastLiveWrite    = 0;
+  let lastHistoryWrite = 0;
+
   _saveReading = async (reading) => {
     try {
+      const now = Date.now();
+      const writeLive    = now - lastLiveWrite    >= FIRESTORE_LIVE_WRITE_INTERVAL_MS;
+      const writeHistory = now - lastHistoryWrite >= FIRESTORE_HISTORY_WRITE_INTERVAL_MS;
+
+      // Both within their throttle window → skip this tick entirely (no reads/writes).
+      if (!writeLive && !writeHistory) return;
+
       const ghId = reading.greenhouse_id || 'sydney-greenhouse';
-      const batch = db.batch();
-
-      const histRef   = db.collection('readings').doc();
-      const latestRef = db.collection('latestReadings').doc(ghId);
-
       const payload = {
         ...reading,
         _savedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
-      batch.set(histRef, payload);
-      batch.set(latestRef, payload);
+      const batch = db.batch();
+      if (writeLive) {
+        batch.set(db.collection('latestReadings').doc(ghId), payload);
+        lastLiveWrite = now;
+      }
+      if (writeHistory) {
+        batch.set(db.collection('readings').doc(), payload);
+        lastHistoryWrite = now;
+      }
 
       await batch.commit();
 
-      console.log(`[Firestore] Environment stored for ${ghId}:`, payload.environment || 'unavailable');
-
       if (process.env.FIRESTORE_VERBOSE === 'true') {
-        console.log(`[Firestore] ✅ Wrote latestReadings/${ghId} + readings history`);
+        console.log(
+          `[Firestore] ✅ wrote${writeLive ? ' latestReadings' : ''}${writeHistory ? ' +history' : ''} for ${ghId}`,
+        );
       }
     } catch (err) {
       console.error('[Firestore] ❌ Write failed (non-fatal):', err.message);

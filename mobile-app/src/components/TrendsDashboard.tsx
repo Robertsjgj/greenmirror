@@ -54,7 +54,9 @@ export function TrendsDashboard({
   const [selZone, setSelZone] = useState<string | null>(null);
   const [selPlant, setSelPlant] = useState<string | null>(null);
 
-  // Time-series history — only queries Firestore while the dashboard is open
+  // Time-series history — Firestore quota protection: pass null (→ no listener,
+  // no reads) unless the dashboard is actually open, so history loads only when
+  // Trends is opened and the listener is detached the moment it closes.
   const { readings: firestoreReadings, loading } = useReadingsHistory(
     simHistory ? null : (open ? greenhouseId : null),
     range,

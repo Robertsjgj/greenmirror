@@ -21,15 +21,23 @@ export const TIME_RANGE_LABELS: Record<TimeRange, string> = {
   '1y':  'Last year',
 };
 
-// How many readings to request from Firestore per range.
-// Charts bucket readings into ~30 points, so we don't need every raw sample —
-// modest caps keep the first paint fast (no long "loading history" wait).
+// ─── Firestore quota protection (read limiting) ───────────────────────────────
+// Firestore charges one read per document returned. A single un-capped history
+// query (thousands of docs) was a big part of the 132k-reads/day blow-out.
+// Charts bucket readings into ~30 points, so a few hundred recent docs is more
+// than enough — we never need the raw series. This hard cap applies to EVERY
+// history query; longer ranges therefore show the most-recent points (a recency
+// downsample) instead of reading thousands of documents on each open.
+export const HISTORY_QUERY_LIMIT = 500;
+
+// Per-range request size, always clamped to HISTORY_QUERY_LIMIT below. With the
+// backend writing history every ~5 min, ~300 docs already covers a full day.
 const RANGE_LIMIT: Record<TimeRange, number> = {
-  '24h': 1500,
-  '7d':  2500,
-  '30d': 4000,
-  '3m':  6000,
-  '1y':  9000,
+  '24h': 300,
+  '7d':  HISTORY_QUERY_LIMIT,
+  '30d': HISTORY_QUERY_LIMIT,
+  '3m':  HISTORY_QUERY_LIMIT,
+  '1y':  HISTORY_QUERY_LIMIT,
 };
 
 const RANGE_HOURS: Record<TimeRange, number> = {
@@ -269,24 +277,39 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
 // refreshes it in the background — so switching ranges feels immediate and the
 // "loading" state only shows the first time a range is opened.
 const readingsCache = new Map<string, LatestReading[]>();
-const cacheKeyOf = (ghId: string | null, range: TimeRange) => (ghId ? `${ghId}|${range}` : '');
+const cacheKeyOf = (ghId: string | null, range: TimeRange, limit: number) => (ghId ? `${ghId}|${range}|${limit}` : '');
 
+/**
+ * Subscribe to greenhouse-scoped readings history for a time range.
+ *
+ * Firestore quota notes:
+ *  - Pass `greenhouseId = null` (e.g. while a panel is closed) to subscribe to
+ *    nothing — this hook only reads while a caller actually needs the data, and
+ *    the listener is torn down automatically when that argument goes null or the
+ *    component unmounts (see the effect cleanup below).
+ *  - `maxDocs` lets light consumers (e.g. zone sparklines) request far fewer
+ *    documents than a full chart. Every request is hard-capped by
+ *    HISTORY_QUERY_LIMIT so no single query can read thousands of docs.
+ */
 export function useReadingsHistory(
   greenhouseId: string | null,
   range: TimeRange,
+  maxDocs?: number,
 ): { readings: LatestReading[]; trendData: TrendPoint[]; loading: boolean } {
-  const initialKey = cacheKeyOf(greenhouseId, range);
+  const limit = Math.min(maxDocs ?? RANGE_LIMIT[range], HISTORY_QUERY_LIMIT);
+  const initialKey = cacheKeyOf(greenhouseId, range, limit);
   const [allReadings, setAllReadings] = useState<LatestReading[]>(() => readingsCache.get(initialKey) ?? []);
   const [loading, setLoading] = useState<boolean>(() => !!greenhouseId && !readingsCache.has(initialKey));
 
   useEffect(() => {
     if (!greenhouseId) {
+      // No active consumer → no subscription, no reads.
       setAllReadings([]);
       setLoading(false);
       return;
     }
 
-    const key = cacheKeyOf(greenhouseId, range);
+    const key = cacheKeyOf(greenhouseId, range, limit);
     const cached = readingsCache.get(key);
     if (cached) {
       // Instant paint from cache; subscription below keeps it fresh.
@@ -303,13 +326,15 @@ export function useReadingsHistory(
     const unsub = subscribeToReadingsHistory(
       greenhouseId,
       (r) => { readingsCache.set(key, r); setAllReadings(r); setLoading(false); },
-      RANGE_LIMIT[range],
+      limit,
       () => { setLoading(false); }, // stop loading on Firestore error / missing index
       cutoffISO,
     );
 
+    // Cleanup detaches the Firestore listener — called on unmount and whenever
+    // greenhouseId/range/limit change (incl. when a panel closes → id = null).
     return () => { unsub?.(); };
-  }, [greenhouseId, range]);
+  }, [greenhouseId, range, limit]);
 
   // Client-side time-range filter (belt-and-suspenders — Firestore already limits by count)
   const cutoff = useMemo(
