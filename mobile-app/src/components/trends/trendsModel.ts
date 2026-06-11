@@ -13,6 +13,9 @@ import type { ActivityEntry } from '../../activityLog';
 import type { TimeRange } from '../../hooks/useReadingsHistory';
 
 const D = 86_400_000;
+const RANGE_SPAN_MS: Record<TimeRange, number> = {
+  '24h': 24 * 3_600_000, '7d': 7 * D, '30d': 30 * D, '3m': 90 * D, '1y': 365 * D,
+};
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 export interface PlantLite {
@@ -240,11 +243,12 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
   // whenever ≥2 readings exist in the window — even if they're recent/clustered
   // (fixed calendar buckets used to collapse fresh data to a single point).
   function bucketSeries(range: TimeRange, accept: (zoneId: string) => boolean): SeriesPoint[] {
+    const cutoff = NOW - RANGE_SPAN_MS[range];   // only chart the selected window
     const raw: { ts: number; m: number; t: number | null }[] = [];
     for (const r of readings) {
       if (!r.timestamp) continue;
       const ts = new Date(r.timestamp).getTime();
-      if (!ts || isNaN(ts)) continue;
+      if (!ts || isNaN(ts) || ts < cutoff) continue;
       let mSum = 0, mC = 0, tSum = 0, tC = 0;
       for (const z of r.zones ?? []) {
         if (!accept(z.zone_id)) continue;

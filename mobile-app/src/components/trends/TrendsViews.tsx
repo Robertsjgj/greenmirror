@@ -28,6 +28,34 @@ const TODAY_WORD: Record<TimeRange, string> = {
   '24h': 'today', '7d': 'this week', '30d': 'this month', '3m': 'this quarter', '1y': 'this year',
 };
 
+// ── Calendar x-axis for the selected scope ──────────────────────────────────
+// The axis spans the whole selected window and is labelled with real calendar
+// units (hours for 24h, weekdays for 7D, dates for 30D/3M, months for 1Y);
+// data points are then plotted at their true time position within it.
+const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const HOUR_MS = 3_600_000, DAY_MS = 86_400_000;
+const RANGE_SPAN: Record<TimeRange, number> = {
+  '24h': 24 * HOUR_MS, '7d': 7 * DAY_MS, '30d': 30 * DAY_MS, '3m': 90 * DAY_MS, '1y': 365 * DAY_MS,
+};
+const fmtHour = (t: number) => { const h = new Date(t).getHours(); return `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`; };
+const fmtMD = (t: number) => { const d = new Date(t); return `${MON[d.getMonth()]} ${d.getDate()}`; };
+
+interface Axis { domain: [number, number]; ticks: { t: number; label: string }[]; tip: (t: number) => string; }
+function buildAxis(range: TimeRange, now: number): Axis {
+  const start = now - RANGE_SPAN[range];
+  const ticks: { t: number; label: string }[] = [];
+  const add = (count: number, step: number, label: (t: number) => string) => {
+    for (let i = 0; i <= count; i++) { const t = start + i * step; ticks.push({ t, label: label(t) }); }
+  };
+  if (range === '24h') { add(6, 4 * HOUR_MS, fmtHour); return { domain: [start, now], ticks, tip: (t) => `${WD[new Date(t).getDay()]} ${fmtHour(t)}` }; }
+  if (range === '7d')  { add(7, DAY_MS, (t) => WD[new Date(t).getDay()]); return { domain: [start, now], ticks, tip: (t) => `${WD[new Date(t).getDay()]} · ${fmtMD(t)}` }; }
+  if (range === '30d') { add(6, 5 * DAY_MS, fmtMD); return { domain: [start, now], ticks, tip: fmtMD }; }
+  if (range === '3m')  { add(6, 15 * DAY_MS, fmtMD); return { domain: [start, now], ticks, tip: fmtMD }; }
+  add(6, 61 * DAY_MS, (t) => MON[new Date(t).getMonth()]);
+  return { domain: [start, now], ticks, tip: (t) => `${MON[new Date(t).getMonth()]} ${new Date(t).getFullYear()}` };
+}
+
 // Padded vertical stack. Lives inside the dashboard's plain scroll container,
 // so its height is content-driven and children never get shrink-clipped.
 function Page({ children, gap = 13 }: { children: ReactNode; gap?: number }) {
@@ -108,10 +136,11 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
     return [lo, hi] as [number, number];
   }, [s]);
 
+  const axis = buildAxis(range, gm.NOW);
   const series: ChartSeries[] = [
-    { key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, label: d.label })) },
+    { key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) },
   ];
-  if (hasTemp) series.push({ key: 't', name: 'Avg soil temp', color: '#16a34a', axis: 'R', width: 2.6, data: s.map((d) => ({ value: d.temp ?? 0, label: d.label })) });
+  if (hasTemp) series.push({ key: 't', name: 'Avg soil temp', color: '#16a34a', axis: 'R', width: 2.6, data: s.map((d) => ({ value: d.temp ?? 0, t: d.t })) });
 
   const lastTs = s.length ? s[s.length - 1].t : null;
 
@@ -162,7 +191,7 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
               <LegendDot color="#0ea5e9" label="Avg moisture (%)" />
               {hasTemp && <LegendDot color="#16a34a" label="Avg soil temp (°C)" />}
             </div>
-            <LineChart series={series} xLabels={s.map((d) => ({ label: d.label, tick: d.tick }))}
+            <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
               leftDom={[0, 100]} rightDom={td} height={210} showRightAxis={hasTemp} dots />
             <div style={{ margin: '12px 4px 0' }}>
               <Insight icon="🌿">{ghInsight(delta, counts)}</Insight>
@@ -280,7 +309,8 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
   const hasChart = s.length >= 2;
   const plant = cur.plant;
 
-  const series: ChartSeries[] = [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, label: d.label })) }];
+  const axis = buildAxis(range, gm.NOW);
+  const series: ChartSeries[] = [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
   const bands = plant ? [{ from: plant.moistureMin, to: plant.moistureMax, color: '#16a34a' }] : [];
 
   const insight = trend.dir === 'down' ? `This bed has been drying over the ${RANGE_WORD[range]}.`
@@ -317,7 +347,7 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
         <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
         {hasChart ? (
           <>
-            <LineChart series={series} xLabels={s.map((d) => ({ label: d.label, tick: d.tick }))}
+            <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
               leftDom={[0, 100]} rightDom={[0, 100]} bands={bands} height={205} showRightAxis={false} dots />
             <div style={{ display: 'flex', gap: 16, margin: '10px 4px 0', flexWrap: 'wrap' }}>
               <LegendDot color="#0ea5e9" label="Soil moisture (%)" />
@@ -396,7 +426,8 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
   const { plant, agg, status, trend } = item;
   const s = useMemo(() => gm.genPlantSeries(plant.id, range), [gm, plant.id, range]);
   const hasChart = s.length >= 2;
-  const series: ChartSeries[] = [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, label: d.label })) }];
+  const axis = buildAxis(range, gm.NOW);
+  const series: ChartSeries[] = [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
 
   return (
     <Page>
@@ -424,7 +455,7 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
         <div style={{ marginBottom: 10, padding: '0 2px' }}><RangePicker value={range} onChange={(r) => setRange(r as TimeRange)} /></div>
         {hasChart ? (
           <>
-            <LineChart series={series} xLabels={s.map((d) => ({ label: d.label, tick: d.tick }))}
+            <LineChart series={series} xDomain={axis.domain} xTicks={axis.ticks} tipLabel={axis.tip}
               leftDom={[0, 100]} rightDom={[0, 100]} height={205} showRightAxis={false} dots />
             <div style={{ display: 'flex', gap: 16, margin: '10px 4px 0' }}>
               <LegendDot color="#0ea5e9" label="Average moisture (%)" />

@@ -44,14 +44,16 @@ export interface ChartSeries {
   width?: number;
   axis: 'L' | 'R';
   faint?: boolean;
-  data: { value: number; label: string }[];
+  data: ChartPoint[];
 }
-export interface XLabel { label: string; tick: boolean; }
+export interface ChartPoint { value: number; t: number; }
+export interface AxisTick { t: number; label: string; }
 export interface Band { from: number; to: number; color: string; }
 
 export interface LineChartProps {
   series: ChartSeries[];
-  xLabels: XLabel[];
+  xDomain: [number, number];   // [startMs, endMs] of the selected scope
+  xTicks: AxisTick[];          // calendar tick marks across that scope
   leftDom: [number, number];
   rightDom: [number, number];
   leftUnit?: string;
@@ -60,31 +62,36 @@ export interface LineChartProps {
   height?: number;
   showRightAxis?: boolean;
   dots?: boolean;
+  tipLabel?: (t: number) => string;
 }
 
 export function LineChart({
-  series, xLabels, leftDom, rightDom, leftUnit = '%', rightUnit = '°', bands = [], height = 220, showRightAxis = true, dots = false,
+  series, xDomain, xTicks, leftDom, rightDom, leftUnit = '%', rightUnit = '°',
+  bands = [], height = 220, showRightAxis = true, dots = false, tipLabel,
 }: LineChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const W = 320, H = height;
   const padL = 30, padR = showRightAxis ? 30 : 8, padT = 12, padB = 22;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const n = xLabels.length;
-  const xAt = (i: number) => padL + (n <= 1 ? plotW / 2 : (i * plotW) / (n - 1));
+  const span = Math.max(1, xDomain[1] - xDomain[0]);
+  // x is positioned by real time within the selected scope window
+  const xAt = (t: number) => padL + plotW * Math.min(1, Math.max(0, (t - xDomain[0]) / span));
   const yL = (v: number) => padT + plotH * (1 - (v - leftDom[0]) / (leftDom[1] - leftDom[0]));
   const yR = (v: number) => padT + plotH * (1 - (v - rightDom[0]) / (rightDom[1] - rightDom[0]));
 
+  const ref = series[0]?.data ?? [];
+  const n = ref.length;
   const leftTicks = useMemo(() => { const a: number[] = []; for (let k = 0; k <= 4; k++) a.push(leftDom[0] + (leftDom[1] - leftDom[0]) * k / 4); return a; }, [leftDom]);
   const rightTicks = useMemo(() => { const a: number[] = []; for (let k = 0; k <= 4; k++) a.push(rightDom[0] + (rightDom[1] - rightDom[0]) * k / 4); return a; }, [rightDom]);
 
   function onMove(e: React.MouseEvent | React.TouchEvent) {
-    if (!wrapRef.current) return;
+    if (!wrapRef.current || n === 0) return;
     const r = wrapRef.current.getBoundingClientRect();
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
     const px = (clientX - r.left) / r.width * W;
     let best = 0, bd = Infinity;
-    for (let i = 0; i < n; i++) { const d = Math.abs(xAt(i) - px); if (d < bd) { bd = d; best = i; } }
+    for (let i = 0; i < n; i++) { const d = Math.abs(xAt(ref[i].t) - px); if (d < bd) { bd = d; best = i; } }
     setHover(best);
   }
 
@@ -108,39 +115,41 @@ export function LineChart({
         {showRightAxis && rightTicks.map((v, i) => (
           <text key={'rt' + i} x={W - padR + 4} y={yR(v) + 3} fontSize="8.5" fill="#c0b9a8" fontWeight="700" textAnchor="start">{Math.round(v)}{rightUnit}</text>
         ))}
-        {xLabels.map((l, i) => l.tick ? (
-          <text key={'x' + i} x={xAt(i)} y={H - 6} fontSize="8.5" fill="#a8b0ba" fontWeight="700" textAnchor="middle">{l.label}</text>
-        ) : null)}
+        {xTicks.map((tk, i) => {
+          const x = xAt(tk.t);
+          const anchor = i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle';
+          return <text key={'x' + i} x={x} y={H - 6} fontSize="8.5" fill="#a8b0ba" fontWeight="700" textAnchor={anchor}>{tk.label}</text>;
+        })}
         {series.map((s) => {
           const yf = s.axis === 'R' ? yR : yL;
-          const pts = s.data.map((d, i) => ({ x: xAt(i), y: yf(d.value) }));
+          const pts = s.data.map((d) => ({ x: xAt(d.t), y: yf(d.value) }));
           return <path key={s.key} d={smoothPath(pts)} fill="none" stroke={s.color} strokeWidth={s.width || 2.4}
             strokeLinecap="round" strokeLinejoin="round" strokeDasharray={s.dashed ? '5 4' : undefined} opacity={s.faint ? 0.4 : 1} />;
         })}
         {dots && series.map((s) => s.faint ? null : (
           <g key={'d' + s.key}>
             {s.data.map((d, i) => (
-              <circle key={i} cx={xAt(i)} cy={(s.axis === 'R' ? yR : yL)(d.value)} r="2.6" fill="#fff" stroke={s.color} strokeWidth="1.8" />
+              <circle key={i} cx={xAt(d.t)} cy={(s.axis === 'R' ? yR : yL)(d.value)} r="2.6" fill="#fff" stroke={s.color} strokeWidth="1.8" />
             ))}
           </g>
         ))}
-        {hover != null && (
+        {hover != null && ref[hover] && (
           <g>
-            <line x1={xAt(hover)} x2={xAt(hover)} y1={padT} y2={H - padB} stroke="#9aa3ad" strokeWidth="1" strokeDasharray="2 2" />
+            <line x1={xAt(ref[hover].t)} x2={xAt(ref[hover].t)} y1={padT} y2={H - padB} stroke="#9aa3ad" strokeWidth="1" strokeDasharray="2 2" />
             {series.map((s) => {
               const yf = s.axis === 'R' ? yR : yL;
               const pt = s.data[hover];
               if (!pt) return null;
-              return <circle key={'h' + s.key} cx={xAt(hover)} cy={yf(pt.value)} r="3.2" fill="#fff" stroke={s.color} strokeWidth="2" />;
+              return <circle key={'h' + s.key} cx={xAt(pt.t)} cy={yf(pt.value)} r="3.2" fill="#fff" stroke={s.color} strokeWidth="2" />;
             })}
           </g>
         )}
       </svg>
-      {hover != null && series[0] && series[0].data[hover] && (
-        <div style={{ position: 'absolute', top: 0, left: `${(xAt(hover) / W) * 100}%`, transform: `translateX(${hover > n / 2 ? '-105%' : '5%'})`,
+      {hover != null && ref[hover] && (
+        <div style={{ position: 'absolute', top: 0, left: `${(xAt(ref[hover].t) / W) * 100}%`, transform: `translateX(${hover > n / 2 ? '-105%' : '5%'})`,
           background: '#fff', border: '1.5px solid var(--line)', borderRadius: 10, padding: '6px 9px', boxShadow: '0 6px 16px rgba(0,0,0,.1)',
           fontSize: 10.5, fontWeight: 800, pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 5 }}>
-          <div style={{ color: 'var(--ink-3)', fontSize: 9, marginBottom: 3 }}>{series[0].data[hover].label}</div>
+          {tipLabel && <div style={{ color: 'var(--ink-3)', fontSize: 9, marginBottom: 3 }}>{tipLabel(ref[hover].t)}</div>}
           {series.map((s) => s.data[hover] ? (
             <div key={'tt' + s.key} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block' }} />
