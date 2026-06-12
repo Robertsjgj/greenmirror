@@ -69,7 +69,7 @@ function loadStoredLayoutSettings(): LayoutSettings {
 type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'plants',      label: 'Plants',  icon: '🌱' },
+  { id: 'plants',      label: 'Home',    icon: '🏠' },
   { id: 'greenhouse',  label: 'Map',     icon: '🗺️' },
   { id: 'environment', label: 'Weather', icon: '☀️' },
   { id: 'alerts',      label: 'Alerts',  icon: '🔔' },

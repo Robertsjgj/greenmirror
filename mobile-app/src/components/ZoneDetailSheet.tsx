@@ -12,6 +12,17 @@ interface ZoneDetailSheetProps {
   onWaterZone: (zone: VisualZone, amountMl: number) => void;
 }
 
+// Format a sensor timestamp into a friendly, human-readable string
+// (e.g. "Jun 5, 2026, 12:02 AM") instead of a raw ISO string.
+function formatUpdated(ts?: string): string {
+  const d = ts ? new Date(ts) : new Date();
+  if (isNaN(d.getTime())) return ts ?? '';
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
 type Tone = 'good' | 'dry' | 'wet' | 'alert' | 'nodata';
 
 const STATUS_COLOR: Record<Tone, string> = {
@@ -496,9 +507,7 @@ export function ZoneDetailSheet({
             )}
 
             <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 16, textAlign: 'center' }}>
-              {zone.timestamp
-                ? `Last updated · ${zone.timestamp}`
-                : `Last updated · ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+              Last updated · {formatUpdated(zone.timestamp)}
             </div>
           </div>
         )}
