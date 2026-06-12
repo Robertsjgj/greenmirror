@@ -4,7 +4,7 @@
    (Overview · Zones · Plants · Watering · Research).
    ────────────────────────────────────────────────────────────────────────── */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useReadingsHistory } from '../hooks/useReadingsHistory';
 import type { TimeRange } from '../hooks/useReadingsHistory';
 import { useDataMode } from '../hooks/useDataMode';
@@ -37,6 +37,9 @@ interface TrendsDashboardProps {
   activityLog?: ActivityEntry[];
   firestoreActivity?: ActivityEntry[];
   onClose: () => void;
+  /** App-wide back handler hook: set to a fn that consumes one internal back
+   *  step (detail → list) and returns true, else returns false. */
+  backRef?: { current: (() => boolean) | null };
 }
 
 function DashModeButton({ active, onClick, children }: {
@@ -69,6 +72,7 @@ export function TrendsDashboard({
   activityLog = [],
   firestoreActivity = [],
   onClose,
+  backRef,
 }: TrendsDashboardProps) {
   const [activeTab, setActiveTab] = useState<DashTab>('overview');
   const [range, setRange] = useState<TimeRange>('24h');
@@ -111,32 +115,34 @@ export function TrendsDashboard({
   }), [mock, zones, profilesById, plantProfiles, readings, wateringEvents]);
 
   // ── Hardware/browser Back button ──────────────────────────────────────────
-  // While open, push a history entry so Back steps within Trends (detail → list
-  // → close) instead of leaving the site. Header ← and in-app back links also
-  // route through history.back() so there is a single, consistent back path.
-  const navRef = useRef({ selZone, selPlant, onClose });
-  navRef.current = { selZone, selPlant, onClose };
+  // The app-wide back handler (App.tsx) owns the single popstate listener and
+  // history sentinel. Here we just register an internal back step: when a zone
+  // or plant detail is open, Back returns to its list instead of closing the
+  // dashboard. Returning false lets the app handler close the dashboard, then
+  // step through tabs, etc. Header ← and in-app back links call goBack() =
+  // history.back(), which routes through that same handler.
   useEffect(() => {
-    if (!open) return;
-    window.history.pushState({ gmTrends: true }, '');
-    const onPop = () => {
-      const nav = navRef.current;
-      if (nav.selZone || nav.selPlant) {
-        // Back out of a detail view → return to its list, keep dashboard open.
+    if (!backRef) return;
+    backRef.current = () => {
+      if (selZone || selPlant) {
         setSelZone(null);
         setSelPlant(null);
-        window.history.pushState({ gmTrends: true }, '');
-      } else {
-        nav.onClose();
+        return true;
       }
+      return false;
     };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, [open]);
+    return () => { backRef.current = null; };
+    // backRef is a stable ref-like object, intentionally excluded from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, selZone, selPlant]);
 
   if (!open) return null;
 
-  const goBack = () => window.history.back();
+  // Header ← and in-app back links: step detail → list → close the dashboard.
+  const goBack = () => {
+    if (selZone || selPlant) { setSelZone(null); setSelPlant(null); }
+    else onClose();
+  };
   const selectTab = (id: DashTab) => { setSelZone(null); setSelPlant(null); setActiveTab(id); };
   const baseProps = { gm, range, setRange, loading: chartLoading };
 

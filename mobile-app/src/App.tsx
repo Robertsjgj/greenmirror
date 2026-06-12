@@ -76,6 +76,9 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'runoff',      label: 'Runoff',  icon: '💧' },
 ];
 
+// The landing tab — the hardware Back button steps here before leaving the site.
+const HOME_TAB: Tab = 'plants';
+
 const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (name: string) => string }> = {
   plants:      { title: 'Good morning!',   emoji: '🌤',  sub: (n) => `${n} Greenhouse` },
   greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (n) => `${n} layout` },
@@ -142,6 +145,36 @@ export function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const migratedActivityRef = useRef<Set<string>>(new Set());
+
+  // ── Hardware / browser Back button (app-wide) ───────────────────────────────
+  // The Back button must never just close the site. We keep a single sentinel
+  // history entry; each Back press unwinds ONE UI layer — open editor → zone
+  // sheet → site sheet → trends (detail → list → close) → non-home tab → home —
+  // then re-arms the sentinel. Only when there is nothing left to unwind do we
+  // let the browser navigate away (toward the empty new-tab page).
+  const trendsBackRef = useRef<(() => boolean) | null>(null);
+  const backStateRef = useRef({ editorProfile, zoneSheetZone, siteSheetOpen, trendsOpen, activeTab });
+  backStateRef.current = { editorProfile, zoneSheetZone, siteSheetOpen, trendsOpen, activeTab };
+
+  useEffect(() => {
+    window.history.pushState({ gmBack: true }, '');
+    const onPop = () => {
+      const s = backStateRef.current;
+      let handled = true;
+      if (s.editorProfile !== null) setEditorProfile(null);
+      else if (s.zoneSheetZone !== null) setZoneSheetZone(null);
+      else if (s.siteSheetOpen) setSiteSheetOpen(false);
+      else if (s.trendsOpen) {
+        if (!(trendsBackRef.current && trendsBackRef.current())) setTrendsOpen(false);
+      } else if (s.activeTab !== HOME_TAB) setActiveTab(HOME_TAB);
+      else handled = false;
+
+      if (handled) window.history.pushState({ gmBack: true }, ''); // re-arm sentinel
+      else window.history.back();                                  // nothing left → leave the site
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // ── API polling (always runs; primary source when Firestore is absent) ──────
   const fetchReading = useCallback(async () => {
@@ -862,6 +895,7 @@ export function App() {
         activityLog={activityLog}
         firestoreActivity={firestoreActivity}
         onClose={() => setTrendsOpen(false)}
+        backRef={trendsBackRef}
       />
     </div>
   );
