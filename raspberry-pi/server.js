@@ -95,8 +95,11 @@ async function buildSnapshot(rawReading, mode) {
   const externalWeather = await getWeatherCached(GREENHOUSE_ID);
 
   // System status
-  const nodeIds    = new Set((rawZones).map(z => z.node_id).filter(Boolean));
-  const nodeCount  = rawReading.node_count || nodeIds.size;
+  // Prefer per-zone node_id (firmware sends it on every zone). Fall back to a
+  // top-level node_id so older/simpler payloads still count as one node online.
+  const nodeIds = new Set(rawZones.map(z => z.node_id).filter(Boolean));
+  if (nodeIds.size === 0 && rawReading.node_id) nodeIds.add(rawReading.node_id);
+  const nodeCount = rawReading.node_count || nodeIds.size;
   const system     = {
     rpi_online:         true,
     esp_nodes_online:   nodeCount,

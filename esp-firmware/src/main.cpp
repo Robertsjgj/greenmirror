@@ -21,11 +21,13 @@ DallasTemperature soilTempSensors(&oneWire);
 
 // ---------- Identity ----------
 const char* NODE_ID = "esp32-node-01";
-const char* GREENHOUSE_ID = "greenhouse_1";
+const char* GREENHOUSE_ID = "sydney-greenhouse";
 
 // ---------- Zone IDs ----------
-const char* ZONE_A_ID = "zone_a";
-const char* ZONE_B_ID = "zone_b";
+// Dashboard-compatible IDs: "SYD-GH-..." classifies as an inside greenhouse zone
+// (snapshot.js: contains "-GH-" → location_type "inside").
+const char* ZONE_A_ID = "SYD-GH-LEFT-01";
+const char* ZONE_B_ID = "SYD-GH-LEFT-02";
 
 // ---------- Soil Calibration ----------
 // Update these after real calibration.
@@ -69,15 +71,33 @@ void addZoneReading(
 
   JsonObject zone = zones.add<JsonObject>();
   zone["zone_id"] = zoneId;
+  // node_id per-zone: the Pi counts online ESP nodes from zones[].node_id.
+  zone["node_id"] = NODE_ID;
   zone["soil_moisture_raw"] = soilRaw;
   zone["soil_moisture_pct"] = soilPct;
 
-  if (isnan(soilTempC)) {
-    zone["soil_temp_c"] = nullptr;
-    zone["soil_temp_status"] = "not_detected";
-  } else {
+  bool tempOk = !isnan(soilTempC);
+  if (tempOk) {
     zone["soil_temp_c"] = soilTempC;
     zone["soil_temp_status"] = "ok";
+  } else {
+    zone["soil_temp_c"] = nullptr;
+    zone["soil_temp_status"] = "not_detected";
+  }
+
+  // Per-zone debug line.
+  Serial.print("  zone ");
+  Serial.print(zoneId);
+  Serial.print(" | raw=");
+  Serial.print(soilRaw);
+  Serial.print(" moisture=");
+  Serial.print(soilPct);
+  Serial.print("% | soil_temp=");
+  if (tempOk) {
+    Serial.print(soilTempC);
+    Serial.println("C");
+  } else {
+    Serial.println("not_detected");
   }
 }
 
@@ -141,6 +161,12 @@ void loop() {
   doc["node_id"] = NODE_ID;
   doc["greenhouse_id"] = GREENHOUSE_ID;
 
+  Serial.println("---- reading ----");
+  Serial.print("greenhouse_id=");
+  Serial.print(GREENHOUSE_ID);
+  Serial.print(" | node_id=");
+  Serial.println(NODE_ID);
+
   JsonArray zones = doc["zones"].to<JsonArray>();
 
   addZoneReading(
@@ -178,17 +204,16 @@ void loop() {
 
     int responseCode = http.POST(payload);
     if (responseCode > 0) {
-      Serial.println("Send success");
-      Serial.print("HTTP status: ");
-      Serial.println(responseCode);
+      Serial.print("POST status: ");
+      Serial.print(responseCode);
+      Serial.println(responseCode == 200 ? " (OK)" : "");
     } else {
-      Serial.println("Send failed");
-      Serial.print("HTTP error: ");
+      Serial.print("POST failed: ");
       Serial.println(http.errorToString(responseCode));
     }
     http.end();
   } else {
-    Serial.println("Send failed: no WiFi");
+    Serial.println("POST failed: no WiFi");
   }
 
   delay(5000);
