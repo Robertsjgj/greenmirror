@@ -1,6 +1,16 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
+
+// ---------- Board-specific networking includes ----------
+#if defined(ESP32)
+  #include <WiFi.h>
+  #include <HTTPClient.h>
+#elif defined(ESP8266)
+  #include <ESP8266WiFi.h>
+  #include <ESP8266HTTPClient.h>
+#else
+  #error "Unsupported board: build with env esp32dev or nodemcuv2"
+#endif
+
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
@@ -10,32 +20,48 @@ const char* WIFI_SSID = "1661";
 const char* WIFI_PASSWORD = "Henryboys";
 const char* API_URL = "http://192.168.7.202:5000/api/readings";
 
-// ---------- Pin Definitions ----------
-#define ZONE_A_SOIL_PIN 34
-#define ZONE_B_SOIL_PIN 35
-#define ONE_WIRE_BUS 4
+// ---------- Board identity, pins, zones (compile-time per target) ----------
+//
+// Both boards send the SAME JSON payload shape. The only differences are the
+// board label, node_id, ADC pins, and how many zones each board reports.
+#if defined(ESP32)
+  const char* BOARD_NAME = "ESP32";
+  const char* NODE_ID    = "esp32-node-01";
+
+  #define ZONE_A_SOIL_PIN 34
+  #define ZONE_B_SOIL_PIN 35
+  #define ONE_WIRE_BUS    4      // GPIO4
+
+  const char* ZONE_A_ID = "SYD-GH-LEFT-01";
+  const char* ZONE_B_ID = "SYD-GH-LEFT-02";
+
+  // 12-bit ADC: 0-4095. Update after real calibration.
+  const int ZONE_A_SOIL_DRY = 3000;
+  const int ZONE_A_SOIL_WET = 1500;
+  const int ZONE_B_SOIL_DRY = 3000;
+  const int ZONE_B_SOIL_WET = 1500;
+
+#elif defined(ESP8266)
+  const char* BOARD_NAME = "ESP8266";
+  const char* NODE_ID    = "esp8266-node-01";
+
+  // ESP8266 has a single analog input (A0), so only one soil zone.
+  #define ZONE_A_SOIL_PIN A0
+  #define ONE_WIRE_BUS    D2     // D2 == GPIO4
+
+  const char* ZONE_A_ID = "SYD-GH-LEFT-03";
+
+  // 10-bit ADC: 0-1023. Update after real calibration.
+  const int ZONE_A_SOIL_DRY = 750;
+  const int ZONE_A_SOIL_WET = 350;
+#endif
+
+// ---------- Common identity ----------
+const char* GREENHOUSE_ID = "sydney-greenhouse";
 
 // ---------- Sensor Objects ----------
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature soilTempSensors(&oneWire);
-
-// ---------- Identity ----------
-const char* NODE_ID = "esp32-node-01";
-const char* GREENHOUSE_ID = "sydney-greenhouse";
-
-// ---------- Zone IDs ----------
-// Dashboard-compatible IDs: "SYD-GH-..." classifies as an inside greenhouse zone
-// (snapshot.js: contains "-GH-" → location_type "inside").
-const char* ZONE_A_ID = "SYD-GH-LEFT-01";
-const char* ZONE_B_ID = "SYD-GH-LEFT-02";
-
-// ---------- Soil Calibration ----------
-// Update these after real calibration.
-const int ZONE_A_SOIL_DRY = 3000;
-const int ZONE_A_SOIL_WET = 1500;
-
-const int ZONE_B_SOIL_DRY = 3000;
-const int ZONE_B_SOIL_WET = 1500;
 
 int rawToPercent(int rawValue, int dryValue, int wetValue) {
   int pct = map(rawValue, dryValue, wetValue, 0, 100);
@@ -108,11 +134,21 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+#if defined(ESP32)
   analogReadResolution(12); // ESP32 ADC: 0-4095
+#endif
 
   soilTempSensors.begin();
 
   Serial.println("GreenMirror ESP Node starting...");
+  Serial.print("Board: ");
+  Serial.println(BOARD_NAME);
+  Serial.print("node_id: ");
+  Serial.println(NODE_ID);
+  Serial.print("greenhouse_id: ");
+  Serial.println(GREENHOUSE_ID);
+  Serial.print("API_URL: ");
+  Serial.println(API_URL);
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
 
@@ -162,7 +198,9 @@ void loop() {
   doc["greenhouse_id"] = GREENHOUSE_ID;
 
   Serial.println("---- reading ----");
-  Serial.print("greenhouse_id=");
+  Serial.print("board=");
+  Serial.print(BOARD_NAME);
+  Serial.print(" | greenhouse_id=");
   Serial.print(GREENHOUSE_ID);
   Serial.print(" | node_id=");
   Serial.println(NODE_ID);
@@ -178,6 +216,8 @@ void loop() {
     0
   );
 
+#if defined(ESP32)
+  // ESP32 has a second analog zone; ESP8266 has only A0 so it reports one zone.
   addZoneReading(
     zones,
     ZONE_B_ID,
@@ -186,6 +226,7 @@ void loop() {
     ZONE_B_SOIL_WET,
     1
   );
+#endif
 
   serializeJson(doc, Serial);
   Serial.println();
@@ -196,7 +237,13 @@ void loop() {
     Serial.println("Sending data...");
 
     HTTPClient http;
+#if defined(ESP8266)
+    // ESP8266HTTPClient requires an explicit WiFiClient.
+    WiFiClient client;
+    http.begin(client, API_URL);
+#else
     http.begin(API_URL);
+#endif
     http.addHeader("Content-Type", "application/json");
 
     String payload;
