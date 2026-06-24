@@ -41,6 +41,29 @@ function present(val, label) {
   }
 }
 
+// ─── Firestore quota protection (write throttling) ────────────────────────────
+//
+// Sensors tick every ~5s. Writing latestReadings + a history doc on every tick
+// is ~17k writes/day for EACH collection — well past Firestore's free tier
+// (20k writes/day) — and every history write makes the frontend's real-time
+// listeners re-read, which is what pushed daily reads to 132k.
+//
+// So we throttle independently:
+//   • latestReadings/{gh} — overwritten at most every LIVE interval. This is the
+//     remote "current conditions" doc; the local UI shows live data via fast
+//     API polling (no Firestore cost), so 30s staleness here is fine.
+//   • readings/{auto}     — appended at most every HISTORY interval. Trend charts
+//     bucket history into ~30 points, so coarse 1–5 min samples are plenty.
+//
+// Both intervals are env-tunable; see raspberry-pi/.env.example.
+//
+// Declared BEFORE the initialisation block below because that block calls
+// attachSaveReading() synchronously at module load — referencing these consts.
+// If they were declared later, that call would hit the temporal dead zone and
+// throw "Cannot access 'FIRESTORE_LIVE_WRITE_INTERVAL_MS' before initialization".
+const FIRESTORE_LIVE_WRITE_INTERVAL_MS    = Number(process.env.FIRESTORE_LIVE_WRITE_INTERVAL_MS)    || 30_000;   // 30s
+const FIRESTORE_HISTORY_WRITE_INTERVAL_MS = Number(process.env.FIRESTORE_HISTORY_WRITE_INTERVAL_MS) || 300_000;  // 5 min
+
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 try {
@@ -130,24 +153,6 @@ try {
 
 // ─── Write helper ─────────────────────────────────────────────────────────────
 
-// ─── Firestore quota protection (write throttling) ────────────────────────────
-//
-// Sensors tick every ~5s. Writing latestReadings + a history doc on every tick
-// is ~17k writes/day for EACH collection — well past Firestore's free tier
-// (20k writes/day) — and every history write makes the frontend's real-time
-// listeners re-read, which is what pushed daily reads to 132k.
-//
-// So we throttle independently:
-//   • latestReadings/{gh} — overwritten at most every LIVE interval. This is the
-//     remote "current conditions" doc; the local UI shows live data via fast
-//     API polling (no Firestore cost), so 30s staleness here is fine.
-//   • readings/{auto}     — appended at most every HISTORY interval. Trend charts
-//     bucket history into ~30 points, so coarse 1–5 min samples are plenty.
-//
-// Both intervals are env-tunable; see raspberry-pi/.env.example.
-const FIRESTORE_LIVE_WRITE_INTERVAL_MS    = Number(process.env.FIRESTORE_LIVE_WRITE_INTERVAL_MS)    || 30_000;   // 30s
-const FIRESTORE_HISTORY_WRITE_INTERVAL_MS = Number(process.env.FIRESTORE_HISTORY_WRITE_INTERVAL_MS) || 300_000;  // 5 min
-
 function attachSaveReading(admin, db) {
   console.log(
     `[Firestore] Write throttle — latestReadings every ${FIRESTORE_LIVE_WRITE_INTERVAL_MS / 1000}s`,
@@ -172,8 +177,14 @@ function attachSaveReading(admin, db) {
       const writeHistory = now - lastHistoryWrite >= FIRESTORE_HISTORY_WRITE_INTERVAL_MS;
 
       // Both within their throttle window → skip the raw-reading writes below
-      // (rollups have already recorded this tick above).
-      if (!writeLive && !writeHistory) return;
+      // (rollups have already recorded this tick above). Skip log is verbose-only
+      // because it would otherwise fire on every ~5s tick.
+      if (!writeLive && !writeHistory) {
+        if (process.env.FIRESTORE_VERBOSE === 'true') {
+          console.log('[Firestore] ⏭️  write skipped (throttle window not elapsed)');
+        }
+        return;
+      }
 
       const ghId = reading.greenhouse_id || 'sydney-greenhouse';
       const payload = {
@@ -193,11 +204,9 @@ function attachSaveReading(admin, db) {
 
       await batch.commit();
 
-      if (process.env.FIRESTORE_VERBOSE === 'true') {
-        console.log(
-          `[Firestore] ✅ wrote${writeLive ? ' latestReadings' : ''}${writeHistory ? ' +history' : ''} for ${ghId}`,
-        );
-      }
+      // Success logs (always shown — these fire at most every 30s / 5min).
+      if (writeLive)    console.log(`[Firestore] ✅ latestReadings write OK — ${ghId}`);
+      if (writeHistory) console.log(`[Firestore] ✅ readings (history) write OK — ${ghId}`);
     } catch (err) {
       console.error('[Firestore] ❌ Write failed (non-fatal):', err.message);
     }
