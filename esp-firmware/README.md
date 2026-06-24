@@ -7,8 +7,8 @@ and zone count with `#if defined(ESP32)` / `#if defined(ESP8266)` guards.
 
 | Board | Env | node_id | Zones |
 |-------|-----|---------|-------|
-| ESP32 (esp32dev) | `esp32dev` | `esp32-node-01` | `SYD-GH-LEFT-01`, `SYD-GH-LEFT-02` |
-| ESP8266 (NodeMCU v2) | `nodemcuv2` | `esp8266-node-01` | `SYD-GH-LEFT-03` |
+| ESP32 (esp32dev) | `esp32dev` | `esp32-node-01` | `SYD-INSIDE-LEFT-01`, `SYD-INSIDE-LEFT-02` |
+| ESP8266 (NodeMCU v2) | `nodemcuv2` | `esp8266-node-01` | `SYD-INSIDE-LEFT-03` |
 
 Both use `greenhouse_id = sydney-greenhouse`.
 
@@ -82,13 +82,13 @@ IP address: 192.168.7.xxx
 System ready.
 ---- reading ----
 board=ESP32 | greenhouse_id=sydney-greenhouse | node_id=esp32-node-01
-  zone SYD-GH-LEFT-01 | raw=2100 moisture=60% | soil_temp=19.50C
-  zone SYD-GH-LEFT-02 | raw=4095 moisture=0% | soil_temp=not_detected
+  zone SYD-INSIDE-LEFT-01 | raw=2100 moisture=60% | soil_temp=19.50C
+  zone SYD-INSIDE-LEFT-02 | raw=4095 moisture=0% | soil_temp=not_detected
 Sending data...
 POST status: 200 (OK)
 ```
 (The ESP8266 prints `Board: ESP8266`, `node_id: esp8266-node-01`, and a single
-`SYD-GH-LEFT-03` zone.)
+`SYD-INSIDE-LEFT-03` zone.)
 
 ## Verify the round-trip
 

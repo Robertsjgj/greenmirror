@@ -9,9 +9,9 @@
  *
  * Sanitizes all undefined → null so Firestore never rejects the write.
  * Classifies zones as inside/outside/unknown using zone_id conventions:
- *   inside  — starts with "GH" or contains "-GH-"
- *   outside — starts with "OUTDOOR" or contains "-OUTDOOR-"
- *   unknown — everything else (corn, pumpkin, shed beds, etc.)
+ *   inside  — contains "-INSIDE-"  (legacy: "GH"/"-GH-")
+ *   outside — contains "-OUTSIDE-" (legacy: "OUTDOOR"/"-OUTDOOR-")
+ *   unknown — everything else (shed beds, etc.)
  */
 
 const GREENHOUSE_NAMES = {
@@ -43,8 +43,10 @@ function avg(values) {
 
 function classifyZone(zoneId) {
   const upper = (zoneId || '').toUpperCase();
-  if (upper.startsWith('GH') || upper.includes('-GH-')) return 'inside';
-  if (upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-')) return 'outside';
+  // New scheme: "-INSIDE-" / "-OUTSIDE-". Legacy GH / OUTDOOR kept for
+  // backward compatibility with older readings.
+  if (upper.includes('-INSIDE-') || upper.startsWith('GH') || upper.includes('-GH-')) return 'inside';
+  if (upper.includes('-OUTSIDE-') || upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-')) return 'outside';
   return 'unknown';
 }
 

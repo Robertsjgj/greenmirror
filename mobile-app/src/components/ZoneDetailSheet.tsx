@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import { VisualZone } from '../zoneLayout';
+import { getZoneDisplayName } from '../zoneRegistry';
 
 interface ZoneDetailSheetProps {
   zone: VisualZone | null;
@@ -254,18 +255,14 @@ export function ZoneDetailSheet({
   const siteName = zone?.visualLabel.startsWith('SYD-') ? 'Sydney' : 'Truro';
 
   // Label model:
-  // - physicalId: short physical zone identifier (e.g. "GH-LEFT-05")
-  // - techLabel: physical + backend ID for debug context
-  // - mainTitle: plant name if assigned, else display label or "Unassigned zone"
+  // - friendlyName: user-facing bed name (e.g. "Greenhouse Bed 1") — shown in header
+  // - physicalId: short technical zone identifier — Advanced details only
+  // - mainTitle: plant name if assigned, else "Unassigned"
+  const friendlyName = zone ? (zone.displayLabel ?? getZoneDisplayName(zone.visualLabel)) : '';
   const physicalId = zone ? shortId(zone.visualLabel) : '';
-  const techLabel = zone
-    ? zone.backendZoneId
-      ? `${physicalId} (${zone.backendZoneId})`
-      : physicalId
-    : '';
   const isUnassigned = !zone?.assignedPlant;
   const mainTitle = profile ? profile.name : 'Unassigned';
-  const locationSubtitle = profile ? (zone?.displayLabel ?? physicalId) : null;
+  const locationSubtitle = profile ? friendlyName : null;
 
   function handlePick(plantId: string | null) {
     if (!zone) return;
@@ -300,9 +297,9 @@ export function ZoneDetailSheet({
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ minWidth: 0 }}>
-                {/* Technical zone reference (small, muted) */}
+                {/* Friendly bed name (small, muted) — technical IDs live in Advanced details */}
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>
-                  {techLabel}
+                  {friendlyName}
                 </div>
                 {/* Main title: plant name or zone name */}
                 <div style={{
@@ -465,9 +462,9 @@ export function ZoneDetailSheet({
               </div>
             )}
 
-            {/* Sensor metadata (debug context, secondary) */}
+            {/* Advanced / debug details — technical IDs only shown here */}
             <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>
-              Zone info
+              Advanced details
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {[

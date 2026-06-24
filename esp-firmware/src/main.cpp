@@ -32,8 +32,8 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
   #define ZONE_B_SOIL_PIN 35
   #define ONE_WIRE_BUS    4      // GPIO4
 
-  const char* ZONE_A_ID = "SYD-GH-LEFT-01";
-  const char* ZONE_B_ID = "SYD-GH-LEFT-02";
+  const char* ZONE_A_ID = "SYD-INSIDE-LEFT-01";
+  const char* ZONE_B_ID = "SYD-INSIDE-LEFT-02";
 
   // 12-bit ADC: 0-4095. Update after real calibration.
   const int ZONE_A_SOIL_DRY = 3000;
@@ -49,7 +49,7 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
   #define ZONE_A_SOIL_PIN A0
   #define ONE_WIRE_BUS    D2     // D2 == GPIO4
 
-  const char* ZONE_A_ID = "SYD-GH-LEFT-03";
+  const char* ZONE_A_ID = "SYD-INSIDE-LEFT-03";
 
   // 10-bit ADC: 0-1023. Update after real calibration.
   const int ZONE_A_SOIL_DRY = 750;

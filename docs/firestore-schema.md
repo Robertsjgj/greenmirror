@@ -65,7 +65,7 @@ Frontend Firestore listeners subscribe to this for near-real-time updates.
 
 | Field                | Type     | Description                    |
 |----------------------|----------|--------------------------------|
-| `zone_id`            | string   | Backend zone ID (e.g. `zone-01-1`) |
+| `zone_id`            | string   | Backend zone ID (e.g. `SYD-INSIDE-LEFT-01`) |
 | `node_id`            | string?  | Originating node               |
 | `greenhouse_id`      | string?  | Site identifier                |
 | `soil_moisture_raw`  | number?  | Raw ADC value                  |
@@ -112,7 +112,7 @@ One document per physical zone.  Document ID = `{greenhouseId}__{visualLabel}`.
 | Field           | Type    | Description                               |
 |-----------------|---------|-------------------------------------------|
 | `greenhouseId`  | string  | Parent greenhouse                         |
-| `visualLabel`   | string  | Stable physical ID (e.g. `SYD-GH-LEFT-01`)|
+| `visualLabel`   | string  | Stable physical ID (e.g. `SYD-INSIDE-LEFT-01`)|
 | `displayLabel`  | string? | Human label shown in UI                   |
 | `rowLabel`      | string  | Row grouping (e.g. `"A"`, `"Left"`)       |
 | `nodeId`        | string? | Assigned ESP node                         |
@@ -156,8 +156,8 @@ Example:
 ```json
 {
   "assignments": {
-    "SYD-GH-LEFT-05": "tomato",
-    "SYD-GH-MID-01": "cucumber"
+    "SYD-INSIDE-LEFT-05": "tomato",
+    "SYD-INSIDE-CENTER-01": "cucumber"
   }
 }
 ```
