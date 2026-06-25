@@ -138,7 +138,10 @@ export function App() {
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [trendsOpen, setTrendsOpen] = useState(false);
-  const [zoneSheetZone, setZoneSheetZone] = useState<VisualZone | null>(null);
+  // Store only the selected zone's stable ID (visualLabel). The zone object
+  // itself is derived from the live zone array on every render so the open
+  // sheet stays in sync with readings instead of holding a stale snapshot.
+  const [zoneSheetZoneId, setZoneSheetZoneId] = useState<string | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -153,8 +156,8 @@ export function App() {
   // then re-arms the sentinel. Only when there is nothing left to unwind do we
   // let the browser navigate away (toward the empty new-tab page).
   const trendsBackRef = useRef<(() => boolean) | null>(null);
-  const backStateRef = useRef({ editorProfile, zoneSheetZone, siteSheetOpen, trendsOpen, activeTab });
-  backStateRef.current = { editorProfile, zoneSheetZone, siteSheetOpen, trendsOpen, activeTab };
+  const backStateRef = useRef({ editorProfile, zoneSheetZoneId, siteSheetOpen, trendsOpen, activeTab });
+  backStateRef.current = { editorProfile, zoneSheetZoneId, siteSheetOpen, trendsOpen, activeTab };
 
   useEffect(() => {
     window.history.pushState({ gmBack: true }, '');
@@ -162,7 +165,7 @@ export function App() {
       const s = backStateRef.current;
       let handled = true;
       if (s.editorProfile !== null) setEditorProfile(null);
-      else if (s.zoneSheetZone !== null) setZoneSheetZone(null);
+      else if (s.zoneSheetZoneId !== null) setZoneSheetZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current())) setTrendsOpen(false);
@@ -463,6 +466,21 @@ export function App() {
       .rows.flatMap((r) => r.zones);
   }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
 
+  // Derive the open sheet's zone from the LIVE zone array (recomputed each time
+  // readings update, ~5s) so it never shows a stale snapshot. Beds are always
+  // present in the layout, so this resolves even when a zone has no reading
+  // (the sheet then shows its existing no-data state).
+  const zoneSheetZone = useMemo(
+    () =>
+      zoneSheetZoneId
+        ? resolvedZones.find((z) => z.visualLabel === zoneSheetZoneId) ?? null
+        : null,
+    [zoneSheetZoneId, resolvedZones]
+  );
+  const openZone = useCallback((zone: VisualZone) => {
+    setZoneSheetZoneId(zone.visualLabel);
+  }, []);
+
   const localStorageFallbackActive = profilesFallback || assignmentsFallback || activityFallback;
   const syncStatusLabel = localStorageFallbackActive
     ? 'Offline fallback'
@@ -658,16 +676,8 @@ export function App() {
       }
       return next;
     });
-    setZoneSheetZone((z) =>
-      z && z.visualLabel === zoneKey
-        ? {
-            ...z,
-            assignedPlant: plantId,
-            assignedPlantProfile: plantId ? profilesById.get(plantId) ?? null : null,
-            assignedPlantMissing: Boolean(plantId && !profilesById.has(plantId))
-          }
-        : z
-    );
+    // The open sheet's zone is derived from resolvedZones, which depends on
+    // zoneAssignments — so the assignment change is reflected automatically.
     const plantName = plantId ? profilesById.get(plantId)?.name : undefined;
     if (ghId) {
       // Firestore write for cross-device sync
@@ -787,7 +797,7 @@ export function App() {
             error={error}
             plantProfiles={plantProfiles}
             profilesById={profilesById}
-            onOpenZone={setZoneSheetZone}
+            onOpenZone={openZone}
             onAddProfile={onAddProfile}
             onEditProfile={onEditProfile}
             onToast={showToast}
@@ -813,7 +823,7 @@ export function App() {
             profilesById={profilesById}
             zoneAssignments={zoneAssignments}
             onAssignPlant={onAssignPlant}
-            onOpenZone={setZoneSheetZone}
+            onOpenZone={openZone}
             onToast={showToast}
             layoutSettings={layoutSettings}
             setLayoutSettings={setLayoutSettings}
@@ -832,7 +842,7 @@ export function App() {
             loading={loading}
             error={error}
             profilesById={profilesById}
-            onOpenZone={setZoneSheetZone}
+            onOpenZone={openZone}
           />
         )}
         {activeTab === 'runoff' && <SimpleRunoff />}
@@ -869,7 +879,7 @@ export function App() {
         plantProfiles={plantProfiles}
         profilesById={profilesById}
         onAssignPlant={onAssignPlant}
-        onClose={() => setZoneSheetZone(null)}
+        onClose={() => setZoneSheetZoneId(null)}
         onToast={showToast}
         onWaterZone={onWaterZone}
       />
