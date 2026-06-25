@@ -42,6 +42,7 @@ import {
   saveZoneAssignmentsForGh,
 } from './plantProfiles';
 import { mapZonesToSydneyLayout } from './sydneyLayout';
+import { resolveZoneId } from './zoneRegistry';
 import {
   LatestReading,
   LayoutSettings,
@@ -55,6 +56,14 @@ import {
 export type { MapKind } from './greenhouses';
 
 const LAYOUT_SETTINGS_KEY = 'greenmirror-map-layout-settings';
+
+// Canonical zone ID for a visual zone: prefer the backend reading's zone_id
+// (stable, backend-owned); fall back to the bed's canonical visualLabel when
+// there is no reading yet. Resolved so legacy IDs collapse to the canonical
+// form. Never uses the friendly display name.
+function zoneCanonicalId(z: VisualZone): string {
+  return resolveZoneId(z.backendZoneId ?? z.visualLabel);
+}
 
 function loadStoredLayoutSettings(): LayoutSettings {
   try {
@@ -138,10 +147,10 @@ export function App() {
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [trendsOpen, setTrendsOpen] = useState(false);
-  // Store only the selected zone's stable ID (visualLabel). The zone object
-  // itself is derived from the live zone array on every render so the open
-  // sheet stays in sync with readings instead of holding a stale snapshot.
-  const [zoneSheetZoneId, setZoneSheetZoneId] = useState<string | null>(null);
+  // The sheet stores only the canonical zone ID so it always derives the latest
+  // zone object from live readings (never a stale snapshot). Canonical = the
+  // backend zone_id, not the friendly display name.
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [editorProfile, setEditorProfile] = useState<PlantProfile | null | 'new'>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
@@ -156,8 +165,8 @@ export function App() {
   // then re-arms the sentinel. Only when there is nothing left to unwind do we
   // let the browser navigate away (toward the empty new-tab page).
   const trendsBackRef = useRef<(() => boolean) | null>(null);
-  const backStateRef = useRef({ editorProfile, zoneSheetZoneId, siteSheetOpen, trendsOpen, activeTab });
-  backStateRef.current = { editorProfile, zoneSheetZoneId, siteSheetOpen, trendsOpen, activeTab };
+  const backStateRef = useRef({ editorProfile, selectedZoneId, siteSheetOpen, trendsOpen, activeTab });
+  backStateRef.current = { editorProfile, selectedZoneId, siteSheetOpen, trendsOpen, activeTab };
 
   useEffect(() => {
     window.history.pushState({ gmBack: true }, '');
@@ -165,7 +174,7 @@ export function App() {
       const s = backStateRef.current;
       let handled = true;
       if (s.editorProfile !== null) setEditorProfile(null);
-      else if (s.zoneSheetZoneId !== null) setZoneSheetZoneId(null);
+      else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current())) setTrendsOpen(false);
@@ -467,18 +476,18 @@ export function App() {
   }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
 
   // Derive the open sheet's zone from the LIVE zone array (recomputed each time
-  // readings update, ~5s) so it never shows a stale snapshot. Beds are always
-  // present in the layout, so this resolves even when a zone has no reading
-  // (the sheet then shows its existing no-data state).
+  // readings update, ~5s) by matching the canonical ID — so it never shows a
+  // stale snapshot. Beds are always present in the layout, so this resolves even
+  // when a zone has no reading (the sheet then shows its existing no-data state).
   const zoneSheetZone = useMemo(
     () =>
-      zoneSheetZoneId
-        ? resolvedZones.find((z) => z.visualLabel === zoneSheetZoneId) ?? null
+      selectedZoneId
+        ? resolvedZones.find((z) => zoneCanonicalId(z) === selectedZoneId) ?? null
         : null,
-    [zoneSheetZoneId, resolvedZones]
+    [selectedZoneId, resolvedZones]
   );
   const openZone = useCallback((zone: VisualZone) => {
-    setZoneSheetZoneId(zone.visualLabel);
+    setSelectedZoneId(zoneCanonicalId(zone));
   }, []);
 
   const localStorageFallbackActive = profilesFallback || assignmentsFallback || activityFallback;
@@ -879,7 +888,7 @@ export function App() {
         plantProfiles={plantProfiles}
         profilesById={profilesById}
         onAssignPlant={onAssignPlant}
-        onClose={() => setZoneSheetZoneId(null)}
+        onClose={() => setSelectedZoneId(null)}
         onToast={showToast}
         onWaterZone={onWaterZone}
       />
