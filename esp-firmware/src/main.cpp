@@ -15,10 +15,33 @@
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
 
-// ---------- WiFi / API ----------
-const char* WIFI_SSID = "1661";
-const char* WIFI_PASSWORD = "Henryboys";
-const char* API_URL = "http://192.168.7.202:5000/api/readings";
+// ---------- WiFi profiles / API URLs ----------
+// Portable across test locations: multiple WiFi networks and multiple backend
+// URLs. The connection logic tries the last-successful entry first, then scans
+// the rest, so moving between sites needs no code changes.
+struct WifiProfile {
+  const char* ssid;
+  const char* password;
+};
+
+static const WifiProfile WIFI_PROFILES[] = {
+  { "1661", "Henryboys" },
+  { "GreenMirror", "GreenMirror2026" },
+  { "YOUR_SECOND_WIFI", "PASSWORD" },
+};
+static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
+
+static const char* API_URLS[] = {
+  "http://192.168.7.202:5000/api/readings",
+  "http://192.168.2.14:5000/api/readings",
+  "http://192.168.0.14:5000/api/readings",
+  "http://192.168.1.14:5000/api/readings",
+};
+static const int API_URL_COUNT = sizeof(API_URLS) / sizeof(API_URLS[0]);
+
+// Remember which profile / URL last worked so we try them first next time.
+int currentWifiIndex = -1;  // -1 = none connected yet
+int currentApiIndex  = 0;   // start by trying the first backend
 
 // ---------- Board identity, pins, zones (compile-time per target) ----------
 //
@@ -223,8 +246,11 @@ void addZoneReading(
   }
 }
 
+bool tryWifiProfile(int idx);
 void connectWiFi();
 void ensureWiFiConnected();
+int  postToUrl(const char* url, const String& payload);
+bool sendToBackend(const String& payload);
 
 void setup() {
   Serial.begin(115200);
@@ -236,20 +262,55 @@ void setup() {
 
   soilTempSensors.begin();
 
-  Serial.println("GreenMirror ESP Node starting...");
+  Serial.println("GreenMirror ESP");
   Serial.print("Board: ");
   Serial.println(BOARD_NAME);
-  Serial.print("node_id: ");
+  Serial.print("Node ID: ");
   Serial.println(NODE_ID);
   Serial.print("greenhouse_id: ");
   Serial.println(GREENHOUSE_ID);
-  Serial.print("API_URL: ");
-  Serial.println(API_URL);
+  Serial.print("Configured WiFi profiles: ");
+  Serial.println(WIFI_PROFILE_COUNT);
+  Serial.print("Configured API URLs: ");
+  Serial.println(API_URL_COUNT);
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
 
   connectWiFi();
-  Serial.println("System ready.");
+  Serial.println("Ready.");
+}
+
+// Try a single WiFi profile for up to 10 seconds. Returns true on success.
+bool tryWifiProfile(int idx) {
+  const WifiProfile& p = WIFI_PROFILES[idx];
+
+  Serial.print("Trying WiFi: ");
+  Serial.println(p.ssid);
+
+  WiFi.disconnect(true);   // clean slate before each attempt
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(p.ssid, p.password);
+
+  unsigned long startMillis = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startMillis < 10000) {
+    Serial.print('.');
+    delay(500);
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected to: ");
+    Serial.println(p.ssid);
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  }
+
+  Serial.println("...failed");
+  WiFi.disconnect(true);   // disconnect cleanly before the next profile
+  delay(100);
+  return false;
 }
 
 void connectWiFi() {
@@ -257,32 +318,89 @@ void connectWiFi() {
     return;
   }
 
-  Serial.println("Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   WiFi.setAutoReconnect(true);
 
-  unsigned long startMillis = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startMillis < 10000) {
-    Serial.print('.');
-    delay(500);
+  // Try the last-successful profile first to avoid scanning the whole list.
+  if (currentWifiIndex >= 0 && currentWifiIndex < WIFI_PROFILE_COUNT) {
+    if (tryWifiProfile(currentWifiIndex)) {
+      return;
+    }
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println();
-    Serial.println("WiFi connected");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println();
-    Serial.println("WiFi connect failed");
+  // Otherwise scan every configured profile in order.
+  for (int i = 0; i < WIFI_PROFILE_COUNT; i++) {
+    if (i == currentWifiIndex) continue;   // already tried above
+    if (tryWifiProfile(i)) {
+      currentWifiIndex = i;
+      return;
+    }
   }
+
+  // None connected — keep running sensors. Do NOT reboot, do NOT block forever.
+  currentWifiIndex = -1;
+  Serial.println("No configured WiFi available.");
 }
 
 void ensureWiFiConnected() {
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
   }
+}
+
+// POST a payload to one backend URL. Returns the HTTP status code (>0) or a
+// negative HTTPClient error code on failure.
+int postToUrl(const char* url, const String& payload) {
+  HTTPClient http;
+#if defined(ESP8266)
+  // ESP8266HTTPClient requires an explicit WiFiClient.
+  WiFiClient client;
+  http.begin(client, url);
+#else
+  http.begin(url);
+#endif
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(payload);
+  http.end();
+  return code;
+}
+
+// Send the payload with automatic backend fallback: try the last-successful URL
+// first, then every remaining URL. The first HTTP 200 becomes the active API.
+// Returns true on success; never crashes or blocks forever.
+bool sendToBackend(const String& payload) {
+  // 1) Last-successful backend first.
+  Serial.print("Trying backend: ");
+  Serial.println(API_URLS[currentApiIndex]);
+  int code = postToUrl(API_URLS[currentApiIndex], payload);
+  if (code == 200) {
+    Serial.print("Active API: ");
+    Serial.println(API_URLS[currentApiIndex]);
+    return true;
+  }
+  Serial.print("  failed (");
+  Serial.print(code);
+  Serial.println(")");
+
+  // 2) Fall back through every other configured URL.
+  for (int i = 0; i < API_URL_COUNT; i++) {
+    if (i == currentApiIndex) continue;   // already tried above
+    Serial.print("Trying backend: ");
+    Serial.println(API_URLS[i]);
+    code = postToUrl(API_URLS[i], payload);
+    if (code == 200) {
+      currentApiIndex = i;
+      Serial.print("Active API: ");
+      Serial.println(API_URLS[i]);
+      return true;
+    }
+    Serial.print("  failed (");
+    Serial.print(code);
+    Serial.println(")");
+  }
+
+  Serial.println("No backend reachable.");
+  return false;
 }
 
 void loop() {
@@ -334,29 +452,11 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("Sending data...");
 
-    HTTPClient http;
-#if defined(ESP8266)
-    // ESP8266HTTPClient requires an explicit WiFiClient.
-    WiFiClient client;
-    http.begin(client, API_URL);
-#else
-    http.begin(API_URL);
-#endif
-    http.addHeader("Content-Type", "application/json");
-
     String payload;
     serializeJson(doc, payload);
 
-    int responseCode = http.POST(payload);
-    if (responseCode > 0) {
-      Serial.print("POST status: ");
-      Serial.print(responseCode);
-      Serial.println(responseCode == 200 ? " (OK)" : "");
-    } else {
-      Serial.print("POST failed: ");
-      Serial.println(http.errorToString(responseCode));
-    }
-    http.end();
+    // Backend fallback handles failures internally; retried next transmission.
+    sendToBackend(payload);
   } else {
     Serial.println("POST failed: no WiFi");
   }
