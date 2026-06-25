@@ -4,9 +4,11 @@
 #if defined(ESP32)
   #include <WiFi.h>
   #include <HTTPClient.h>
+  #include <ESPmDNS.h>
 #elif defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESP8266HTTPClient.h>
+  #include <ESP8266mDNS.h>
 #else
   #error "Unsupported board: build with env esp32dev or nodemcuv2"
 #endif
@@ -19,29 +21,42 @@
 // Portable across test locations: multiple WiFi networks and multiple backend
 // URLs. The connection logic tries the last-successful entry first, then scans
 // the rest, so moving between sites needs no code changes.
+
+// How long to wait for a single WiFi profile to connect.
+const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
+// Per-request HTTP timeout so dead backend addresses fail quickly.
+const uint32_t HTTP_TIMEOUT_MS = 2000;
+
 struct WifiProfile {
   const char* ssid;
   const char* password;
 };
 
 static const WifiProfile WIFI_PROFILES[] = {
+  // Home
   { "1661", "Henryboys" },
+  // Greenhouse
   { "GreenMirror", "GreenMirror2026" },
-  { "YOUR_SECOND_WIFI", "PASSWORD" },
+  // Phone Hotspot
+  { "NASSUS MEKUNA", "D1D71DFAD1C6" },
 };
 static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
 
+// Backend URLs, tried in order. The mDNS hostname is tried FIRST so the node
+// finds the Pi without knowing its IP; the IPs below are the fallback list.
+static const char* BACKEND_HOSTNAME = "greenmirror.local";
 static const char* API_URLS[] = {
-  "http://192.168.7.202:5000/api/readings",
-  "http://192.168.2.14:5000/api/readings",
-  "http://192.168.0.14:5000/api/readings",
-  "http://192.168.1.14:5000/api/readings",
+  "http://greenmirror.local:5000/api/readings",  // 1) mDNS hostname (primary)
+  "http://192.168.7.202:5000/api/readings",      // 2) fallback IP
+  "http://192.168.2.14:5000/api/readings",       // 3) fallback IP
+  "http://192.168.0.14:5000/api/readings",       // 4) fallback IP
+  "http://192.168.1.14:5000/api/readings",       // 5) fallback IP
 };
 static const int API_URL_COUNT = sizeof(API_URLS) / sizeof(API_URLS[0]);
 
 // Remember which profile / URL last worked so we try them first next time.
 int currentWifiIndex = -1;  // -1 = none connected yet
-int currentApiIndex  = 0;   // start by trying the first backend
+int currentApiIndex  = 0;   // start by trying the first backend (hostname)
 
 // ---------- Board identity, pins, zones (compile-time per target) ----------
 //
@@ -249,6 +264,7 @@ void addZoneReading(
 bool tryWifiProfile(int idx);
 void connectWiFi();
 void ensureWiFiConnected();
+void startMdnsOnce();
 int  postToUrl(const char* url, const String& payload);
 bool sendToBackend(const String& payload);
 
@@ -262,25 +278,36 @@ void setup() {
 
   soilTempSensors.begin();
 
+  Serial.println("---------------------------------");
   Serial.println("GreenMirror ESP");
   Serial.print("Board: ");
   Serial.println(BOARD_NAME);
-  Serial.print("Node ID: ");
+  Serial.print("Node: ");
   Serial.println(NODE_ID);
   Serial.print("greenhouse_id: ");
   Serial.println(GREENHOUSE_ID);
   Serial.print("Configured WiFi profiles: ");
   Serial.println(WIFI_PROFILE_COUNT);
-  Serial.print("Configured API URLs: ");
+  Serial.print("Configured Backends: ");
   Serial.println(API_URL_COUNT);
+  Serial.println();
+  Serial.println("Primary backend:");
+  Serial.print("  ");
+  Serial.println(BACKEND_HOSTNAME);
+  Serial.println("Fallback IPs:");
+  for (int i = 1; i < API_URL_COUNT; i++) {   // skip index 0 (the hostname)
+    Serial.print("  ");
+    Serial.println(API_URLS[i]);
+  }
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
+  Serial.println("---------------------------------");
 
   connectWiFi();
   Serial.println("Ready.");
 }
 
-// Try a single WiFi profile for up to 10 seconds. Returns true on success.
+// Try a single WiFi profile for up to WIFI_CONNECT_TIMEOUT_MS. Returns true on success.
 bool tryWifiProfile(int idx) {
   const WifiProfile& p = WIFI_PROFILES[idx];
 
@@ -293,7 +320,7 @@ bool tryWifiProfile(int idx) {
   WiFi.begin(p.ssid, p.password);
 
   unsigned long startMillis = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startMillis < 10000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - startMillis < WIFI_CONNECT_TIMEOUT_MS) {
     Serial.print('.');
     delay(500);
   }
@@ -313,6 +340,19 @@ bool tryWifiProfile(int idx) {
   return false;
 }
 
+// Start the mDNS responder once after WiFi is up (lets the node be reached by
+// name and helps resolve the greenmirror.local backend on supporting networks).
+void startMdnsOnce() {
+  static bool started = false;
+  if (started) return;
+  if (MDNS.begin(NODE_ID)) {
+    started = true;
+    Serial.print("mDNS responder started: ");
+    Serial.print(NODE_ID);
+    Serial.println(".local");
+  }
+}
+
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     return;
@@ -324,6 +364,7 @@ void connectWiFi() {
   // Try the last-successful profile first to avoid scanning the whole list.
   if (currentWifiIndex >= 0 && currentWifiIndex < WIFI_PROFILE_COUNT) {
     if (tryWifiProfile(currentWifiIndex)) {
+      startMdnsOnce();
       return;
     }
   }
@@ -333,13 +374,19 @@ void connectWiFi() {
     if (i == currentWifiIndex) continue;   // already tried above
     if (tryWifiProfile(i)) {
       currentWifiIndex = i;
+      startMdnsOnce();
       return;
     }
   }
 
   // None connected — keep running sensors. Do NOT reboot, do NOT block forever.
   currentWifiIndex = -1;
-  Serial.println("No configured WiFi available.");
+  Serial.print("No configured WiFi available. Attempted: ");
+  for (int i = 0; i < WIFI_PROFILE_COUNT; i++) {
+    Serial.print(WIFI_PROFILES[i].ssid);
+    if (i < WIFI_PROFILE_COUNT - 1) Serial.print(", ");
+  }
+  Serial.println();
 }
 
 void ensureWiFiConnected() {
@@ -358,7 +405,9 @@ int postToUrl(const char* url, const String& payload) {
   http.begin(client, url);
 #else
   http.begin(url);
+  http.setConnectTimeout(HTTP_TIMEOUT_MS);  // fail fast on dead addresses (ESP32)
 #endif
+  http.setTimeout(HTTP_TIMEOUT_MS);         // per-request timeout
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(payload);
   http.end();
@@ -370,36 +419,46 @@ int postToUrl(const char* url, const String& payload) {
 // Returns true on success; never crashes or blocks forever.
 bool sendToBackend(const String& payload) {
   // 1) Last-successful backend first.
-  Serial.print("Trying backend: ");
-  Serial.println(API_URLS[currentApiIndex]);
+  Serial.print("Trying backend #");
+  Serial.print(currentApiIndex + 1);
+  Serial.println("...");
   int code = postToUrl(API_URLS[currentApiIndex], payload);
   if (code == 200) {
+    Serial.print("Backend #");
+    Serial.print(currentApiIndex + 1);
+    Serial.println(" connected");
     Serial.print("Active API: ");
     Serial.println(API_URLS[currentApiIndex]);
     return true;
   }
-  Serial.print("  failed (");
-  Serial.print(code);
-  Serial.println(")");
+  Serial.print("Backend #");
+  Serial.print(currentApiIndex + 1);
+  Serial.println(" unreachable");
 
   // 2) Fall back through every other configured URL.
   for (int i = 0; i < API_URL_COUNT; i++) {
     if (i == currentApiIndex) continue;   // already tried above
-    Serial.print("Trying backend: ");
-    Serial.println(API_URLS[i]);
+    Serial.print("Trying backend #");
+    Serial.print(i + 1);
+    Serial.println("...");
     code = postToUrl(API_URLS[i], payload);
     if (code == 200) {
       currentApiIndex = i;
+      Serial.println("Connected.");
+      Serial.print("Backend #");
+      Serial.print(i + 1);
+      Serial.println(" connected");
       Serial.print("Active API: ");
       Serial.println(API_URLS[i]);
       return true;
     }
-    Serial.print("  failed (");
-    Serial.print(code);
-    Serial.println(")");
+    Serial.print("Backend #");
+    Serial.print(i + 1);
+    Serial.println(" unreachable");
   }
 
-  Serial.println("No backend reachable.");
+  Serial.print("No backend reachable. Attempted backends #1..#");
+  Serial.println(API_URL_COUNT);
   return false;
 }
 
