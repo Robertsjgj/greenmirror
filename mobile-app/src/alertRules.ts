@@ -48,7 +48,9 @@ function moistureAlerts(zone: VisualZone, profile: PlantProfile | null): ZoneAle
   const label = zoneLabel(zone);
   const base = { zoneId: zone.visualLabel, nodeId: zone.nodeId, displayLabel: zone.displayLabel, zone };
 
-  if (pct < 0 || pct > 100) {
+  // Firmware reports 0–200% (values >100 = overwatered, not an error). Only
+  // values outside 0–200 indicate a damaged/miscalibrated sensor.
+  if (pct < 0 || pct > 200) {
     return [{
       ...base,
       id: `${zone.visualLabel}-moisture-invalid`,

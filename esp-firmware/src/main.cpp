@@ -43,14 +43,35 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
 
   // ── Soil moisture calibration (12-bit ADC: 0-4095) ──────────────────────
   // Capacitive sensor: drier soil = HIGHER raw value, wetter = LOWER.
-  // To calibrate: open Serial Monitor and read the raw value...
-  //   • in bone-dry soil (or air)  → set ZONE_*_SOIL_DRY to that raw value
-  //   • in fully saturated soil     → set ZONE_*_SOIL_WET to that raw value
-  // rawToPercent() then maps DRY→0% and WET→100%.
-  const int ZONE_A_SOIL_DRY = 3000;
-  const int ZONE_A_SOIL_WET = 1500;
-  const int ZONE_B_SOIL_DRY = 3000;
-  const int ZONE_B_SOIL_WET = 1500;
+  //
+  // THESE ARE TEMPORARY ESTIMATED CALIBRATION VALUES based on typical
+  // capacitive soil moisture sensor behavior. Real calibration should be done
+  // using dry soil, moist soil, and saturated soil before final deployment —
+  // read the raw value in each condition (Serial Monitor) and update the
+  // *_REFERENCE constants below. Both ESP32 sensors use these defaults until
+  // physical calibration is done.
+  //
+  // Typical raw reference points (educated estimates):
+  //   ~3300 = sensor in air / very dry
+  //   ~3000 = dry soil            → 0%
+  //   ~1700 = good wet soil       → 100%
+  //   ~1200 or lower = saturated / overwatered
+  const int SOIL_RAW_AIR_DRY        = 3300;
+  const int SOIL_RAW_DRY_SOIL       = 3000;
+  const int SOIL_RAW_GOOD_WET_SOIL  = 1700;
+  const int SOIL_RAW_SATURATED      = 1200;
+
+  // Calibration constants used by the moisture formula (see rawToPercent):
+  //   moisture_pct = (DRY_REFERENCE - raw) / (DRY_REFERENCE - WET_REFERENCE_100) * 100
+  const int DRY_REFERENCE       = 3000;  // raw at 0%
+  const int WET_REFERENCE_100   = 1700;  // raw at 100%
+  const int SATURATED_REFERENCE = 1200;  // raw at ~138% (overwatered marker)
+
+  // Both ESP32 soil zones share the same starting calibration for now.
+  const int ZONE_A_SOIL_DRY = DRY_REFERENCE;
+  const int ZONE_A_SOIL_WET = WET_REFERENCE_100;
+  const int ZONE_B_SOIL_DRY = DRY_REFERENCE;
+  const int ZONE_B_SOIL_WET = WET_REFERENCE_100;
 
   // Plausible raw window for a CONNECTED sensor. A floating/disconnected ADC
   // pin tends to sit at the rails (near 0 or near 4095); readings outside this
@@ -71,9 +92,28 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
   const bool ZONE_A_SOIL_CONNECTED = true;   // sensor wired on A0
 
   // ── Soil moisture calibration (10-bit ADC: 0-1023) ──────────────────────
-  // Same procedure as ESP32: read raw in dry vs saturated soil and set these.
-  const int ZONE_A_SOIL_DRY = 750;
-  const int ZONE_A_SOIL_WET = 350;
+  // THESE ARE TEMPORARY ESTIMATED CALIBRATION VALUES based on typical
+  // capacitive soil moisture sensor behavior. Real calibration should be done
+  // using dry soil, moist soil, and saturated soil before final deployment.
+  //
+  // Typical raw reference points (educated estimates):
+  //   ~820 = sensor in air / very dry
+  //   ~750 = dry soil            → 0%
+  //   ~420 = good wet soil       → 100%
+  //   ~300 or lower = saturated / overwatered
+  const int SOIL_RAW_AIR_DRY        = 820;
+  const int SOIL_RAW_DRY_SOIL       = 750;
+  const int SOIL_RAW_GOOD_WET_SOIL  = 420;
+  const int SOIL_RAW_SATURATED      = 300;
+
+  // Calibration constants used by the moisture formula (see rawToPercent):
+  //   moisture_pct = (DRY_REFERENCE - raw) / (DRY_REFERENCE - WET_REFERENCE_100) * 100
+  const int DRY_REFERENCE       = 750;  // raw at 0%
+  const int WET_REFERENCE_100   = 420;  // raw at 100%
+  const int SATURATED_REFERENCE = 300;  // raw at saturated marker
+
+  const int ZONE_A_SOIL_DRY = DRY_REFERENCE;
+  const int ZONE_A_SOIL_WET = WET_REFERENCE_100;
 
   const int SOIL_RAW_CONNECTED_MIN = 20;
   const int SOIL_RAW_CONNECTED_MAX = 1010;
@@ -86,13 +126,17 @@ const char* GREENHOUSE_ID = "sydney-greenhouse";
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature soilTempSensors(&oneWire);
 
-int rawToPercent(int rawValue, int dryValue, int wetValue) {
-  int pct = map(rawValue, dryValue, wetValue, 0, 100);
+int rawToPercent(int rawValue, int dryReference, int wetReference100) {
+  // moisture_pct = (DRY_REFERENCE - raw) / (DRY_REFERENCE - WET_REFERENCE_100) * 100
+  // Not capped at 100 — wetter-than-"100%" soil reads above 100 (overwatered).
+  // Clamp only: below 0 → 0, above 200 → 200.
+  float pct = ((float)(dryReference - rawValue) /
+               (float)(dryReference - wetReference100)) * 100.0f;
 
-  if (pct < 0) pct = 0;
-  if (pct > 100) pct = 100;
+  if (pct < 0)   pct = 0;
+  if (pct > 200) pct = 200;
 
-  return pct;
+  return (int)(pct + 0.5f);  // round to nearest integer
 }
 
 float readSoilTempByIndex(int index) {
