@@ -35,11 +35,28 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
   const char* ZONE_A_ID = "SYD-INSIDE-LEFT-01";
   const char* ZONE_B_ID = "SYD-INSIDE-LEFT-02";
 
-  // 12-bit ADC: 0-4095. Update after real calibration.
+  // Which zones physically have a soil sensor wired. Set true once a sensor is
+  // connected; an unwired zone reports soil_moisture_status = "not_connected"
+  // and a null moisture %.
+  const bool ZONE_A_SOIL_CONNECTED = true;   // sensor wired on GPIO34
+  const bool ZONE_B_SOIL_CONNECTED = false;  // no sensor on GPIO35 yet
+
+  // ── Soil moisture calibration (12-bit ADC: 0-4095) ──────────────────────
+  // Capacitive sensor: drier soil = HIGHER raw value, wetter = LOWER.
+  // To calibrate: open Serial Monitor and read the raw value...
+  //   • in bone-dry soil (or air)  → set ZONE_*_SOIL_DRY to that raw value
+  //   • in fully saturated soil     → set ZONE_*_SOIL_WET to that raw value
+  // rawToPercent() then maps DRY→0% and WET→100%.
   const int ZONE_A_SOIL_DRY = 3000;
   const int ZONE_A_SOIL_WET = 1500;
   const int ZONE_B_SOIL_DRY = 3000;
   const int ZONE_B_SOIL_WET = 1500;
+
+  // Plausible raw window for a CONNECTED sensor. A floating/disconnected ADC
+  // pin tends to sit at the rails (near 0 or near 4095); readings outside this
+  // window are treated as "not_connected".
+  const int SOIL_RAW_CONNECTED_MIN = 200;
+  const int SOIL_RAW_CONNECTED_MAX = 4090;
 
 #elif defined(ESP8266)
   const char* BOARD_NAME = "ESP8266";
@@ -51,9 +68,15 @@ const char* API_URL = "http://192.168.7.202:5000/api/readings";
 
   const char* ZONE_A_ID = "SYD-INSIDE-LEFT-03";
 
-  // 10-bit ADC: 0-1023. Update after real calibration.
+  const bool ZONE_A_SOIL_CONNECTED = true;   // sensor wired on A0
+
+  // ── Soil moisture calibration (10-bit ADC: 0-1023) ──────────────────────
+  // Same procedure as ESP32: read raw in dry vs saturated soil and set these.
   const int ZONE_A_SOIL_DRY = 750;
   const int ZONE_A_SOIL_WET = 350;
+
+  const int SOIL_RAW_CONNECTED_MIN = 20;
+  const int SOIL_RAW_CONNECTED_MAX = 1010;
 #endif
 
 // ---------- Common identity ----------
@@ -89,18 +112,40 @@ void addZoneReading(
   int soilPin,
   int dryValue,
   int wetValue,
+  bool soilWired,
   int tempSensorIndex
 ) {
   int soilRaw = analogRead(soilPin);
-  int soilPct = rawToPercent(soilRaw, dryValue, wetValue);
   float soilTempC = readSoilTempByIndex(tempSensorIndex);
+
+  // Moisture sensor status: "ok" | "not_connected".
+  //   • not wired                         → not_connected
+  //   • raw sits at the rails (floating)  → not_connected
+  const char* soilStatus;
+  bool soilConnected;
+  if (!soilWired) {
+    soilStatus = "not_connected";
+    soilConnected = false;
+  } else if (soilRaw < SOIL_RAW_CONNECTED_MIN || soilRaw > SOIL_RAW_CONNECTED_MAX) {
+    soilStatus = "not_connected";
+    soilConnected = false;
+  } else {
+    soilStatus = "ok";
+    soilConnected = true;
+  }
 
   JsonObject zone = zones.add<JsonObject>();
   zone["zone_id"] = zoneId;
   // node_id per-zone: the Pi counts online ESP nodes from zones[].node_id.
   zone["node_id"] = NODE_ID;
+  // Always log raw for debugging; pct is null when the sensor isn't connected.
   zone["soil_moisture_raw"] = soilRaw;
-  zone["soil_moisture_pct"] = soilPct;
+  if (soilConnected) {
+    zone["soil_moisture_pct"] = rawToPercent(soilRaw, dryValue, wetValue);
+  } else {
+    zone["soil_moisture_pct"] = nullptr;
+  }
+  zone["soil_moisture_status"] = soilStatus;
 
   bool tempOk = !isnan(soilTempC);
   if (tempOk) {
@@ -111,19 +156,26 @@ void addZoneReading(
     zone["soil_temp_status"] = "not_detected";
   }
 
-  // Per-zone debug line.
+  // Per-zone debug line (also useful for calibrating DRY/WET raw values).
   Serial.print("  zone ");
   Serial.print(zoneId);
   Serial.print(" | raw=");
   Serial.print(soilRaw);
   Serial.print(" moisture=");
-  Serial.print(soilPct);
-  Serial.print("% | soil_temp=");
+  if (soilConnected) {
+    Serial.print(rawToPercent(soilRaw, dryValue, wetValue));
+    Serial.print("%");
+  } else {
+    Serial.print("--");
+  }
+  Serial.print(" [");
+  Serial.print(soilStatus);
+  Serial.print("] | soil_temp=");
   if (tempOk) {
     Serial.print(soilTempC);
     Serial.println("C");
   } else {
-    Serial.println("not_detected");
+    Serial.println("not connected");
   }
 }
 
@@ -213,6 +265,7 @@ void loop() {
     ZONE_A_SOIL_PIN,
     ZONE_A_SOIL_DRY,
     ZONE_A_SOIL_WET,
+    ZONE_A_SOIL_CONNECTED,
     0
   );
 
@@ -224,6 +277,7 @@ void loop() {
     ZONE_B_SOIL_PIN,
     ZONE_B_SOIL_DRY,
     ZONE_B_SOIL_WET,
+    ZONE_B_SOIL_CONNECTED,
     1
   );
 #endif

@@ -254,6 +254,13 @@ export function ZoneDetailSheet({
   const hasReading = Boolean(zone?.hasReading);
   const siteName = zone?.visualLabel.startsWith('SYD-') ? 'Sydney' : 'Truro';
 
+  // Sensor connection state — drives "not connected" messaging instead of 0% / 0°C.
+  const moistureNotConnected =
+    zone?.soilMoistureStatus === 'not_connected' || zone?.soilMoistureStatus === 'invalid';
+  const tempNotConnected =
+    zone?.soilTempStatus === 'not_detected' || zone?.soilTempStatus === 'not_connected' ||
+    (hasReading && zone?.soilTempC == null);
+
   // Label model:
   // - friendlyName: user-facing bed name (e.g. "Greenhouse Bed 1") — shown in header
   // - physicalId: short technical zone identifier — Advanced details only
@@ -339,19 +346,30 @@ export function ZoneDetailSheet({
             {/* Sensor reading */}
             {hasReading ? (
               <div className="gm-card" style={{ padding: 18, display: 'flex', alignItems: 'center', gap: 16 }}>
-                <Ring value={zone.soilMoisturePct} tone={tone} />
+                <Ring value={moistureNotConnected ? null : zone.soilMoisturePct} tone={tone} />
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {moistureNotConnected && (
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)' }}>
+                      Moisture sensor not connected
+                    </div>
+                  )}
                   <div>
                     <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.1em' }}>SOIL TEMP</div>
-                    <div style={{
-                      fontFamily: "'Baloo 2', system-ui", fontSize: 26, color: 'var(--ink)',
-                      lineHeight: 1, fontVariantNumeric: 'tabular-nums', fontWeight: 800,
-                    }}>
-                      {zone.soilTempC != null ? zone.soilTempC.toFixed(1) : '—'}
-                      <span style={{ fontSize: 14, color: 'var(--ink-3)' }}>°C</span>
-                    </div>
+                    {tempNotConnected ? (
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', marginTop: 2 }}>
+                        Temperature sensor not connected
+                      </div>
+                    ) : (
+                      <div style={{
+                        fontFamily: "'Baloo 2', system-ui", fontSize: 26, color: 'var(--ink)',
+                        lineHeight: 1, fontVariantNumeric: 'tabular-nums', fontWeight: 800,
+                      }}>
+                        {zone.soilTempC != null ? zone.soilTempC.toFixed(1) : '—'}
+                        <span style={{ fontSize: 14, color: 'var(--ink-3)' }}>°C</span>
+                      </div>
+                    )}
                   </div>
-                  {profile && zone.soilTempC != null && (
+                  {profile && !tempNotConnected && zone.soilTempC != null && (
                     <span className={`gm-chip ${tempTone}`} style={{ alignSelf: 'flex-start' }}>
                       🌡{' '}
                       {zone.soilTempC < profile.soilTempMin

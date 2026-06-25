@@ -31,6 +31,9 @@ function nullify(val) {
 }
 
 function toFinite(val) {
+  // Treat null/undefined/'' as "no reading" → null. (Number(null) is 0, which
+  // would otherwise pull a disconnected 0°C/0% into averages.)
+  if (val === null || val === undefined || val === '') return null;
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
 }
@@ -53,7 +56,12 @@ function classifyZone(zoneId) {
 // ─── Zone normalization ───────────────────────────────────────────────────────
 
 function buildZoneSnapshot(rawZone) {
-  const moisture = toFinite(rawZone.soil_moisture_pct);
+  // Moisture sensor connection status from firmware. When the sensor is not
+  // connected (or invalid) the pct is forced null so it never counts toward
+  // averages or produces dry/wet status.
+  const moistureSensor = rawZone.soil_moisture_status || 'ok';
+  const moistureConnected = moistureSensor !== 'not_connected' && moistureSensor !== 'invalid';
+  const moisture = moistureConnected ? toFinite(rawZone.soil_moisture_pct) : null;
   const temp     = toFinite(rawZone.soil_temp_c);
   const locType  = classifyZone(rawZone.zone_id);
 
@@ -87,6 +95,7 @@ function buildZoneSnapshot(rawZone) {
     plant_name:      null,
     soil_moisture_raw: nullify(toFinite(rawZone.soil_moisture_raw)),
     soil_moisture_pct: moisture,
+    soil_moisture_status: moistureSensor,
     soil_temp_c:       temp,
     moisture_status:   moistureStatus,
     soil_temp_status:  rawZone.soil_temp_status || tempStatus,

@@ -189,9 +189,25 @@ function sensorAlerts(zone: VisualZone): ZoneAlert[] {
   const label = zoneLabel(zone);
   const base = { zoneId: zone.visualLabel, nodeId: zone.nodeId, displayLabel: zone.displayLabel, zone };
 
+  const moistureNotConnected =
+    zone.soilMoistureStatus === 'not_connected' || zone.soilMoistureStatus === 'invalid';
+
   const tempMissing =
     zone.soilTempStatus === 'not_detected' ||
+    zone.soilTempStatus === 'not_connected' ||
     (zone.soilTempC === null && zone.soilTempStatus !== 'ok' && zone.soilTempStatus != null);
+
+  if (moistureNotConnected) {
+    alerts.push({
+      ...base,
+      id: `${zone.visualLabel}-sensor-moisture-missing`,
+      type: 'sensor' as const,
+      severity: 'warning' as const,
+      title: 'Moisture sensor not connected',
+      message: `Moisture sensor not connected in ${label}.`,
+      action: 'Connect or check the soil moisture sensor',
+    });
+  }
 
   if (tempMissing) {
     alerts.push({
@@ -199,14 +215,15 @@ function sensorAlerts(zone: VisualZone): ZoneAlert[] {
       id: `${zone.visualLabel}-sensor-temp-missing`,
       type: 'sensor' as const,
       severity: 'warning' as const,
-      title: 'Temperature sensor not detected',
-      message: `${label} — no temperature probe responding.`,
-      action: 'Check sensor cable',
+      title: 'Temperature sensor not connected',
+      message: `Temperature sensor not connected in ${label}.`,
+      action: 'Check the DS18B20 probe cable',
     });
   }
 
-  // Raw value present but percentage couldn't be computed = calibration issue
-  if (zone.soilMoisturePct === null && zone.soilMoistureRaw !== null) {
+  // Raw value present but percentage couldn't be computed while the sensor IS
+  // reported connected = calibration issue (not a disconnected sensor).
+  if (!moistureNotConnected && zone.soilMoisturePct === null && zone.soilMoistureRaw !== null) {
     alerts.push({
       ...base,
       id: `${zone.visualLabel}-sensor-moisture-calc`,

@@ -36,11 +36,22 @@ let readingsHistory  = [];
 
 function analyzeZone(zone) {
   const alerts = [];
-  if (typeof zone.soil_moisture_pct === 'number') {
+
+  // Sensor-status alerts take priority — a disconnected sensor must NOT produce
+  // dry/wet/watering alerts (its reading isn't real).
+  const moistureDisconnected =
+    zone.soil_moisture_status === 'not_connected' || zone.soil_moisture_status === 'invalid';
+  const tempDisconnected =
+    zone.soil_temp_status === 'not_detected' || zone.soil_temp_status === 'not_connected';
+
+  if (moistureDisconnected) alerts.push('moisture sensor not connected');
+  if (tempDisconnected)     alerts.push('temperature sensor not connected');
+
+  if (!moistureDisconnected && typeof zone.soil_moisture_pct === 'number') {
     if (zone.soil_moisture_pct < 30) alerts.push("too dry");
     if (zone.soil_moisture_pct > 80) alerts.push("too wet");
   }
-  if (typeof zone.soil_temp_c === 'number' && zone.soil_temp_c < 10) {
+  if (!tempDisconnected && typeof zone.soil_temp_c === 'number' && zone.soil_temp_c < 10) {
     alerts.push("too cold");
   }
   return alerts;

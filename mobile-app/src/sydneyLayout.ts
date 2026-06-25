@@ -1,4 +1,4 @@
-import { LatestReading, VisualZone } from './zoneLayout';
+import { LatestReading, VisualZone, ZoneReading } from './zoneLayout';
 import type { PlantProfile } from './plantProfiles';
 import { getZoneDisplayName, resolveZoneId, resolveAssignmentKeys } from './zoneRegistry';
 
@@ -64,16 +64,29 @@ export function mapZonesToSydneyLayout(
   zoneAssignments: Record<string, string> = {},
   profilesById?: Map<string, PlantProfile>
 ): SydneyVisualZone[] {
-  // Match readings to beds by canonical ID so legacy IDs (SYD-GH-LEFT-01) line
-  // up with the new bed IDs (SYD-INSIDE-LEFT-01).
-  const readingsByZone = new Map(
-    (latestReading?.zones ?? []).map((zone) => [canonicalKey(zone.zone_id), zone])
-  );
-  const orderedReadings = latestReading?.zones ?? [];
+  const zones = latestReading?.zones ?? [];
   const assignments = resolveAssignmentKeys(zoneAssignments);
+  const bedKeys = new Set(SYDNEY_BEDS.map((bed) => canonicalKey(bed.id)));
 
-  return SYDNEY_BEDS.map((bed, index) => {
-    const reading = readingsByZone.get(canonicalKey(bed.id)) ?? orderedReadings[index];
+  // A reading whose canonical ID matches a bed belongs to THAT bed only. Such
+  // readings are "claimed" and removed from the positional pool, so they can't
+  // also leak into unrelated beds (e.g. an inside zone showing as Outdoor Bed 1).
+  const readingByBedKey = new Map<string, ZoneReading>();
+  const claimed = new Set<number>();
+  zones.forEach((zone, i) => {
+    const key = canonicalKey(zone.zone_id);
+    if (bedKeys.has(key) && !readingByBedKey.has(key)) {
+      readingByBedKey.set(key, zone);
+      claimed.add(i);
+    }
+  });
+  // Only readings that match no bed at all may fall back to positional slotting.
+  const leftover = zones.filter((_, i) => !claimed.has(i));
+  let leftoverIdx = 0;
+
+  const result = SYDNEY_BEDS.map((bed, index) => {
+    const key = canonicalKey(bed.id);
+    const reading = readingByBedKey.get(key) ?? (readingByBedKey.size === 0 ? leftover[leftoverIdx++] : undefined);
     const assignedPlant = assignments[bed.id] ?? null;
     const assignedPlantProfile = assignedPlant && profilesById ? profilesById.get(assignedPlant) ?? null : null;
 
@@ -90,6 +103,7 @@ export function mapZonesToSydneyLayout(
       greenhouseId: reading?.greenhouse_id,
       soilMoistureRaw: reading?.soil_moisture_raw ?? null,
       soilMoisturePct: reading?.soil_moisture_pct ?? null,
+      soilMoistureStatus: reading?.soil_moisture_status ?? null,
       soilTempC: reading?.soil_temp_c ?? null,
       soilTempStatus: reading?.soil_temp_status ?? null,
       alerts: reading?.alerts ?? [],
@@ -106,6 +120,29 @@ export function mapZonesToSydneyLayout(
       height: bed.height
     };
   });
+
+  warnOnDuplicateBackendZones(result);
+  return result;
+}
+
+// Diagnostic: each backend zone ID must appear on at most one visual bed.
+let _dupWarned = false;
+function warnOnDuplicateBackendZones(zones: SydneyVisualZone[]) {
+  if (_dupWarned) return;
+  const seen = new Map<string, string>();
+  for (const z of zones) {
+    if (!z.backendZoneId) continue;
+    const prior = seen.get(z.backendZoneId);
+    if (prior && prior !== z.visualLabel) {
+      _dupWarned = true;
+      console.warn(
+        `[zones] Duplicate backendZoneId "${z.backendZoneId}" mapped to multiple beds ` +
+        `("${prior}" and "${z.visualLabel}"). Each backend zone must map to exactly one bed.`
+      );
+    } else {
+      seen.set(z.backendZoneId, z.visualLabel);
+    }
+  }
 }
 
 // Canonical match key: migrate legacy IDs, then strip separators/case.

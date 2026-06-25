@@ -10,6 +10,7 @@ export interface ZoneReading {
   plant_name?: string | null;
   soil_moisture_raw?: number | null;
   soil_moisture_pct?: number | null;
+  soil_moisture_status?: 'ok' | 'not_connected' | 'invalid' | string | null;
   soil_temp_c?: number | null;
   soil_temp_status?: string | null;
   moisture_status?: 'dry' | 'ok' | 'wet' | 'unknown';
@@ -114,6 +115,7 @@ export interface VisualZone {
   greenhouseId?: string;
   soilMoistureRaw: number | null;
   soilMoisturePct: number | null;
+  soilMoistureStatus?: string | null;
   soilTempC: number | null;
   soilTempStatus: string | null;
   alerts: string[];
@@ -208,6 +210,7 @@ function createVisualZone(slot: LayoutSlot, zone: ZoneReading, timestamp?: strin
     greenhouseId: zone.greenhouse_id,
     soilMoistureRaw: zone.soil_moisture_raw ?? null,
     soilMoisturePct: zone.soil_moisture_pct ?? null,
+    soilMoistureStatus: zone.soil_moisture_status ?? null,
     soilTempC: zone.soil_temp_c ?? null,
     soilTempStatus: zone.soil_temp_status ?? null,
     alerts: zone.alerts ?? [],
@@ -289,6 +292,7 @@ export function mapZonesToLayout(
           greenhouseId: zone.greenhouse_id,
           soilMoistureRaw: zone.soil_moisture_raw ?? null,
           soilMoisturePct: zone.soil_moisture_pct ?? null,
+          soilMoistureStatus: zone.soil_moisture_status ?? null,
           soilTempC: zone.soil_temp_c ?? null,
           soilTempStatus: zone.soil_temp_status ?? null,
           alerts: zone.alerts ?? [],
@@ -329,6 +333,14 @@ export function getZoneStatus(zone: VisualZone) {
     return {
       tone: 'no-data' as const,
       label: 'No data'
+    };
+  }
+
+  // Disconnected moisture sensor: never show dry/wet/healthy — stay neutral.
+  if (zone.soilMoistureStatus === 'not_connected' || zone.soilMoistureStatus === 'invalid' || zone.soilMoisturePct === null) {
+    return {
+      tone: 'no-data' as const,
+      label: 'Sensor not connected'
     };
   }
 
