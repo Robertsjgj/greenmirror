@@ -1,5 +1,9 @@
-// Load .env FIRST — must happen before any other require() reads process.env
-require('dotenv').config();
+// Load .env FIRST — must happen before any other require() reads process.env.
+// Resolve it from this file's own directory (not process.cwd()) so the server
+// loads the same raspberry-pi/.env whether started with `cd raspberry-pi &&
+// node server.js` (laptop dev) or `node raspberry-pi/server.js` from the repo
+// root (PM2 production).
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const express = require("express");
 const cors    = require("cors");
