@@ -36,6 +36,11 @@ String g_backendUrl;
   const char* SETUP_AP_NAME = "GreenMirror-Setup";
   // Default backend URL — pre-filled in the portal and used until the user changes it.
   const char* DEFAULT_BACKEND_URL = "http://greenmirror-pi.local:5000/api/readings";
+  // Single fallback WiFi profile tried before opening the setup portal (testing).
+  const char* FALLBACK_WIFI_SSID = "GreenMirror24";
+  const char* FALLBACK_WIFI_PASS = "greenmirror";
+  // How long to wait for one WiFi connection attempt (saved or fallback).
+  const uint32_t WIFI_CONNECT_TIMEOUT_MS = 10000;
   // Persistent (NVS) store for the backend URL.
   Preferences prefs;
 #elif defined(ESP8266)
@@ -49,11 +54,11 @@ String g_backendUrl;
 
   static const WifiProfile WIFI_PROFILES[] = {
     // Home
-    { "1661", "Henryboys" },
+    // { "1661", "Henryboys" },
     // Greenhouse
     { "GreenMirror24", "greenmirror" },
     // Phone Hotspot
-    { "NASSUS MEKUNA", "D1D71DFAD1C6" },
+    // { "NASSUS MEKUNA", "D1D71DFAD1C6" },
   };
   static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
 
@@ -316,15 +321,23 @@ void startMdnsOnce() {
 }
 
 #if defined(ESP32)
-// ESP32: provision WiFi with WiFiManager and load/save the backend URL.
-//
-// On boot WiFiManager tries the saved WiFi credentials. If they are missing or
-// the connection fails, it starts a captive portal named GreenMirror-Setup
-// where the user enters WiFi SSID, WiFi password, and the backend URL. The
-// backend URL is stored in Preferences so it survives reboots.
-void setupNetworking() {
-  prefs.begin("greenmirror", false);
-  String savedUrl = prefs.getString("backend_url", DEFAULT_BACKEND_URL);
+// Wait up to timeoutMs for the current WiFi.begin() attempt to connect.
+static bool waitForWifi(uint32_t timeoutMs) {
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+    delay(250);
+    Serial.print('.');
+  }
+  Serial.println();
+  return WiFi.status() == WL_CONNECTED;
+}
+
+// Open the WiFiManager captive portal so the user can enter WiFi + backend URL.
+// Returns true if WiFi connected through the portal. The backend URL field is
+// persisted to Preferences here.
+static bool runSetupPortal(const String& savedUrl) {
+  Serial.print("Starting setup portal: ");
+  Serial.println(SETUP_AP_NAME);
 
   WiFiManager wm;
   wm.setConfigPortalTimeout(180);  // give up the portal after 3 min so sensors keep running
@@ -335,19 +348,15 @@ void setupNetworking() {
     "backend", "Backend URL (http://host:port/api/readings)", savedUrl.c_str(), 128);
   wm.addParameter(&backendParam);
 
-  // Log when the setup portal opens.
   wm.setAPCallback([](WiFiManager* mgr) {
     (void)mgr;
-    Serial.print("Setup portal started: ");
-    Serial.println(SETUP_AP_NAME);
     Serial.print("  Join WiFi \"");
     Serial.print(SETUP_AP_NAME);
     Serial.print("\", then open http://");
     Serial.println(WiFi.softAPIP());
   });
 
-  Serial.println("Trying saved WiFi credentials...");
-  bool connected = wm.autoConnect(SETUP_AP_NAME);
+  bool connected = wm.startConfigPortal(SETUP_AP_NAME);
 
   // Persist the backend URL the user may have entered in the portal.
   String enteredUrl = backendParam.getValue();
@@ -358,16 +367,54 @@ void setupNetworking() {
     Serial.println("Backend URL updated and saved to Preferences.");
   }
   g_backendUrl = enteredUrl;
+  return connected;
+}
+
+// ESP32 connection flow:
+//   1. Try saved WiFi credentials (stored by WiFiManager in NVS).
+//   2. If they fail, try the single fallback profile (GreenMirror24).
+//   3. If the fallback fails too, open the GreenMirror-Setup captive portal.
+// The backend URL is provisioned via the portal's custom field and kept in
+// Preferences; it defaults to DEFAULT_BACKEND_URL.
+void setupNetworking() {
+  prefs.begin("greenmirror", false);
+  String savedUrl = prefs.getString("backend_url", DEFAULT_BACKEND_URL);
+  g_backendUrl = savedUrl;  // used as-is unless the portal updates it below
+
+  WiFi.mode(WIFI_STA);
+
+  // 1. Saved credentials.
+  Serial.println("Trying saved WiFi credentials...");
+  WiFi.begin();  // reconnect using credentials stored in flash
+  bool connected = waitForWifi(WIFI_CONNECT_TIMEOUT_MS);
+
+  // 2. Fallback profile.
+  if (!connected) {
+    Serial.println("Saved WiFi failed.");
+    Serial.print("Trying fallback WiFi: ");
+    Serial.println(FALLBACK_WIFI_SSID);
+    WiFi.begin(FALLBACK_WIFI_SSID, FALLBACK_WIFI_PASS);
+    if (waitForWifi(WIFI_CONNECT_TIMEOUT_MS)) {
+      connected = true;
+      Serial.print("Connected to fallback WiFi: ");
+      Serial.println(FALLBACK_WIFI_SSID);
+    }
+  }
+
+  // 3. Captive portal.
+  if (!connected) {
+    connected = runSetupPortal(savedUrl);
+  }
 
   if (connected) {
     WiFi.setAutoReconnect(true);
-    Serial.print("Saved WiFi connected: ");
+    Serial.print("WiFi connected: ");
     Serial.println(WiFi.SSID());
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
     startMdnsOnce();
   } else {
-    Serial.println("WiFi not connected (no credentials or portal timed out).");
+    Serial.println("WiFi not connected (portal timed out). Sensors keep running.");
   }
 
   Serial.print("Backend URL in use: ");
