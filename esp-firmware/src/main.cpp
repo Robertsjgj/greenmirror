@@ -5,6 +5,8 @@
   #include <WiFi.h>
   #include <HTTPClient.h>
   #include <ESPmDNS.h>
+  #include <WiFiManager.h>   // tzapu/WiFiManager — runtime WiFi provisioning (captive portal)
+  #include <Preferences.h>   // persistent storage for the backend URL (NVS)
 #elif defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESP8266HTTPClient.h>
@@ -17,36 +19,50 @@
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
 
-// ---------- WiFi profiles / API URL ----------
-// Portable across test locations: multiple WiFi networks are tried in order
-// (last-successful first), so moving between sites needs no code changes.
-// Readings are posted to a single backend URL.
+// ---------- WiFi provisioning / backend URL ----------
+// ESP32 provisions WiFi at runtime with WiFiManager (a captive portal), so no
+// SSID/password is hardcoded. The backend URL is an extra portal field stored
+// persistently with Preferences. ESP8266 keeps the simple hardcoded profile
+// scan (this target has no WiFiManager/Preferences setup here).
 
-// How long to wait for a single WiFi profile to connect.
-const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
-// Per-request HTTP timeout so dead backend addresses fail quickly.
+// Per-request HTTP timeout so a dead backend address fails quickly.
 const uint32_t HTTP_TIMEOUT_MS = 2000;
 
-struct WifiProfile {
-  const char* ssid;
-  const char* password;
-};
+// Active backend URL used by loop(); set during networking setup.
+String g_backendUrl;
 
-static const WifiProfile WIFI_PROFILES[] = {
-  // Home
-  { "1661", "Henryboys" },
-  // Greenhouse
-  { "GreenMirror", "bossssss" },
-  // Phone Hotspot
-  { "NASSUS MEKUNA", "D1D71DFAD1C6" },
-};
-static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
+#if defined(ESP32)
+  // Captive-portal SSID shown when WiFi is unconfigured or the saved network fails.
+  const char* SETUP_AP_NAME = "GreenMirror-Setup";
+  // Default backend URL — pre-filled in the portal and used until the user changes it.
+  const char* DEFAULT_BACKEND_URL = "http://greenmirror-pi.local:5000/api/readings";
+  // Persistent (NVS) store for the backend URL.
+  Preferences prefs;
+#elif defined(ESP8266)
+  // How long to wait for a single WiFi profile to connect.
+  const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
 
-// Single backend URL the node posts readings to.
-static const char* API_URL = "http://10.235.41.88:5000/api/readings";
+  struct WifiProfile {
+    const char* ssid;
+    const char* password;
+  };
 
-// Remember which WiFi profile last worked so we try it first next time.
-int currentWifiIndex = -1;  // -1 = none connected yet
+  static const WifiProfile WIFI_PROFILES[] = {
+    // Home
+    { "1661", "Henryboys" },
+    // Greenhouse
+    { "GreenMirror24", "greenmirror" },
+    // Phone Hotspot
+    { "NASSUS MEKUNA", "D1D71DFAD1C6" },
+  };
+  static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
+
+  // Single hardcoded backend URL for the ESP8266 target.
+  static const char* API_URL = "http://10.194.224.61:5000/api/readings";
+
+  // Remember which WiFi profile last worked so we try it first next time.
+  int currentWifiIndex = -1;  // -1 = none connected yet
+#endif
 
 // ---------- Board identity, pins, zones (compile-time per target) ----------
 //
@@ -251,11 +267,14 @@ void addZoneReading(
   }
 }
 
-bool tryWifiProfile(int idx);
-void connectWiFi();
+void setupNetworking();
 void ensureWiFiConnected();
 void startMdnsOnce();
 int  postToUrl(const char* url, const String& payload);
+#if defined(ESP8266)
+bool tryWifiProfile(int idx);
+void connectWiFi();
+#endif
 
 void setup() {
   Serial.begin(115200);
@@ -275,17 +294,95 @@ void setup() {
   Serial.println(NODE_ID);
   Serial.print("greenhouse_id: ");
   Serial.println(GREENHOUSE_ID);
-  Serial.print("Configured WiFi profiles: ");
-  Serial.println(WIFI_PROFILE_COUNT);
-  Serial.print("Backend: ");
-  Serial.println(API_URL);
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
   Serial.println("---------------------------------");
 
-  connectWiFi();
+  setupNetworking();
   Serial.println("Ready.");
 }
+
+// Start the mDNS responder once after WiFi is up (lets the node be reached by
+// name on supporting networks).
+void startMdnsOnce() {
+  static bool started = false;
+  if (started) return;
+  if (MDNS.begin(NODE_ID)) {
+    started = true;
+    Serial.print("mDNS responder started: ");
+    Serial.print(NODE_ID);
+    Serial.println(".local");
+  }
+}
+
+#if defined(ESP32)
+// ESP32: provision WiFi with WiFiManager and load/save the backend URL.
+//
+// On boot WiFiManager tries the saved WiFi credentials. If they are missing or
+// the connection fails, it starts a captive portal named GreenMirror-Setup
+// where the user enters WiFi SSID, WiFi password, and the backend URL. The
+// backend URL is stored in Preferences so it survives reboots.
+void setupNetworking() {
+  prefs.begin("greenmirror", false);
+  String savedUrl = prefs.getString("backend_url", DEFAULT_BACKEND_URL);
+
+  WiFiManager wm;
+  wm.setConfigPortalTimeout(180);  // give up the portal after 3 min so sensors keep running
+
+  // Extra captive-portal field for the backend URL, pre-filled with the saved
+  // (or default) value so the user can keep or change it.
+  WiFiManagerParameter backendParam(
+    "backend", "Backend URL (http://host:port/api/readings)", savedUrl.c_str(), 128);
+  wm.addParameter(&backendParam);
+
+  // Log when the setup portal opens.
+  wm.setAPCallback([](WiFiManager* mgr) {
+    (void)mgr;
+    Serial.print("Setup portal started: ");
+    Serial.println(SETUP_AP_NAME);
+    Serial.print("  Join WiFi \"");
+    Serial.print(SETUP_AP_NAME);
+    Serial.print("\", then open http://");
+    Serial.println(WiFi.softAPIP());
+  });
+
+  Serial.println("Trying saved WiFi credentials...");
+  bool connected = wm.autoConnect(SETUP_AP_NAME);
+
+  // Persist the backend URL the user may have entered in the portal.
+  String enteredUrl = backendParam.getValue();
+  enteredUrl.trim();
+  if (enteredUrl.length() == 0) enteredUrl = DEFAULT_BACKEND_URL;
+  if (enteredUrl != savedUrl) {
+    prefs.putString("backend_url", enteredUrl);
+    Serial.println("Backend URL updated and saved to Preferences.");
+  }
+  g_backendUrl = enteredUrl;
+
+  if (connected) {
+    WiFi.setAutoReconnect(true);
+    Serial.print("Saved WiFi connected: ");
+    Serial.println(WiFi.SSID());
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    startMdnsOnce();
+  } else {
+    Serial.println("WiFi not connected (no credentials or portal timed out).");
+  }
+
+  Serial.print("Backend URL in use: ");
+  Serial.println(g_backendUrl);
+}
+
+void ensureWiFiConnected() {
+  // The WiFi stack auto-reconnects; nudge it if it has dropped.
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.reconnect();
+  }
+}
+
+#elif defined(ESP8266)
+// ESP8266: simple hardcoded WiFi profile scan (unchanged behavior).
 
 // Try a single WiFi profile for up to WIFI_CONNECT_TIMEOUT_MS. Returns true on success.
 bool tryWifiProfile(int idx) {
@@ -318,19 +415,6 @@ bool tryWifiProfile(int idx) {
   WiFi.disconnect(true);   // disconnect cleanly before the next profile
   delay(100);
   return false;
-}
-
-// Start the mDNS responder once after WiFi is up (lets the node be reached by
-// name and helps resolve the greenmirror.local backend on supporting networks).
-void startMdnsOnce() {
-  static bool started = false;
-  if (started) return;
-  if (MDNS.begin(NODE_ID)) {
-    started = true;
-    Serial.print("mDNS responder started: ");
-    Serial.print(NODE_ID);
-    Serial.println(".local");
-  }
 }
 
 void connectWiFi() {
@@ -369,11 +453,19 @@ void connectWiFi() {
   Serial.println();
 }
 
+void setupNetworking() {
+  g_backendUrl = API_URL;
+  connectWiFi();
+  Serial.print("Backend URL in use: ");
+  Serial.println(g_backendUrl);
+}
+
 void ensureWiFiConnected() {
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
   }
 }
+#endif
 
 // POST a payload to one backend URL. Returns the HTTP status code (>0) or a
 // negative HTTPClient error code on failure.
@@ -446,7 +538,7 @@ void loop() {
     String payload;
     serializeJson(doc, payload);
 
-    int code = postToUrl(API_URL, payload);
+    int code = postToUrl(g_backendUrl.c_str(), payload);
     if (code == 200) {
       Serial.println("POST status: 200 (OK)");
     } else if (code > 0) {
