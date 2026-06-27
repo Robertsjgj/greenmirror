@@ -17,10 +17,10 @@
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
 
-// ---------- WiFi profiles / API URLs ----------
-// Portable across test locations: multiple WiFi networks and multiple backend
-// URLs. The connection logic tries the last-successful entry first, then scans
-// the rest, so moving between sites needs no code changes.
+// ---------- WiFi profiles / API URL ----------
+// Portable across test locations: multiple WiFi networks are tried in order
+// (last-successful first), so moving between sites needs no code changes.
+// Readings are posted to a single backend URL.
 
 // How long to wait for a single WiFi profile to connect.
 const uint32_t WIFI_CONNECT_TIMEOUT_MS = 5000;
@@ -36,27 +36,17 @@ static const WifiProfile WIFI_PROFILES[] = {
   // Home
   { "1661", "Henryboys" },
   // Greenhouse
-  { "GreenMirror", "GreenMirror2026" },
+  { "GreenMirror", "bossssss" },
   // Phone Hotspot
   { "NASSUS MEKUNA", "D1D71DFAD1C6" },
 };
 static const int WIFI_PROFILE_COUNT = sizeof(WIFI_PROFILES) / sizeof(WIFI_PROFILES[0]);
 
-// Backend URLs, tried in order. The mDNS hostname is tried FIRST so the node
-// finds the Pi without knowing its IP; the IPs below are the fallback list.
-static const char* BACKEND_HOSTNAME = "greenmirror.local";
-static const char* API_URLS[] = {
-  "http://greenmirror.local:5000/api/readings",  // 1) mDNS hostname (primary)
-  "http://192.168.7.202:5000/api/readings",      // 2) fallback IP
-  "http://192.168.2.14:5000/api/readings",       // 3) fallback IP
-  "http://192.168.0.14:5000/api/readings",       // 4) fallback IP
-  "http://192.168.1.14:5000/api/readings",       // 5) fallback IP
-};
-static const int API_URL_COUNT = sizeof(API_URLS) / sizeof(API_URLS[0]);
+// Single backend URL the node posts readings to.
+static const char* API_URL = "http://10.235.41.88:5000/api/readings";
 
-// Remember which profile / URL last worked so we try them first next time.
+// Remember which WiFi profile last worked so we try it first next time.
 int currentWifiIndex = -1;  // -1 = none connected yet
-int currentApiIndex  = 0;   // start by trying the first backend (hostname)
 
 // ---------- Board identity, pins, zones (compile-time per target) ----------
 //
@@ -266,7 +256,6 @@ void connectWiFi();
 void ensureWiFiConnected();
 void startMdnsOnce();
 int  postToUrl(const char* url, const String& payload);
-bool sendToBackend(const String& payload);
 
 void setup() {
   Serial.begin(115200);
@@ -288,17 +277,8 @@ void setup() {
   Serial.println(GREENHOUSE_ID);
   Serial.print("Configured WiFi profiles: ");
   Serial.println(WIFI_PROFILE_COUNT);
-  Serial.print("Configured Backends: ");
-  Serial.println(API_URL_COUNT);
-  Serial.println();
-  Serial.println("Primary backend:");
-  Serial.print("  ");
-  Serial.println(BACKEND_HOSTNAME);
-  Serial.println("Fallback IPs:");
-  for (int i = 1; i < API_URL_COUNT; i++) {   // skip index 0 (the hostname)
-    Serial.print("  ");
-    Serial.println(API_URLS[i]);
-  }
+  Serial.print("Backend: ");
+  Serial.println(API_URL);
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
   Serial.println("---------------------------------");
@@ -414,54 +394,6 @@ int postToUrl(const char* url, const String& payload) {
   return code;
 }
 
-// Send the payload with automatic backend fallback: try the last-successful URL
-// first, then every remaining URL. The first HTTP 200 becomes the active API.
-// Returns true on success; never crashes or blocks forever.
-bool sendToBackend(const String& payload) {
-  // 1) Last-successful backend first.
-  Serial.print("Trying backend #");
-  Serial.print(currentApiIndex + 1);
-  Serial.println("...");
-  int code = postToUrl(API_URLS[currentApiIndex], payload);
-  if (code == 200) {
-    Serial.print("Backend #");
-    Serial.print(currentApiIndex + 1);
-    Serial.println(" connected");
-    Serial.print("Active API: ");
-    Serial.println(API_URLS[currentApiIndex]);
-    return true;
-  }
-  Serial.print("Backend #");
-  Serial.print(currentApiIndex + 1);
-  Serial.println(" unreachable");
-
-  // 2) Fall back through every other configured URL.
-  for (int i = 0; i < API_URL_COUNT; i++) {
-    if (i == currentApiIndex) continue;   // already tried above
-    Serial.print("Trying backend #");
-    Serial.print(i + 1);
-    Serial.println("...");
-    code = postToUrl(API_URLS[i], payload);
-    if (code == 200) {
-      currentApiIndex = i;
-      Serial.println("Connected.");
-      Serial.print("Backend #");
-      Serial.print(i + 1);
-      Serial.println(" connected");
-      Serial.print("Active API: ");
-      Serial.println(API_URLS[i]);
-      return true;
-    }
-    Serial.print("Backend #");
-    Serial.print(i + 1);
-    Serial.println(" unreachable");
-  }
-
-  Serial.print("No backend reachable. Attempted backends #1..#");
-  Serial.println(API_URL_COUNT);
-  return false;
-}
-
 void loop() {
   soilTempSensors.requestTemperatures();
 
@@ -514,8 +446,16 @@ void loop() {
     String payload;
     serializeJson(doc, payload);
 
-    // Backend fallback handles failures internally; retried next transmission.
-    sendToBackend(payload);
+    int code = postToUrl(API_URL, payload);
+    if (code == 200) {
+      Serial.println("POST status: 200 (OK)");
+    } else if (code > 0) {
+      Serial.print("POST failed: HTTP ");
+      Serial.println(code);
+    } else {
+      Serial.print("POST failed: ");
+      Serial.println(HTTPClient::errorToString(code));
+    }
   } else {
     Serial.println("POST failed: no WiFi");
   }
