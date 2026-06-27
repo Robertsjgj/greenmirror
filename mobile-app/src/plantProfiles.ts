@@ -22,6 +22,7 @@ export type ZoneOverallStatus =
   | 'too-wet'
   | 'too-cold'
   | 'too-hot'
+  | 'sensor-offline'
   | 'no-data'
   | 'unassigned'
   | 'missing-profile';
@@ -256,6 +257,21 @@ export function getPlantStatusMessages(zone: VisualZone, profile: PlantProfile |
   return evaluateZoneAgainstPlant(zone, profile).messages;
 }
 
+/**
+ * Moisture is the required sensor for evaluating a bed's watering / plant
+ * health. When it is disconnected or invalid the bed cannot be judged, so the
+ * evaluation must report "Sensor Offline" instead of a health verdict —
+ * temperature alone must never make a bed read as healthy.
+ */
+export function hasRequiredSensors(zone: VisualZone): boolean {
+  const moistureOffline =
+    zone.soilMoistureStatus === 'not_connected' ||
+    zone.soilMoistureStatus === 'invalid' ||
+    zone.soilMoisturePct === null ||
+    zone.soilMoisturePct === undefined;
+  return !moistureOffline;
+}
+
 export function evaluateZoneAgainstPlant(zone: VisualZone, profile: PlantProfile | null): ZonePlantEvaluation {
   const hasAssignedPlant = Boolean(zone.assignedPlant);
 
@@ -269,6 +285,25 @@ export function evaluateZoneAgainstPlant(zone: VisualZone, profile: PlantProfile
       temperatureStatus: 'no-data',
       tone: 'no-data',
       label: 'No data'
+    };
+  }
+
+  // Required-sensor gate (highest priority — above critical/wet/dry/good).
+  // Without moisture data a bed cannot be evaluated for watering or plant
+  // health, so it must read "Sensor Offline" no matter what the temperature
+  // probe reports. Temperature continues to be shown elsewhere from the raw
+  // reading; it just cannot, on its own, declare the bed healthy.
+  if (!hasRequiredSensors(zone)) {
+    return {
+      overallStatus: 'sensor-offline',
+      messages: [
+        'Unable to evaluate this bed because one or more required sensors are disconnected.',
+        'Reconnect the moisture sensor to receive watering recommendations.'
+      ],
+      moistureStatus: 'no-data',
+      temperatureStatus: 'no-data',
+      tone: 'no-data',
+      label: 'Sensor Offline'
     };
   }
 
@@ -379,7 +414,7 @@ function toneFromOverall(status: ZoneOverallStatus): ZonePlantEvaluation['tone']
   if (status === 'needs-water') return 'dry';
   if (status === 'too-wet') return 'wet';
   if (status === 'too-cold' || status === 'too-hot' || status === 'missing-profile') return 'alert';
-  if (status === 'no-data') return 'no-data';
+  if (status === 'sensor-offline' || status === 'no-data') return 'no-data';
   return 'good';
 }
 
@@ -389,6 +424,7 @@ function labelFromOverall(status: ZoneOverallStatus) {
   if (status === 'too-cold') return 'Too cold';
   if (status === 'too-hot') return 'Too hot';
   if (status === 'missing-profile') return 'Plant missing';
+  if (status === 'sensor-offline') return 'Sensor Offline';
   if (status === 'no-data') return 'No data';
   return 'Good';
 }

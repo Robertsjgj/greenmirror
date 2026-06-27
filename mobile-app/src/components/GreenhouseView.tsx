@@ -105,7 +105,7 @@ export function GreenhouseView({
           { tone: 'dry',    label: 'Getting dry', count: counts.dry    },
           { tone: 'wet',    label: 'Too wet',     count: counts.wet    },
           { tone: 'alert',  label: 'Alert',       count: counts.alert  },
-          { tone: 'nodata', label: 'No data',     count: counts.nodata },
+          { tone: 'nodata', label: 'No data / Offline', count: counts.nodata },
         ].map(({ tone, label, count }) => (
           <span key={tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--ink-3)' }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: `var(--${tone})`, display: 'inline-block' }} />

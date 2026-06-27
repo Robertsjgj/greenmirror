@@ -250,6 +250,9 @@ export function ZoneDetailSheet({
   const profile = zone?.assignedPlant ? (profilesById.get(zone.assignedPlant) ?? null) : null;
   const evaluation = zone ? evaluateZoneAgainstPlant(zone, profile) : null;
   const tone: Tone = (evaluation?.tone === 'no-data' ? 'nodata' : evaluation?.tone) ?? 'nodata';
+  // A required sensor (moisture) is disconnected — the bed cannot be evaluated
+  // for health or watering. Overrides every health verdict everywhere below.
+  const sensorOffline = evaluation?.overallStatus === 'sensor-offline';
   const tempTone: Tone = evaluation?.temperatureStatus === 'too-cold' || evaluation?.temperatureStatus === 'too-hot' ? 'alert' : 'good';
   const hasReading = Boolean(zone?.hasReading);
   const siteName = zone?.visualLabel.startsWith('SYD-') ? 'Sydney' : 'Truro';
@@ -283,15 +286,17 @@ export function ZoneDetailSheet({
     }
   }
 
-  // Plant-care recommendations only apply to assigned zones with a resolved profile
-  const actionableMessages = (profile && !isUnassigned)
+  // Plant-care recommendations only apply to assigned zones with a resolved
+  // profile — and never while a required sensor is offline (we cannot evaluate).
+  const actionableMessages = (profile && !isUnassigned && !sensorOffline)
     ? (evaluation?.messages.filter(
         (m) => !m.includes('moisture is good') && !m.includes('temperature is good') && !m.includes('conditions are')
       ) ?? [])
     : [];
 
-  // For unassigned zones with a live reading and no hardware alerts, show a calm prompt
-  const showAssignmentPrompt = isUnassigned && hasReading && (zone?.alerts?.length ?? 0) === 0;
+  // For unassigned zones with a live reading and no hardware alerts, show a calm
+  // prompt — but not when sensors are offline (the offline notice takes over).
+  const showAssignmentPrompt = isUnassigned && hasReading && !sensorOffline && (zone?.alerts?.length ?? 0) === 0;
 
   return (
     <>
@@ -329,7 +334,7 @@ export function ZoneDetailSheet({
                         display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
                         background: STATUS_COLOR[tone], marginRight: 4, flexShrink: 0,
                       }} />
-                      {STATUS_LABEL[tone]}
+                      {sensorOffline ? 'Sensor Offline' : STATUS_LABEL[tone]}
                     </span>
                   )}
                   {!profile && (
@@ -400,6 +405,9 @@ export function ZoneDetailSheet({
               <button
                 className="gm-btn water"
                 onClick={() => onWaterZone(zone, 200)}
+                disabled={sensorOffline}
+                title={sensorOffline ? 'Moisture sensor required before watering recommendations can be made.' : undefined}
+                style={sensorOffline ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
               >
                 💧 Water 200ml
               </button>
@@ -407,6 +415,20 @@ export function ZoneDetailSheet({
                 🌱 Assign plant
               </button>
             </div>
+
+            {/* Sensor-offline notice — replaces recommendations while a required
+                sensor is disconnected. We cannot evaluate plant health here. */}
+            {sensorOffline && (
+              <div className="gm-card" style={{ padding: 14, marginTop: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>
+                  Sensor offline
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+                  Unable to evaluate this bed because one or more required sensors are disconnected.
+                  Reconnect the moisture sensor to receive watering recommendations.
+                </div>
+              </div>
+            )}
 
             {/* Assignment prompt — unassigned zone with good sensor data */}
             {showAssignmentPrompt && (
