@@ -61,7 +61,7 @@ function present(val, label) {
 // attachSaveReading() synchronously at module load — referencing these consts.
 // If they were declared later, that call would hit the temporal dead zone and
 // throw "Cannot access 'FIRESTORE_LIVE_WRITE_INTERVAL_MS' before initialization".
-const FIRESTORE_LIVE_WRITE_INTERVAL_MS    = Number(process.env.FIRESTORE_LIVE_WRITE_INTERVAL_MS)    || 30_000;   // 30s
+const FIRESTORE_LIVE_WRITE_INTERVAL_MS    = Number(process.env.FIRESTORE_LIVE_WRITE_INTERVAL_MS)    || 5_000;   // 5s
 const FIRESTORE_HISTORY_WRITE_INTERVAL_MS = Number(process.env.FIRESTORE_HISTORY_WRITE_INTERVAL_MS) || 300_000;  // 5 min
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
