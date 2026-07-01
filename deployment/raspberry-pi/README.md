@@ -8,21 +8,51 @@ Production deployment guide for running the GreenMirror backend
 
 | Component   | Where it runs            | Notes                                            |
 |-------------|--------------------------|--------------------------------------------------|
-| Frontend    | **Vercel** (unchanged)   | Talks to Firestore directly.                     |
-| Database    | **Firestore** / Google Cloud (unchanged) | Backend writes readings here.   |
+| Frontend    | **Vercel**               | Reads data from Firestore (see [mobile-app/README.md](../../mobile-app/README.md)). |
+| Database    | **Firestore** / Google Cloud | Backend writes readings here.                |
 | Backend API | **Raspberry Pi** (this guide) | Receives ESP data on `POST /api/readings`. |
-| ESP sensors | Greenhouse               | Post readings to the Pi's IP (see last section). |
+| ESP sensors | Greenhouse               | Post readings to the Pi (see last section).      |
+
+Matches the project architecture: ESP32 → Raspberry Pi backend → Firebase
+Firestore → Vercel frontend (see the [root README](../../README.md)).
 
 The **same repo** supports two workflows simultaneously:
 
 - **Laptop development** — `cd raspberry-pi && node server.js` (or `npm start`).
-  Nothing here changes that.
+  See [raspberry-pi/README.md](../../raspberry-pi/README.md). Nothing here changes that.
 - **Pi production** — PM2 runs `raspberry-pi/server.js` from the repo root using
   [`ecosystem.config.cjs`](ecosystem.config.cjs).
 
 The backend loads `raspberry-pi/.env` and `firebase-service-account.json`
 relative to its own files, so it behaves identically no matter which directory
 it is started from.
+
+---
+
+## Current Deployment Architecture
+
+The reference production environment:
+
+**Hardware**
+- Raspberry Pi Zero 2 W — runs the Raspberry Pi Backend
+- ESP32 — sensor node(s)
+- Firebase — cloud database (Firestore)
+- Vercel — frontend hosting
+
+**Software**
+- Debian 13 (Raspberry Pi OS, 64-bit)
+- Node.js 24 (LTS, via NodeSource)
+- PM2 — process manager for the backend
+- Firebase Admin SDK — backend → Firestore writes
+
+**Git**
+- Deployed from the `dev` branch (pull on the Pi; see
+  [Git deployment workflow](#git-deployment-workflow))
+
+**Networking**
+- ESP32 Wi-Fi + backend URL provisioned at runtime via WiFiManager
+- Backend listens on port `5000`; the Pi should have a static IP / DHCP reservation
+- Firestore reachable over the internet from both the Pi and the Vercel Frontend
 
 ---
 
@@ -86,7 +116,7 @@ PORT=5000
 ```
 
 Firebase credentials are optional in `.env` if you use the JSON file in the next
-step. Without any credentials the server still runs (in-memory only, no
+step. Without any credentials the backend still runs (in-memory only, no
 Firestore writes).
 
 ## 5. Add `firebase-service-account.json`
@@ -210,24 +240,43 @@ doesn't change.
 
 ## 13. Point ESP firmware at the Pi
 
-The ESP firmware posts to a backend URL list in
-[`esp-firmware/src/main.cpp`](../../esp-firmware/src/main.cpp). Update `API_URL`
-to the Pi's IP and the `/api/readings` path:
+**ESP32 — no code edit needed.** The ESP32 firmware provisions Wi-Fi and the
+backend URL at runtime via the **WiFiManager** captive portal (no hardcoded
+SSID/IP). When the device opens the `GreenMirror-Setup` portal, enter the backend
+URL pointing at this Pi:
 
-```cpp
-static const char* API_URL = "http://<pi-ip>:5000/api/readings";
+```
+http://<pi-ip>:5000/api/readings
 ```
 
-Then rebuild and flash:
+The URL is stored persistently on the device (Preferences) and survives reboots.
 
-```bash
-cd esp-firmware
-pio run -e esp32dev -t upload      # ESP32
-pio run -e nodemcuv2 -t upload     # ESP8266
-```
+**Backend URL recommendation:** prefer the Pi's **static IP / DHCP reservation**
+(reliable) over the `greenmirror-pi.local` mDNS default, which does not resolve on
+all networks. Find the IP with `hostname -I` (section 12).
 
-> This only changes which IP the ESP talks to — sensor logic, calibration, and
-> the JSON payload are unchanged.
+**ESP8266** still uses a hardcoded `API_URL` in `src/main.cpp` and must be
+rebuilt/reflashed to change it.
+
+Full firmware details, provisioning flow, and Wi-Fi reset steps are in
+[esp-firmware/README.md](../../esp-firmware/README.md).
+
+---
+
+## Git deployment workflow
+
+Development happens on the `dev` branch; the Pi tracks the deployed branch and is
+updated with `git pull`.
+
+1. Develop and commit on `dev` (laptop), then push.
+2. Merge into the branch the Pi tracks when ready to release.
+3. On the Pi, pull and reload safely:
+   ```bash
+   cd ~/greenmirror
+   bash deployment/raspberry-pi/update.sh
+   ```
+   This runs `git pull`, reinstalls dependencies only if they changed, runs
+   syntax checks, and reloads PM2 only if the checks pass (see section 10).
 
 ---
 
@@ -241,4 +290,17 @@ pio run -e nodemcuv2 -t upload     # ESP8266
 
 - Copying `.env` and `firebase-service-account.json` onto the Pi (secrets).
 - Running the `sudo` command printed by `pm2 startup` (boot persistence).
-- Reserving/Setting the Pi's IP on your router and updating the ESP firmware.
+- Reserving/Setting the Pi's IP on your router and provisioning the ESP firmware.
+
+---
+
+**Last updated:** June 2026
+
+**Current architecture:**
+✓ ESP32 WiFiManager provisioning ·
+✓ Raspberry Pi Backend ·
+✓ PM2 deployment ·
+✓ Firebase Firestore ·
+✓ Vercel Frontend
+
+Part of [GreenMirror](../../README.md) · backend: [raspberry-pi/README.md](../../raspberry-pi/README.md)
