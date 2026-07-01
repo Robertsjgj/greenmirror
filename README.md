@@ -1,63 +1,103 @@
 # GreenMirror
 
-GreenMirror is a modular greenhouse monitoring and automation system.
+GreenMirror is a modular greenhouse monitoring and automation system. Sensor
+nodes measure soil moisture and temperature, a Raspberry Pi backend processes
+and stores the readings, and a web/PWA frontend visualises everything and manages
+plant profiles, zones, and watering.
+
+## Quick navigation
+
+[Frontend](mobile-app/README.md) ·
+[Raspberry Pi Backend](raspberry-pi/README.md) ·
+[ESP Firmware](esp-firmware/README.md) ·
+[Production deployment](deployment/raspberry-pi/README.md) ·
+[Firestore data model](docs/firestore-schema.md)
 
 ## Architecture
 
-- ESP32 nodes: collect soil data (moisture, temperature)
-- Raspberry Pi: local hub (data processing, plant logic, API)
-- Mobile app: React/Vite dashboard for monitoring, plant profiles, and zone assignments
+```
+        ESP32 Sensors
+              │
+              ▼
+     Raspberry Pi Backend
+        (Node.js + PM2)
+              │
+              ▼
+      Firebase Firestore
+              │
+              ▼
+       Vercel Frontend
+              │
+              ▼
+            Users
+```
 
-## Structure
+- **ESP32 Sensors** POST soil readings to the Raspberry Pi Backend at `POST /api/readings`.
+- **Raspberry Pi Backend** (Node.js/Express under PM2) serves live readings over
+  HTTP and writes them to Firebase Firestore (`latestReadings`, `readings`,
+  `readingsRollups`).
+- **Firebase Firestore** is the cloud datastore for real-time state, history, and
+  pre-aggregated trends.
+- **Vercel Frontend** reads data from Firestore in production; during local/LAN
+  development it polls the Raspberry Pi Backend directly on the same host.
+- **Users** view live status and manage plant profiles, zones, and watering.
 
-- `esp-firmware/` -> ESP32 code
-- `raspberry-pi/` -> backend and data processing
-- `mobile-app/` -> responsive web app and installable PWA
-- `docs/` -> system design and notes
+## Repository structure
 
-## How local networking works
+| Folder | Purpose | Documentation |
+|--------|---------|---------------|
+| `esp-firmware/` | ESP32/ESP8266 sensor firmware (PlatformIO) | [esp-firmware/README.md](esp-firmware/README.md) |
+| `raspberry-pi/` | Backend API and data processing (Node/Express) | [raspberry-pi/README.md](raspberry-pi/README.md) |
+| `mobile-app/` | React/Vite frontend and installable PWA | [mobile-app/README.md](mobile-app/README.md) |
+| `deployment/` | Production deployment guide and scripts | [deployment/raspberry-pi/README.md](deployment/raspberry-pi/README.md) |
+| `docs/` | System design reference | [docs/firestore-schema.md](docs/firestore-schema.md) |
 
-The frontend automatically detects the correct backend URL at runtime using `window.location.hostname`. No IP addresses need to be configured or hardcoded.
+## Quick start (local development)
 
-| Frontend URL | API auto-detected as |
-|---|---|
-| `http://localhost:5174` | `http://localhost:5000` |
-| `http://192.168.1.42:5174` | `http://192.168.1.42:5000` |
-| `http://10.9.1.96:5174` | `http://10.9.1.96:5000` |
+Run the backend and frontend on the same machine. The frontend auto-detects the
+backend on the same hostname (port `5000`), so no IP configuration is required.
 
-The backend binds to `0.0.0.0` and prints both the local and LAN URLs at startup.
+**Backend** — simulation mode, no hardware needed (from `raspberry-pi/`):
 
-## Quick start
-
-**Backend** (from `raspberry-pi/`):
 ```powershell
 cd raspberry-pi
+npm install
 $env:USE_SIMULATION="true"
 node server.js
 ```
 
 **Frontend** (from `mobile-app/`):
+
 ```powershell
 cd mobile-app
+npm install
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-That's it. Open `http://localhost:5174` in a browser, or use the LAN IP printed by Vite to open the app on a phone.
+Open `http://localhost:5174`, or the LAN URL Vite prints to test on a phone on
+the same Wi-Fi. See [mobile-app/README.md](mobile-app/README.md) and
+[raspberry-pi/README.md](raspberry-pi/README.md) for details.
 
-## Phone testing
+## Deployment
 
-1. Start the backend — it prints the LAN IP at startup (e.g. `http://10.9.1.96:5000`).
-2. Start the frontend with `--host 0.0.0.0` so Vite is reachable on the network.
-3. Open the LAN URL on your phone (e.g. `http://10.9.1.96:5174`).
-4. The app automatically targets the backend at the same IP on port 5000.
+- **Backend** on a Raspberry Pi with PM2 — [deployment/raspberry-pi/README.md](deployment/raspberry-pi/README.md)
+- **Frontend** on Vercel — [mobile-app/README.md](mobile-app/README.md#vercel-deployment)
 
-Phone and computer must be on the same Wi-Fi. No env vars or config edits required.
+## Documentation index
 
-## Manual override
+- [mobile-app/README.md](mobile-app/README.md) — frontend development and Vercel deployment
+- [raspberry-pi/README.md](raspberry-pi/README.md) — backend API and local run
+- [esp-firmware/README.md](esp-firmware/README.md) — firmware and Wi-Fi provisioning
+- [deployment/raspberry-pi/README.md](deployment/raspberry-pi/README.md) — production deployment
+- [docs/firestore-schema.md](docs/firestore-schema.md) — Firestore data model
 
-If the backend runs on a different machine than the frontend, set `VITE_API_BASE_URL` before building or running dev:
+---
 
-```powershell
-$env:VITE_API_BASE_URL="http://192.168.1.10:5000"
-npm run dev -- --host 0.0.0.0 --port 5174
-```
+**Last updated:** June 2026
+
+**Current architecture:**
+✓ ESP32 WiFiManager provisioning ·
+✓ Raspberry Pi Backend ·
+✓ PM2 deployment ·
+✓ Firebase Firestore ·
+✓ Vercel Frontend
