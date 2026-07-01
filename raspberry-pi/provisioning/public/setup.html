@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>GreenMirror Manager</title>
+  <style>
+    :root { --green: #2e7d46; --green-dark: #1f5b31; --bg: #f4f7f4; --text: #1c2a1f; --muted: #5b6b5e; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex; justify-content: center;
+      padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+    }
+    /* App shell: a vertical stack of panels. New GreenMirror Manager panels
+       (status, diagnostics, restart, update, …) are added as more .panel cards. */
+    .app { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 16px; margin: 24px 0; }
+    .app-header { text-align: center; }
+    .app-header .logo { font-size: 40px; }
+    .app-header h1 { font-size: 22px; margin: 6px 0 2px; }
+    .app-header .tag { font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+    .panel {
+      background: #fff; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); padding: 22px 20px;
+    }
+    .panel h2 { font-size: 16px; margin: 0 0 4px; }
+    .panel .panel-sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+    input {
+      width: 100%; padding: 12px 14px; font-size: 16px; border: 1px solid #cdd6ce;
+      border-radius: 10px; background: #fbfdfb; -webkit-appearance: none;
+    }
+    input:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(46,125,70,0.15); }
+    button {
+      width: 100%; margin-top: 22px; padding: 14px; font-size: 16px; font-weight: 700;
+      color: #fff; background: var(--green); border: none; border-radius: 10px; cursor: pointer;
+    }
+    button:hover { background: var(--green-dark); }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .msg { margin-top: 18px; padding: 12px 14px; border-radius: 10px; font-size: 14px; display: none; }
+    .msg.show { display: block; }
+    .msg.info { background: #eef4ff; color: #1c3d7a; }
+    .msg.ok   { background: #e8f6ec; color: var(--green-dark); }
+    .msg.err  { background: #fdecec; color: #a12626; }
+    .hint { margin-top: 16px; font-size: 12px; color: #7a887c; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <div class="logo">🌱</div>
+      <h1>GreenMirror Manager</h1>
+      <div class="tag">Setup · v1</div>
+    </header>
+
+    <!-- ── Wi-Fi setup panel ─────────────────────────────────────────────────
+         Version 1 of the GreenMirror Manager. Future panels (Wi-Fi status,
+         internet/Firebase/backend/ESP/AI/camera status, logs, diagnostics,
+         restart backend, restart Pi, software update, change Wi-Fi) are added as
+         additional <section class="panel"> blocks here and fed by GET /api/status
+         and new endpoints registered in provisioning/portal.js. -->
+    <section class="panel" id="panel-wifi-setup">
+      <h2>Connect to Wi-Fi</h2>
+      <p class="panel-sub">Join this Raspberry Pi to your Wi-Fi to bring GreenMirror online.</p>
+
+      <form id="form">
+        <label for="ssid">Wi-Fi SSID</label>
+        <input id="ssid" name="ssid" type="text" autocomplete="off" autocapitalize="none"
+               spellcheck="false" placeholder="Your network name" required />
+
+        <label for="password">Wi-Fi Password</label>
+        <input id="password" name="password" type="password" autocomplete="off"
+               placeholder="Leave blank for an open network" />
+
+        <button id="submit" type="submit">Save &amp; Connect</button>
+      </form>
+
+      <div id="msg" class="msg"></div>
+      <p class="hint">The <strong>GreenMirror-Setup</strong> network will close while the
+        Pi connects. If it fails, this page reappears in about a minute.</p>
+    </section>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const submit = document.getElementById('submit');
+    const msg = document.getElementById('msg');
+
+    function show(kind, text) {
+      msg.className = 'msg show ' + kind;
+      msg.innerHTML = text;
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const ssid = document.getElementById('ssid').value.trim();
+      const password = document.getElementById('password').value;
+      if (!ssid) { show('err', 'Please enter a Wi-Fi SSID.'); return; }
+
+      submit.disabled = true;
+      show('info', 'Saving credentials and connecting to <strong>' +
+        ssid.replace(/[<>&]/g, '') + '</strong>…');
+
+      try {
+        const res = await fetch('/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ssid, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          show('ok', (data.message ||
+            'Credentials saved. The setup network is closing while the Pi connects.') +
+            '<br /><br />You can close this page. If the Pi joins your Wi-Fi, it is ready. ' +
+            'If not, <strong>GreenMirror-Setup</strong> will reappear shortly so you can try again.');
+        } else {
+          show('err', data.message || 'Something went wrong. Please try again.');
+          submit.disabled = false;
+        }
+      } catch (err) {
+        // Losing the connection here usually means the AP already closed to
+        // connect to your network — that's expected on success.
+        show('ok', 'The setup network has closed while the Pi connects. ' +
+          'If the Pi joins your Wi-Fi, it is ready; otherwise GreenMirror-Setup will reappear.');
+      }
+    });
+  </script>
+</body>
+</html>

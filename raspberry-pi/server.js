@@ -1,8 +1,7 @@
-// Load .env FIRST — must happen before any other require() reads process.env.
-// Resolve it from this file's own directory (not process.cwd()) so the server
-// loads the same raspberry-pi/.env whether started with `cd raspberry-pi &&
-// node server.js` (laptop dev) or `node raspberry-pi/server.js` from the repo
-// root (PM2 production).
+// Load .env defensively — the bootstrap (index.js) loads it first, but server.js
+// also reads process.env at import time, so loading it here too means requiring
+// this module directly still works. Resolved from this file's own directory (not
+// process.cwd()) so the same raspberry-pi/.env is used regardless of cwd.
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const express = require("express");
@@ -197,10 +196,17 @@ if (USE_SIMULATION) {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, "0.0.0.0", () => {
-  const lan = getLanIp();
-  console.log(`🚀 GreenMirror API ready`);
-  console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
-  console.log(`   Local:      http://localhost:${PORT}`);
-  console.log(`   Network:    http://${lan}:${PORT}`);
-});
+// Start the API server. Called by the app bootstrap (index.js) — this module no
+// longer listens on require, so startup orchestration (backend + provisioning +
+// future services) lives in one place without changing any API logic above.
+function start() {
+  return app.listen(PORT, "0.0.0.0", () => {
+    const lan = getLanIp();
+    console.log(`🚀 GreenMirror API ready`);
+    console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
+    console.log(`   Local:      http://localhost:${PORT}`);
+    console.log(`   Network:    http://${lan}:${PORT}`);
+  });
+}
+
+module.exports = { app, start };

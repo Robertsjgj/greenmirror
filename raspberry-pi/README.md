@@ -10,13 +10,22 @@ PM2; the same code runs on a laptop for development. Part of the
 
 | File | Purpose |
 |------|---------|
-| `server.js` | Entry point — Express app, routes, simulator wiring |
+| `index.js` | **Entry point** — app bootstrap; starts the backend, then provisioning |
+| `server.js` | Express API — routes, ESP ingest, simulator wiring; exports `{ app, start }` |
 | `snapshot.js` | Normalises raw ESP payloads into the stored reading shape |
 | `firestore.js` | Firestore writer + write throttling (quota protection) |
 | `rollups.js` | Hourly/daily aggregates written to `readingsRollups` |
 | `simulator.js` | Generates simulated sensor data (`USE_SIMULATION=true`) |
 | `weather.js` | Cached external weather (Open-Meteo) |
+| `services/` | Reusable services — `wifi-manager.js` (nmcli abstraction), `system-status.js` (health) |
+| `provisioning/` | Wi-Fi provisioning lifecycle + setup page, started by the bootstrap |
 | `.env.example` | Documented environment variables (copy to `.env`) |
+
+Everything runs in **one process** (`index.js`, the single PM2 app). `index.js`
+starts the API (`server.js`) and then provisioning; `provisioning/` uses the
+`services/wifi-manager.js` abstraction rather than calling nmcli itself. This
+keeps the Pi deployable anywhere without reflashing — see
+[Wi-Fi provisioning](#wi-fi-provisioning).
 
 ## API endpoints
 
@@ -62,23 +71,24 @@ Simulation mode (no hardware needed):
 ```powershell
 # Windows PowerShell
 $env:USE_SIMULATION="true"
-node server.js
+node index.js
 ```
 
 ```bash
 # bash / macOS / Linux
-USE_SIMULATION=true node server.js
+USE_SIMULATION=true node index.js
 ```
 
 Live mode (ESP32 Sensors posting real data) — omit `USE_SIMULATION` or set it to
-`false`, then `node server.js` (or `npm start`). The backend binds to `0.0.0.0`
+`false`, then `node index.js` (or `npm start`). The backend binds to `0.0.0.0`
 and prints both its local and LAN URLs at startup; the LAN URL is the address the
-ESP firmware should target.
+ESP firmware should target. `index.js` is the app bootstrap — it starts the API
+and then provisioning (which self-disables off-Pi, so dev is unaffected).
 
 npm scripts:
 
-- `npm start` — `node server.js`
-- `npm run check` — syntax-check `server.js`, `firestore.js`, `snapshot.js`
+- `npm start` — `node index.js` (bootstrap: backend + provisioning)
+- `npm run check` — syntax-check the backend, `services/`, and `provisioning/` files
 
 ## Daily Development Workflow
 
@@ -135,6 +145,60 @@ Common commands and why you use them:
 Full setup, secrets, boot persistence, and the Git deployment workflow are in the
 **[Raspberry Pi deployment guide](../deployment/raspberry-pi/README.md)**.
 
+## Wi-Fi provisioning
+
+The Pi provisions its own Wi-Fi at runtime — like the ESP32's WiFiManager, but
+built for Linux with **NetworkManager**. This makes the Pi deployable on any
+network **without reflashing the SD card or editing config files**.
+
+**It is part of this backend — not a separate service.** The app bootstrap
+(`index.js`) starts the API and then provisioning, so GreenMirror stays a
+**single PM2-managed process** (`greenmirror-backend`). The API keeps running on
+port `5000` the entire time; provisioning only manages networking and the setup
+page, and all nmcli work goes through the reusable `services/wifi-manager.js`.
+
+On startup, inside the backend process:
+
+1. It waits for NetworkManager to auto-connect a saved network.
+   - **Usable network** (Wi-Fi *or* Ethernet) → nothing happens; the normal
+     backend keeps serving the API and writing to Firestore.
+   - **No usable network** → it opens an open access point named
+     **`GreenMirror-Setup`** and serves a setup page at **`http://192.168.4.1`**.
+2. On the page (fields: **Wi-Fi SSID**, **Wi-Fi Password**; button **Save &
+   Connect**) the user submits credentials. The module saves them permanently via
+   `nmcli`, drops the AP, and joins the network. The backend was never stopped —
+   it simply now has a network.
+3. If the configured Wi-Fi later disappears for good, the module automatically
+   re-opens the `GreenMirror-Setup` AP so a new network can be configured.
+
+Saved credentials survive reboots and can be changed any number of times — no
+reflashing is ever required again. The module self-disables on non-Linux hosts
+and where NetworkManager is absent (so laptop/simulation dev is unaffected).
+
+The pieces (started by the bootstrap, controlled by the provisioning controller):
+
+| File | Purpose |
+|------|---------|
+| `services/wifi-manager.js` | **WiFiManager** — the only nmcli caller: `scanNetworks / connect / disconnect / status / listSavedNetworks / forgetNetwork` + AP helpers. Reusable by the future dashboard |
+| `services/system-status.js` | `getSystemHealth()` — composes overall health (Wi-Fi now; Firebase/ESP/backend/etc. stubs) |
+| `provisioning/index.js` | Controller — `startProvisioning()`, boot check, monitor loop, setup mode |
+| `provisioning/portal.js` | Setup web server (own express listener; route registry for the future dashboard) |
+| `provisioning/public/setup.html` | The **GreenMirror Manager** setup page (v1) |
+| `provisioning/config.js` | Provisioning tunables (enable switch, portal port, timings) via env vars |
+
+The setup page is **version 1 of the GreenMirror Manager** — `portal.js`
+registers routes in one place and serves `GET /api/status` (backed by
+`system-status.js`), and the UI is a panel layout, so Wi-Fi/Firebase/ESP/backend
+status, restart, logs, and change-Wi-Fi can be added without changing the
+lifecycle code. Because the WiFiManager already exposes `scanNetworks`,
+`listSavedNetworks`, and `forgetNetwork`, a "change Wi-Fi" panel is mostly a UI
+addition.
+
+There is **no separate process to install** — provisioning starts with the
+backend. The Pi only needs the privileges to manage NetworkManager and bind port
+`80`; see the
+[deployment guide](../deployment/raspberry-pi/README.md#wi-fi-provisioning-networkmanager).
+
 ## Troubleshooting
 
 | Problem | Check |
@@ -143,6 +207,8 @@ Full setup, secrets, boot persistence, and the Git deployment workflow are in th
 | No Firestore updates | `pm2 logs greenmirror-backend` for write errors; Firebase credentials present (`.env` or `firebase-service-account.json`); `FIRESTORE_VERBOSE=true` to confirm writes |
 | `/api/latest` returns 404 | No readings received yet — confirm an ESP32 (or the simulator) is posting to `POST /api/readings` |
 | Frontend shows stale data | `latestReadings` is being written (backend logs); Firestore reachable; backend reachable on the LAN |
+| `GreenMirror-Setup` AP never appears | `pm2 logs greenmirror-backend` for `[provision]` lines; confirm NetworkManager is active, the Pi has a wifi interface, and `nmcli`/port-80 privileges are granted |
+| Setup page saved Wi-Fi but the Pi didn't join | Wrong SSID/password — the AP re-opens automatically after ~1 min; check `pm2 logs greenmirror-backend` |
 
 ---
 
