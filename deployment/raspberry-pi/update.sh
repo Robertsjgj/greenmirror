@@ -58,10 +58,10 @@ else
 fi
 
 # ─── 3. Syntax checks (BEFORE restarting anything) ────────────────────────────
+# `npm run check` covers the entry point (index.js), the API, services/, and
+# provisioning/ — so it stays in sync with the codebase automatically.
 echo "==> Running syntax checks..."
-node -c server.js
-node -c firestore.js
-node -c snapshot.js
+npm run check
 echo "    ✅ syntax OK"
 
 # ─── 4. Reload PM2 app if it exists, else explain how to start it ─────────────

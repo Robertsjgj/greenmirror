@@ -63,7 +63,7 @@ backend on the same hostname (port `5000`), so no IP configuration is required.
 cd raspberry-pi
 npm install
 $env:USE_SIMULATION="true"
-node server.js
+node index.js
 ```
 
 **Frontend** (from `mobile-app/`):

@@ -3,10 +3,10 @@
 // Start it from anywhere with:
 //   pm2 start deployment/raspberry-pi/ecosystem.config.cjs
 //
-// The backend itself loads raspberry-pi/.env and firebase-service-account.json
-// relative to its own files, so it runs correctly regardless of cwd. We still
-// pin cwd to the repo root so the `script` path below resolves predictably and
-// PM2's log/relative paths are stable.
+// The app bootstrap (raspberry-pi/index.js) loads raspberry-pi/.env and
+// firebase-service-account.json relative to its own files, so it runs correctly
+// regardless of cwd. We still pin cwd to the repo root so the `script` path below
+// resolves predictably and PM2's log/relative paths are stable.
 
 const path = require('path');
 
@@ -17,11 +17,11 @@ module.exports = {
   apps: [
     {
       name: 'greenmirror-backend',
-      script: 'raspberry-pi/server.js',
+      script: 'raspberry-pi/index.js',
       cwd: repoRoot,
 
       // Production: live ESP data, no simulator. PORT and FIREBASE_* come from
-      // raspberry-pi/.env (loaded by server.js itself).
+      // raspberry-pi/.env (loaded by the bootstrap in index.js).
       env: {
         NODE_ENV: 'production',
         USE_SIMULATION: 'false',

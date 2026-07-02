@@ -18,9 +18,9 @@ Firestore → Vercel frontend (see the [root README](../../README.md)).
 
 The **same repo** supports two workflows simultaneously:
 
-- **Laptop development** — `cd raspberry-pi && node server.js` (or `npm start`).
+- **Laptop development** — `cd raspberry-pi && node index.js` (or `npm start`).
   See [raspberry-pi/README.md](../../raspberry-pi/README.md). Nothing here changes that.
-- **Pi production** — PM2 runs `raspberry-pi/server.js` from the repo root using
+- **Pi production** — PM2 runs `raspberry-pi/index.js` from the repo root using
   [`ecosystem.config.cjs`](ecosystem.config.cjs).
 
 The backend loads `raspberry-pi/.env` and `firebase-service-account.json`
@@ -165,7 +165,7 @@ To check it works before handing it to PM2:
 
 ```bash
 cd ~/greenmirror/raspberry-pi
-node server.js          # or: npm start
+node index.js           # or: npm start
 ```
 
 You should see `🚀 GreenMirror API ready` and a `Network: http://<pi-ip>:5000`
@@ -199,9 +199,9 @@ bash deployment/raspberry-pi/update.sh
 ```
 
 This pulls, reinstalls dependencies only if `package.json`/lockfile changed,
-runs `node -c` syntax checks on `server.js`, `firestore.js`, and `snapshot.js`,
-and only then reloads the PM2 app. If a syntax check fails, the running backend
-is left untouched.
+runs `npm run check` (syntax-checks the entry point, API, `services/`, and
+`provisioning/`), and only then reloads the PM2 app. If a check fails, the
+running backend is left untouched.
 
 Manual equivalent:
 
@@ -263,6 +263,86 @@ Full firmware details, provisioning flow, and Wi-Fi reset steps are in
 
 ---
 
+## Wi-Fi provisioning (NetworkManager)
+
+Make the Pi deployable on **any** network without reflashing the SD card or
+editing config files — the Linux counterpart to the ESP32's WiFiManager. When no
+usable network is available, the backend opens a `GreenMirror-Setup` access point
+with a web page, saves whatever the user enters via NetworkManager, and joins
+that network permanently.
+
+**Single process — no separate service.** The app bootstrap
+(`raspberry-pi/index.js`) starts the backend and then provisioning, so it all
+runs inside the one `greenmirror-backend` PM2 app. All nmcli work goes through the
+reusable `services/wifi-manager.js`. There is **no** systemd unit and **no**
+second process to install; the API keeps serving on port `5000` throughout.
+
+### How it works
+
+When the backend starts:
+
+- **Usable network already present** (Wi-Fi *or* Ethernet) → nothing happens; the
+  normal backend serves the API and writes to Firestore as usual.
+- **No usable network** → the backend opens an **open** AP named
+  `GreenMirror-Setup` and serves a setup page at **`http://192.168.4.1`** (own
+  listener on port `80`) with **Wi-Fi SSID** and **Wi-Fi Password** fields and a
+  **Save & Connect** button. On submit it saves the credentials with `nmcli`,
+  drops the AP, and joins the network — the backend was never stopped.
+- **Configured Wi-Fi later disappears** → the backend automatically re-opens the
+  `GreenMirror-Setup` AP so a different network can be configured.
+
+Credentials are stored by NetworkManager, so they survive reboots and can be
+changed any number of times. All network changes go through `nmcli` — no
+interface files are edited by hand. The setup page is also the foundation for a
+future management dashboard (status, restart, logs, change Wi-Fi).
+
+### Requirements & one-time privilege setup
+
+The backend process needs two privileges to run setup mode. Grant them once:
+
+1. **NetworkManager** managing the Wi-Fi interface (default on Raspberry Pi OS
+   Bookworm / Debian 12+):
+   ```bash
+   sudo apt-get install -y network-manager
+   sudo systemctl enable --now NetworkManager
+   ```
+2. **Run nmcli and bind port 80** as the pm2 user. Either run the PM2 app as
+   root, **or** (keeping the existing non-root pm2 user) grant just what's needed:
+   ```bash
+   # Let node bind port 80 for the setup page
+   sudo setcap 'cap_net_bind_service=+ep' "$(command -v node)"
+
+   # Passwordless nmcli for the pm2 user (provisioning uses `sudo -n nmcli`)
+   echo "$USER ALL=(root) NOPASSWD: $(command -v nmcli)" | \
+     sudo tee /etc/sudoers.d/greenmirror-nmcli
+   ```
+   (The module auto-detects: it calls `nmcli` directly when root, else `sudo -n
+   nmcli`. Override with `GREENMIRROR_NMCLI_MODE`.)
+
+No provisioning-specific install step is required beyond the above — it starts
+with the backend (`pm2 start deployment/raspberry-pi/ecosystem.config.cjs`).
+
+### Operate
+
+```bash
+pm2 logs greenmirror-backend                 # look for [provision] lines (boot decision, AP, connect)
+pm2 status                                    # the single GreenMirror app
+```
+
+To reconfigure Wi-Fi on demand, forget the current network so the AP re-opens:
+
+```bash
+sudo nmcli connection delete "<current-ssid>"   # AP re-opens within ~1 minute
+```
+
+Tunables are environment variables set in `raspberry-pi/.env`: the enable switch,
+portal port, and timings are documented in `raspberry-pi/provisioning/config.js`;
+the Wi-Fi/AP settings (`GREENMIRROR_AP_SSID`, `GREENMIRROR_AP_IP`,
+`GREENMIRROR_WIFI_IFACE`, `GREENMIRROR_NMCLI_MODE`, …) in
+`raspberry-pi/services/wifi-manager.js`.
+
+---
+
 ## Git deployment workflow
 
 Development happens on the `dev` branch; the Pi tracks the deployed branch and is
@@ -290,6 +370,7 @@ updated with `git pull`.
 
 - Copying `.env` and `firebase-service-account.json` onto the Pi (secrets).
 - Running the `sudo` command printed by `pm2 startup` (boot persistence).
+- Granting one-time provisioning privileges (NetworkManager, `setcap`, sudoers) — see [Wi-Fi provisioning](#wi-fi-provisioning-networkmanager).
 - Reserving/Setting the Pi's IP on your router and provisioning the ESP firmware.
 
 ---
