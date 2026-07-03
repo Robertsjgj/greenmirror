@@ -88,7 +88,7 @@ String g_backendUrl;
   // connected; an unwired zone reports soil_moisture_status = "not_connected"
   // and a null moisture %.
   const bool ZONE_A_SOIL_CONNECTED = true;   // sensor wired on GPIO34
-  const bool ZONE_B_SOIL_CONNECTED = false;  // no sensor on GPIO35 yet
+  const bool ZONE_B_SOIL_CONNECTED = true;   // sensor wired on GPIO35
 
   // ── Soil moisture calibration (12-bit ADC: 0-4095) ──────────────────────
   // Capacitive sensor: drier soil = HIGHER raw value, wetter = LOWER.
