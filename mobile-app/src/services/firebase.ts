@@ -13,16 +13,17 @@
  *   VITE_FIREBASE_APP_ID
  */
 
-import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
+import { getFirestore, type Firestore } from "firebase/firestore";
+import { getAuth, type Auth } from "firebase/auth";
 
 const REQUIRED_FIREBASE_ENV = [
-  'VITE_FIREBASE_API_KEY',
-  'VITE_FIREBASE_AUTH_DOMAIN',
-  'VITE_FIREBASE_PROJECT_ID',
-  'VITE_FIREBASE_STORAGE_BUCKET',
-  'VITE_FIREBASE_MESSAGING_SENDER_ID',
-  'VITE_FIREBASE_APP_ID',
+  "VITE_FIREBASE_API_KEY",
+  "VITE_FIREBASE_AUTH_DOMAIN",
+  "VITE_FIREBASE_PROJECT_ID",
+  "VITE_FIREBASE_STORAGE_BUCKET",
+  "VITE_FIREBASE_MESSAGING_SENDER_ID",
+  "VITE_FIREBASE_APP_ID",
 ] as const;
 
 function missingFirebaseEnv(): string[] {
@@ -35,25 +36,31 @@ function isFirebaseConfigured(): boolean {
 
 let _app: FirebaseApp | null = null;
 let _db: Firestore | null = null;
+let _auth: Auth | null = null;
 
 export function getFirebaseApp(): FirebaseApp | null {
   if (!isFirebaseConfigured()) return null;
   if (_app) return _app;
 
   try {
-    _app = getApps().length === 0
-      ? initializeApp({
-          apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-          authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-          projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
-          storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-          messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-          appId:             import.meta.env.VITE_FIREBASE_APP_ID,
-        })
-      : getApps()[0];
-    console.info('[GreenMirror] Firebase initialised (project:', import.meta.env.VITE_FIREBASE_PROJECT_ID + ')');
+    _app =
+      getApps().length === 0
+        ? initializeApp({
+            apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+            authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+            projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+            storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+            messagingSenderId: import.meta.env
+              .VITE_FIREBASE_MESSAGING_SENDER_ID,
+            appId: import.meta.env.VITE_FIREBASE_APP_ID,
+          })
+        : getApps()[0];
+    console.info(
+      "[GreenMirror] Firebase initialised (project:",
+      import.meta.env.VITE_FIREBASE_PROJECT_ID + ")",
+    );
   } catch (err) {
-    console.error('[GreenMirror] Firebase init failed:', err);
+    console.error("[GreenMirror] Firebase init failed:", err);
     return null;
   }
 
@@ -67,8 +74,8 @@ export function getDb(): Firestore | null {
     if (!_warnedOnce) {
       const missing = missingFirebaseEnv();
       console.info(
-        '[GreenMirror] Firestore disabled — set VITE_FIREBASE_* env vars in mobile-app/.env.local to enable cloud sync.',
-        missing.length ? `Missing: ${missing.join(', ')}` : '',
+        "[GreenMirror] Firestore disabled — set VITE_FIREBASE_* env vars in mobile-app/.env.local to enable cloud sync.",
+        missing.length ? `Missing: ${missing.join(", ")}` : "",
       );
       _warnedOnce = true;
     }
@@ -77,10 +84,36 @@ export function getDb(): Firestore | null {
   try {
     _db = getFirestore(app);
   } catch (err) {
-    console.error('[GreenMirror] Could not get Firestore instance:', err);
+    console.error("[GreenMirror] Could not get Firestore instance:", err);
     return null;
   }
   return _db;
+}
+
+export function getFirebaseAuth(): Auth | null {
+  if (_auth) return _auth;
+
+  const app = getFirebaseApp();
+  if (!app) {
+    if (!_warnedOnce) {
+      const missing = missingFirebaseEnv();
+      console.info(
+        "[GreenMirror] Firebase Auth disabled — set VITE_FIREBASE_* env vars in mobile-app/.env.local to enable auth.",
+        missing.length ? `Missing: ${missing.join(", ")}` : "",
+      );
+      _warnedOnce = true;
+    }
+    return null;
+  }
+
+  try {
+    _auth = getAuth(app);
+  } catch (err) {
+    console.error("[GreenMirror] Could not get Firebase Auth instance:", err);
+    return null;
+  }
+
+  return _auth;
 }
 
 let _warnedOnce = false;
