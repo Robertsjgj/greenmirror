@@ -12,6 +12,7 @@ const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
 const { saveReading, firestoreEnabled }        = require("./firestore");
 const { buildGreenhouseReadingSnapshot }        = require("./snapshot");
 const { getWeatherCached }                      = require("./weather");
+const { recordNodeReading, NODE_STALE_TIMEOUT_MS } = require("./aggregator");
 
 function getLanIp() {
   for (const nets of Object.values(os.networkInterfaces())) {
@@ -140,17 +141,62 @@ app.get("/", (req, res) => {
   res.send("GreenMirror Pi API running");
 });
 
-// Receive ESP sensor data
+// Receive ESP sensor data.
+//
+// Multiple ESP nodes POST independently, each with its own 1–2 zones. Rather than
+// overwrite latestReadings with the last node to post, we merge the latest zones
+// from every ACTIVE node into one snapshot per greenhouse (see aggregator.js), so
+// the dashboard shows all beds. The POST payload format is unchanged.
 app.post("/api/readings", async (req, res) => {
-  console.log("📡 Received data from ESP:", JSON.stringify(req.body, null, 2));
   try {
+    const body         = req.body || {};
+    const greenhouseId = body.greenhouse_id || GREENHOUSE_ID;
+    const rawZones     = Array.isArray(body.zones) ? body.zones : [];
+    const nodeId       = body.node_id
+      || (rawZones.find(z => z && z.node_id) || {}).node_id
+      || "unknown-node";
+
+    console.log(`📡 Received from node: ${nodeId} · ${rawZones.length} zone(s) · greenhouse ${greenhouseId}`);
+
+    // Merge this node's zones with all other currently-active nodes.
+    const agg = recordNodeReading({
+      greenhouseId,
+      nodeId,
+      zones: rawZones,
+      environment: body.environment || null,
+    });
+
+    // Warn on zone_id collisions between active nodes (their beds would overlap).
+    for (const dup of agg.duplicateZoneIds) {
+      console.warn(
+        `[aggregator] ⚠️  duplicate zone_id "${dup.zone_id}" reported by nodes [${dup.nodes.join(', ')}] — ` +
+        `these beds collide on the dashboard. Give each ESP unique zone IDs.`,
+      );
+    }
+
+    // Build the combined snapshot from ALL active nodes' zones.
     latestReading = await buildSnapshot(
-      { ...req.body, timestamp: new Date().toISOString() },
+      {
+        greenhouse_id: greenhouseId,
+        zones:         agg.combinedZones,
+        environment:   agg.environment,
+        node_count:    agg.activeNodeCount,
+        timestamp:     new Date().toISOString(),
+      },
       "live",
     );
     readingsHistory.push(latestReading);
     if (firestoreEnabled) saveReading(latestReading);
+
+    console.log(
+      `[aggregator] active nodes=${agg.activeNodeCount} [${agg.activeNodeIds.join(', ')}] · ` +
+      `combined zones=${agg.combinedZones.length}` +
+      (agg.staleRemoved.length
+        ? ` · stale removed=${agg.staleRemoved.length} [${agg.staleRemoved.join(', ')}]`
+        : ''),
+    );
     console.log('[server] latestReadings write:', latestReading.greenhouse_id, '·', latestReading.zones.length, 'zones');
+
     res.status(200).json({ status: "ok" });
   } catch (err) {
     console.error('[server] Failed to build reading snapshot:', err.message);
@@ -206,6 +252,7 @@ function start() {
     console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
     console.log(`   Local:      http://localhost:${PORT}`);
     console.log(`   Network:    http://${lan}:${PORT}`);
+    console.log(`   Multi-node: merging active ESP nodes; stale after ${NODE_STALE_TIMEOUT_MS / 1000}s`);
   });
 }
 

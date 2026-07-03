@@ -18,6 +18,7 @@ PM2; the same code runs on a laptop for development. Part of the
 | `simulator.js` | Generates simulated sensor data (`USE_SIMULATION=true`) |
 | `weather.js` | Cached external weather (Open-Meteo) |
 | `services/` | Reusable services — `wifi-manager.js` (nmcli abstraction), `system-status.js` (health) |
+| `aggregator.js` | Merges the latest zones from all active ESP nodes into one snapshot |
 | `provisioning/` | Wi-Fi provisioning lifecycle + setup page, started by the bootstrap |
 | `.env.example` | Documented environment variables (copy to `.env`) |
 
@@ -36,6 +37,33 @@ keeps the Pi deployable anywhere without reflashing — see
 | `GET`  | `/api/latest` | Latest snapshot (polled by the frontend) |
 | `GET`  | `/api/history` | In-memory reading history |
 
+## Multi-node aggregation
+
+The greenhouse runs many ESP nodes (e.g. 15 boards × 2 zones). Each node POSTs
+**independently** to `POST /api/readings` with only its own 1–2 zones. If the
+backend simply wrote each POST to `latestReadings`, the dashboard would show only
+the last node to post. Instead the backend **merges** them ([aggregator.js](aggregator.js)):
+
+- It keeps an in-memory map of the latest zones per `node_id` (scoped by
+  `greenhouse_id`) with a `lastSeen` timestamp.
+- On every POST it updates that node, drops any node not seen within
+  `NODE_STALE_TIMEOUT_MS` (default 60s), then rebuilds a **combined snapshot with
+  the zones from all still-active nodes**.
+- `latestReadings/{greenhouse_id}` therefore contains every active bed, and
+  `system.esp_nodes_online` counts the distinct active `node_id`s.
+- A stale node's beds simply stop appearing (rather than freezing on old values)
+  once it misses posts for longer than the timeout.
+
+**Zone IDs must be unique per node.** Zone placement, plant assignment, and
+averages all key on `zone_id`. If two active nodes report the same `zone_id`, the
+backend logs a clear warning (`[aggregator] ⚠️ duplicate zone_id …`) — configure
+each ESP with unique zone IDs (see [esp-firmware/README.md](../esp-firmware/README.md#esp32-device-configuration-node-id--zones)).
+
+The POST payload format is unchanged, so no firmware change is required. Each POST
+logs the received `node_id`, active node count, combined zone count, and any stale
+nodes removed. **Simulation mode is unaffected** — the simulator already emits one
+combined multi-node reading, so it bypasses the aggregator.
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and adjust as needed. All Firebase variables are
@@ -51,6 +79,7 @@ writes.
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account JSON (alternative to inline) |
 | `FIRESTORE_LIVE_WRITE_INTERVAL_MS` / `FIRESTORE_HISTORY_WRITE_INTERVAL_MS` | Write-throttle intervals |
 | `FIRESTORE_VERBOSE` | Log every successful Firestore write |
+| `NODE_STALE_TIMEOUT_MS` | Drop an ESP node from the merge after this long without a post (default `60000`) — see [Multi-node aggregation](#multi-node-aggregation) |
 
 Firestore credentials can also be supplied as a `firebase-service-account.json`
 file in this folder. `.env` and `firebase-service-account.json` are git-ignored —
