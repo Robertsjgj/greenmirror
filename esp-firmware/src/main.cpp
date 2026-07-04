@@ -75,20 +75,32 @@ String g_backendUrl;
 // board label, node_id, ADC pins, and how many zones each board reports.
 #if defined(ESP32)
   const char* BOARD_NAME = "ESP32";
-  const char* NODE_ID    = "esp32-node-01";
+
+  // ── Runtime identity DEFAULTS ────────────────────────────────────────────
+  // The SAME firmware binary is flashed to every ESP32. Per-board identity
+  // (node_id, greenhouse_id, zone_a_id, zone_b_id, backend_url) is provisioned
+  // at runtime through the setup portal and stored in Preferences (NVS). These
+  // constants are only the fallbacks used when nothing is saved yet.
+  const char* DEFAULT_NODE_ID   = "esp32-node-01";
+  const char* DEFAULT_ZONE_A_ID = "SYD-INSIDE-LEFT-01";
+  const char* DEFAULT_ZONE_B_ID = "SYD-INSIDE-LEFT-02";
+
+  // Hold the BOOT button (GPIO0) at power-up to force the setup portal open even
+  // when Wi-Fi is already saved (see README "Reconfigure a board").
+  const int FORCE_PORTAL_PIN = 0;
 
   #define ZONE_A_SOIL_PIN 34
   #define ZONE_B_SOIL_PIN 35
   #define ONE_WIRE_BUS    4      // GPIO4
 
-  const char* ZONE_A_ID = "SYD-INSIDE-LEFT-01";
-  const char* ZONE_B_ID = "SYD-INSIDE-LEFT-02";
+  // Zone IDs are provisioned at runtime — see DEFAULT_ZONE_A_ID / DEFAULT_ZONE_B_ID
+  // above; the active values live in g_zoneAId / g_zoneBId (loaded by loadIdentity).
 
   // Which zones physically have a soil sensor wired. Set true once a sensor is
   // connected; an unwired zone reports soil_moisture_status = "not_connected"
   // and a null moisture %.
   const bool ZONE_A_SOIL_CONNECTED = true;   // sensor wired on GPIO34
-  const bool ZONE_B_SOIL_CONNECTED = false;  // no sensor on GPIO35 yet
+  const bool ZONE_B_SOIL_CONNECTED = true;   // sensor wired on GPIO35
 
   // ── Soil moisture calibration (12-bit ADC: 0-4095) ──────────────────────
   // Capacitive sensor: drier soil = HIGHER raw value, wetter = LOWER.
@@ -169,7 +181,20 @@ String g_backendUrl;
 #endif
 
 // ---------- Common identity ----------
-const char* GREENHOUSE_ID = "sydney-greenhouse";
+// Default greenhouse (fallback). On ESP32 the active greenhouse_id comes from
+// Preferences; on ESP8266 it stays this compile-time default.
+const char* DEFAULT_GREENHOUSE_ID = "sydney-greenhouse";
+
+// Active runtime identity, resolved at boot by loadIdentity(). On ESP32 these
+// load from Preferences (defaults when unset); on ESP8266 they come from the
+// compile-time constants. Using globals keeps the SAME binary usable on every
+// ESP32 board — each is configured at runtime via the setup portal.
+String g_nodeId;
+String g_greenhouseId;
+String g_zoneAId;
+#if defined(ESP32)
+String g_zoneBId;   // ESP32 has a second soil zone; ESP8266 does not.
+#endif
 
 // ---------- Sensor Objects ----------
 OneWire oneWire(ONE_WIRE_BUS);
@@ -230,7 +255,7 @@ void addZoneReading(
   JsonObject zone = zones.add<JsonObject>();
   zone["zone_id"] = zoneId;
   // node_id per-zone: the Pi counts online ESP nodes from zones[].node_id.
-  zone["node_id"] = NODE_ID;
+  zone["node_id"] = g_nodeId;
   // Always log raw for debugging; pct is null when the sensor isn't connected.
   zone["soil_moisture_raw"] = soilRaw;
   if (soilConnected) {
@@ -276,9 +301,49 @@ void setupNetworking();
 void ensureWiFiConnected();
 void startMdnsOnce();
 int  postToUrl(const char* url, const String& payload);
+void loadIdentity();
+void printIdentity();
 #if defined(ESP8266)
 bool tryWifiProfile(int idx);
 void connectWiFi();
+#endif
+
+// Print the active runtime identity — the exact values used in the payload.
+void printIdentity() {
+  Serial.print("  node_id:       "); Serial.println(g_nodeId);
+  Serial.print("  greenhouse_id: "); Serial.println(g_greenhouseId);
+  Serial.print("  zone_a_id:     "); Serial.println(g_zoneAId);
+#if defined(ESP32)
+  Serial.print("  zone_b_id:     "); Serial.println(g_zoneBId);
+#endif
+  Serial.print("  backend_url:   "); Serial.println(g_backendUrl);
+}
+
+// Resolve per-board identity into the g_* globals.
+#if defined(ESP32)
+// ESP32: load from Preferences (NVS), falling back to the DEFAULT_* constants.
+void loadIdentity() {
+  prefs.begin("greenmirror", false);   // NVS namespace; opened once for the run
+  const bool haveSaved = prefs.isKey("node_id");
+
+  g_nodeId       = prefs.getString("node_id",       DEFAULT_NODE_ID);
+  g_greenhouseId = prefs.getString("greenhouse_id", DEFAULT_GREENHOUSE_ID);
+  g_zoneAId      = prefs.getString("zone_a_id",     DEFAULT_ZONE_A_ID);
+  g_zoneBId      = prefs.getString("zone_b_id",     DEFAULT_ZONE_B_ID);
+  g_backendUrl   = prefs.getString("backend_url",   DEFAULT_BACKEND_URL);
+
+  if (haveSaved) Serial.println("Loaded saved identity from Preferences.");
+  else           Serial.println("No saved identity in Preferences — using default identity values.");
+}
+#elif defined(ESP8266)
+// ESP8266: no Preferences/portal on this target — keep compile-time identity.
+void loadIdentity() {
+  g_nodeId       = NODE_ID;
+  g_greenhouseId = DEFAULT_GREENHOUSE_ID;
+  g_zoneAId      = ZONE_A_ID;
+  g_backendUrl   = API_URL;
+  Serial.println("Using compile-time identity (ESP8266 target).");
+}
 #endif
 
 void setup() {
@@ -291,14 +356,14 @@ void setup() {
 
   soilTempSensors.begin();
 
+  loadIdentity();   // resolve node_id / greenhouse_id / zone ids / backend_url
+
   Serial.println("---------------------------------");
   Serial.println("GreenMirror ESP");
   Serial.print("Board: ");
   Serial.println(BOARD_NAME);
-  Serial.print("Node: ");
-  Serial.println(NODE_ID);
-  Serial.print("greenhouse_id: ");
-  Serial.println(GREENHOUSE_ID);
+  Serial.println("Active identity:");
+  printIdentity();
   Serial.print("Detected DS18B20 sensors: ");
   Serial.println(soilTempSensors.getDeviceCount());
   Serial.println("---------------------------------");
@@ -312,10 +377,10 @@ void setup() {
 void startMdnsOnce() {
   static bool started = false;
   if (started) return;
-  if (MDNS.begin(NODE_ID)) {
+  if (MDNS.begin(g_nodeId.c_str())) {
     started = true;
     Serial.print("mDNS responder started: ");
-    Serial.print(NODE_ID);
+    Serial.print(g_nodeId);
     Serial.println(".local");
   }
 }
@@ -332,21 +397,48 @@ static bool waitForWifi(uint32_t timeoutMs) {
   return WiFi.status() == WL_CONNECTED;
 }
 
-// Open the WiFiManager captive portal so the user can enter WiFi + backend URL.
-// Returns true if WiFi connected through the portal. The backend URL field is
-// persisted to Preferences here.
+// Persist one identity field entered in the portal.
+//   key     — Preferences (NVS) key
+//   entered — raw value from the portal field (may be empty)
+//   target  — the g_* global to update (its current value is the fallback)
+//   def     — default used only if both entered and current are empty
+// A blank field means "keep the current value", so users can change just one
+// field without clearing the rest.
+static void saveIdentityField(const char* key, const char* entered, String& target, const char* def) {
+  String value = entered ? String(entered) : String("");
+  value.trim();
+  if (value.length() == 0) value = target.length() ? target : String(def);
+  if (value != target) {
+    prefs.putString(key, value);
+    target = value;
+  }
+}
+
+// Open the WiFiManager captive portal so the user can enter WiFi + full device
+// identity (backend URL, node/greenhouse/zone IDs). Returns true if WiFi
+// connected through the portal. All identity fields are persisted to Preferences
+// here and mirrored into the g_* globals.
 static bool runSetupPortal(const String& savedUrl) {
+  (void)savedUrl;  // current values come from the g_* globals below
   Serial.print("Starting setup portal: ");
   Serial.println(SETUP_AP_NAME);
+  Serial.println("Setup portal started — configure WiFi and device identity.");
 
   WiFiManager wm;
   wm.setConfigPortalTimeout(180);  // give up the portal after 3 min so sensors keep running
 
-  // Extra captive-portal field for the backend URL, pre-filled with the saved
-  // (or default) value so the user can keep or change it.
-  WiFiManagerParameter backendParam(
-    "backend", "Backend URL (http://host:port/api/readings)", savedUrl.c_str(), 128);
+  // Extra captive-portal fields, each pre-filled with the current value so the
+  // user can keep or change it. Blank = keep current (see saveIdentityField).
+  WiFiManagerParameter backendParam("backend",       "Backend URL (http://host:port/api/readings)", g_backendUrl.c_str(),  128);
+  WiFiManagerParameter nodeParam(   "node_id",       "Node ID (e.g. esp32-node-01)",                g_nodeId.c_str(),       64);
+  WiFiManagerParameter ghParam(     "greenhouse_id", "Greenhouse ID (e.g. sydney-greenhouse)",      g_greenhouseId.c_str(), 64);
+  WiFiManagerParameter zoneAParam(  "zone_a_id",     "Zone A ID (e.g. SYD-INSIDE-LEFT-01)",         g_zoneAId.c_str(),      64);
+  WiFiManagerParameter zoneBParam(  "zone_b_id",     "Zone B ID (e.g. SYD-INSIDE-LEFT-02)",         g_zoneBId.c_str(),      64);
   wm.addParameter(&backendParam);
+  wm.addParameter(&nodeParam);
+  wm.addParameter(&ghParam);
+  wm.addParameter(&zoneAParam);
+  wm.addParameter(&zoneBParam);
 
   wm.setAPCallback([](WiFiManager* mgr) {
     (void)mgr;
@@ -358,35 +450,50 @@ static bool runSetupPortal(const String& savedUrl) {
 
   bool connected = wm.startConfigPortal(SETUP_AP_NAME);
 
-  // Persist the backend URL the user may have entered in the portal.
-  String enteredUrl = backendParam.getValue();
-  enteredUrl.trim();
-  if (enteredUrl.length() == 0) enteredUrl = DEFAULT_BACKEND_URL;
-  if (enteredUrl != savedUrl) {
-    prefs.putString("backend_url", enteredUrl);
-    Serial.println("Backend URL updated and saved to Preferences.");
-  }
-  g_backendUrl = enteredUrl;
+  // Persist every identity field the user may have entered.
+  saveIdentityField("backend_url",   backendParam.getValue(), g_backendUrl,   DEFAULT_BACKEND_URL);
+  saveIdentityField("node_id",       nodeParam.getValue(),    g_nodeId,       DEFAULT_NODE_ID);
+  saveIdentityField("greenhouse_id", ghParam.getValue(),      g_greenhouseId, DEFAULT_GREENHOUSE_ID);
+  saveIdentityField("zone_a_id",     zoneAParam.getValue(),   g_zoneAId,      DEFAULT_ZONE_A_ID);
+  saveIdentityField("zone_b_id",     zoneBParam.getValue(),   g_zoneBId,      DEFAULT_ZONE_B_ID);
+
+  Serial.println("Identity values saved to Preferences:");
+  printIdentity();
   return connected;
 }
 
-// ESP32 connection flow:
+// ESP32 connection flow (Wi-Fi behavior unchanged):
+//   0. If the BOOT button is held at power-up, open the setup portal first
+//      (lets you reconfigure identity/WiFi even when WiFi is already saved).
 //   1. Try saved WiFi credentials (stored by WiFiManager in NVS).
 //   2. If they fail, try the single fallback profile (GreenMirror24).
 //   3. If the fallback fails too, open the GreenMirror-Setup captive portal.
-// The backend URL is provisioned via the portal's custom field and kept in
-// Preferences; it defaults to DEFAULT_BACKEND_URL.
+// Identity (backend URL, node/greenhouse/zone IDs) is already loaded from
+// Preferences by loadIdentity() in setup(); the portal updates it if used.
 void setupNetworking() {
-  prefs.begin("greenmirror", false);
-  String savedUrl = prefs.getString("backend_url", DEFAULT_BACKEND_URL);
-  g_backendUrl = savedUrl;  // used as-is unless the portal updates it below
+  String savedUrl = g_backendUrl;  // identity already loaded in setup()
+
+  // Force-portal check: hold BOOT (GPIO0) at power-up to reconfigure on demand.
+  pinMode(FORCE_PORTAL_PIN, INPUT_PULLUP);
+  delay(50);
+  const bool forcePortal = digitalRead(FORCE_PORTAL_PIN) == LOW;
+  if (forcePortal) Serial.println("BOOT button held — forcing setup portal.");
 
   WiFi.mode(WIFI_STA);
 
+  bool connected = false;
+
+  // 0. Forced portal (button held) — reconfigure identity/WiFi.
+  if (forcePortal) {
+    connected = runSetupPortal(savedUrl);
+  }
+
   // 1. Saved credentials.
-  Serial.println("Trying saved WiFi credentials...");
-  WiFi.begin();  // reconnect using credentials stored in flash
-  bool connected = waitForWifi(WIFI_CONNECT_TIMEOUT_MS);
+  if (!connected) {
+    Serial.println("Trying saved WiFi credentials...");
+    WiFi.begin();  // reconnect using credentials stored in flash
+    connected = waitForWifi(WIFI_CONNECT_TIMEOUT_MS);
+  }
 
   // 2. Fallback profile.
   if (!connected) {
@@ -401,8 +508,8 @@ void setupNetworking() {
     }
   }
 
-  // 3. Captive portal.
-  if (!connected) {
+  // 3. Captive portal (skip if the button already forced it above).
+  if (!connected && !forcePortal) {
     connected = runSetupPortal(savedUrl);
   }
 
@@ -538,22 +645,22 @@ void loop() {
 
   JsonDocument doc;
 
-  doc["node_id"] = NODE_ID;
-  doc["greenhouse_id"] = GREENHOUSE_ID;
+  doc["node_id"] = g_nodeId;
+  doc["greenhouse_id"] = g_greenhouseId;
 
   Serial.println("---- reading ----");
   Serial.print("board=");
   Serial.print(BOARD_NAME);
   Serial.print(" | greenhouse_id=");
-  Serial.print(GREENHOUSE_ID);
+  Serial.print(g_greenhouseId);
   Serial.print(" | node_id=");
-  Serial.println(NODE_ID);
+  Serial.println(g_nodeId);
 
   JsonArray zones = doc["zones"].to<JsonArray>();
 
   addZoneReading(
     zones,
-    ZONE_A_ID,
+    g_zoneAId.c_str(),
     ZONE_A_SOIL_PIN,
     ZONE_A_SOIL_DRY,
     ZONE_A_SOIL_WET,
@@ -565,7 +672,7 @@ void loop() {
   // ESP32 has a second analog zone; ESP8266 has only A0 so it reports one zone.
   addZoneReading(
     zones,
-    ZONE_B_ID,
+    g_zoneBId.c_str(),
     ZONE_B_SOIL_PIN,
     ZONE_B_SOIL_DRY,
     ZONE_B_SOIL_WET,
@@ -580,7 +687,8 @@ void loop() {
   ensureWiFiConnected();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Sending data...");
+    Serial.print("Posting to backend URL: ");
+    Serial.println(g_backendUrl);
 
     String payload;
     serializeJson(doc, payload);
