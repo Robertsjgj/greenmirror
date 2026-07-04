@@ -148,7 +148,7 @@ export function TrendsDashboard({
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: 200,
+      flex: 1, minHeight: 0,
       background: 'var(--bg, #f8f5ef)',
       display: 'flex', flexDirection: 'column',
       overscrollBehavior: 'contain',
@@ -161,7 +161,6 @@ export function TrendsDashboard({
         borderBottom: '1px solid var(--line)',
         flexShrink: 0,
       }}>
-        <button className="gm-icon-btn" onClick={goBack} aria-label="Back" style={{ fontSize: 20 }}>←</button>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', lineHeight: 1.1 }}>
             Trends & Analysis 📈

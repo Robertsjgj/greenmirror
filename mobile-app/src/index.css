@@ -171,6 +171,48 @@ body, #root { height: 100%; overflow: hidden; }
   70%  { box-shadow: 0 0 0 8px oklch(0.6 0.13 155 / 0); }
   100% { box-shadow: 0 0 0 0 oklch(0.6 0.13 155 / 0); }
 }
+/* Database disconnected: red profile button, static dot (no green wave). */
+.gm-avatar.offline { background: var(--alert-soft); }
+.gm-avatar.offline::after { background: var(--alert); animation: none; }
+
+/* Header action group: bell + avatar sit together on the right. */
+.gm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.gm-bell {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-sub);
+  border: 2px solid white;
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  place-items: center;
+  font-size: 19px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.gm-bell-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--alert);
+  color: white;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+  border: 2px solid var(--bg);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Bottom navigation ─────────────────────────────────────── */
 .gm-tabbar {

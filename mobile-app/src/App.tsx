@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsView } from './components/AlertsView';
+import { evaluateAllAlerts } from './alertRules';
 import { EnvironmentView } from './components/EnvironmentView';
 import { GreenhouseSelector } from './components/GreenhouseSelector';
 import { GreenhouseView } from './components/GreenhouseView';
@@ -75,13 +76,18 @@ function loadStoredLayoutSettings(): LayoutSettings {
   }
 }
 
-type Tab = 'plants' | 'greenhouse' | 'environment' | 'alerts' | 'runoff';
+type Tab = 'plants' | 'greenhouse' | 'environment' | 'runoff';
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
+// Bottom-nav items. `trends` is not a Tab — it opens the existing Trends &
+// Analysis sheet (same destination as the Home "Open Trends & Analysis" card)
+// rather than swapping the tab body.
+type NavId = 'plants' | 'greenhouse' | 'environment' | 'trends' | 'runoff';
+
+const NAV_ITEMS: { id: NavId; label: string; icon: string }[] = [
   { id: 'plants',      label: 'Home',    icon: '🏠' },
   { id: 'greenhouse',  label: 'Map',     icon: '🗺️' },
   { id: 'environment', label: 'Weather', icon: '☀️' },
-  { id: 'alerts',      label: 'Alerts',  icon: '🔔' },
+  { id: 'trends',      label: 'Trends',  icon: '📈' },
   { id: 'runoff',      label: 'Runoff',  icon: '💧' },
 ];
 
@@ -92,7 +98,6 @@ const TAB_GREETINGS: Record<Tab, { title: string; emoji: string; sub: (name: str
   plants:      { title: 'Good morning!',   emoji: '🌤',  sub: (n) => `${n} Greenhouse` },
   greenhouse:  { title: 'Your garden',     emoji: '🗺️',  sub: (n) => `${n} layout` },
   environment: { title: "Today's weather", emoji: '☀️',  sub: (n) => `Inside ${n}` },
-  alerts:      { title: 'Heads up!',       emoji: '🔔',  sub: () => 'Things to check' },
   runoff:      { title: 'Water tracker',   emoji: '💧',  sub: () => 'Where your water goes' },
 };
 
@@ -147,6 +152,10 @@ export function App() {
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [trendsOpen, setTrendsOpen] = useState(false);
+  // Alerts opens as a full standalone page (own header + back button, no bottom
+  // nav). Kept separate from `activeTab` so closing it returns to the previous
+  // screen (the tab that was showing when the bell was tapped).
+  const [alertsOpen, setAlertsOpen] = useState(false);
   // The sheet stores only the canonical zone ID so it always derives the latest
   // zone object from live readings (never a stale snapshot). Canonical = the
   // backend zone_id, not the friendly display name.
@@ -161,12 +170,12 @@ export function App() {
   // ── Hardware / browser Back button (app-wide) ───────────────────────────────
   // The Back button must never just close the site. We keep a single sentinel
   // history entry; each Back press unwinds ONE UI layer — open editor → zone
-  // sheet → site sheet → trends (detail → list → close) → non-home tab → home —
-  // then re-arms the sentinel. Only when there is nothing left to unwind do we
-  // let the browser navigate away (toward the empty new-tab page).
+  // sheet → site sheet → alerts → trends (detail → list → close) → non-home tab
+  // → home — then re-arms the sentinel. Only when there is nothing left to
+  // unwind do we let the browser navigate away (toward the empty new-tab page).
   const trendsBackRef = useRef<(() => boolean) | null>(null);
-  const backStateRef = useRef({ editorProfile, selectedZoneId, siteSheetOpen, trendsOpen, activeTab });
-  backStateRef.current = { editorProfile, selectedZoneId, siteSheetOpen, trendsOpen, activeTab };
+  const backStateRef = useRef({ editorProfile, selectedZoneId, siteSheetOpen, alertsOpen, trendsOpen, activeTab });
+  backStateRef.current = { editorProfile, selectedZoneId, siteSheetOpen, alertsOpen, trendsOpen, activeTab };
 
   useEffect(() => {
     window.history.pushState({ gmBack: true }, '');
@@ -176,6 +185,7 @@ export function App() {
       if (s.editorProfile !== null) setEditorProfile(null);
       else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
+      else if (s.alertsOpen) setAlertsOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current())) setTrendsOpen(false);
       } else if (s.activeTab !== HOME_TAB) setActiveTab(HOME_TAB);
@@ -456,11 +466,11 @@ export function App() {
     window.localStorage.setItem(LAYOUT_SETTINGS_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
 
-  // Reset scroll on tab change
+  // Reset scroll on tab change (and when entering/leaving the alerts page)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
     setScrolled(false);
-  }, [activeTab]);
+  }, [activeTab, alertsOpen]);
 
   const profilesById = useMemo(
     () => new Map(plantProfiles.map((p) => [p.id, p])),
@@ -489,6 +499,12 @@ export function App() {
   const openZone = useCallback((zone: VisualZone) => {
     setSelectedZoneId(zoneCanonicalId(zone));
   }, []);
+
+  // Active-alert count for the header bell badge — same source AlertsView uses.
+  const activeAlertCount = useMemo(
+    () => evaluateAllAlerts(resolvedZones, profilesById).length,
+    [resolvedZones, profilesById]
+  );
 
   const localStorageFallbackActive = profilesFallback || assignmentsFallback || activityFallback;
   const syncStatusLabel = localStorageFallbackActive
@@ -734,142 +750,210 @@ export function App() {
   const ghName = greenhouse.name;
   const g = TAB_GREETINGS[activeTab];
 
+  // Database connection status drives the profile-icon color: connected =>
+  // green button + wave animation (default); disconnected => red, no wave.
+  const dbConnected = !localStorageFallbackActive;
+
+  const avatarButton = (
+    <button
+      className={`gm-avatar${dbConnected ? '' : ' offline'}`}
+      onClick={() => setSiteSheetOpen(true)}
+      aria-label="Switch greenhouse"
+      title={dbConnected ? 'Database connected' : 'Database disconnected'}
+    >
+      👩‍🌾
+    </button>
+  );
+
+  const bellButton = (
+    <button
+      className="gm-bell"
+      onClick={() => setAlertsOpen(true)}
+      aria-label={activeAlertCount > 0 ? `Alerts — ${activeAlertCount} active` : 'Alerts'}
+    >
+      🔔
+      {activeAlertCount > 0 && (
+        <span className="gm-bell-badge">
+          {activeAlertCount > 99 ? '99+' : activeAlertCount}
+        </span>
+      )}
+    </button>
+  );
+
+  const bottomNav = (
+    <nav className="gm-tabbar" aria-label="Primary navigation">
+      {NAV_ITEMS.map((item) => {
+        // Trends opens the Trends & Analysis page; every other item swaps the
+        // tab body (and closes Trends if it was open).
+        const active = item.id === 'trends' ? trendsOpen : (!trendsOpen && activeTab === item.id);
+        return (
+          <button
+            key={item.id}
+            className={`gm-tab${active ? ' active' : ''}`}
+            onClick={() => {
+              if (item.id === 'trends') setTrendsOpen(true);
+              else { setTrendsOpen(false); setActiveTab(item.id as Tab); }
+            }}
+          >
+            <span className="gm-tab-glyph" style={{ fontSize: 20 }}>{item.icon}</span>
+            <span>{item.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+
   return (
     <div className="gm-app">
-      {/* HEADER */}
-      <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
-        <div className="gm-brand">
-          <h1>
-            {g.title} <span style={{ fontSize: 20, lineHeight: 1 }}>{g.emoji}</span>
-          </h1>
-          <small>{g.sub(ghName)}</small>
-        </div>
-        <button
-          className="gm-avatar"
-          onClick={() => setSiteSheetOpen(true)}
-          aria-label="Switch greenhouse"
-        >
-          👩‍🌾
-        </button>
-      </header>
-
-      {/* SIMULATION BANNER */}
-      {isSimulating && (
-        <div style={{
-          background: '#fffbeb',
-          borderBottom: '2px solid #f59e0b',
-          color: '#92400e',
-          padding: '5px 16px',
-          fontSize: 11,
-          fontWeight: 800,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          gap: 6,
-          letterSpacing: '0.07em',
-          flexShrink: 0,
-        }}>
-          ⚗️ SIMULATION MODE — tap 👩‍🌾 to disable
-        </div>
-      )}
-
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 10,
-        padding: '6px 16px',
-        borderBottom: '1px solid var(--line)',
-        background: localStorageFallbackActive ? '#fff7ed' : '#ecfdf5',
-        color: localStorageFallbackActive ? '#9a3412' : '#166534',
-        fontSize: 10.5,
-        fontWeight: 800,
-        letterSpacing: '0.06em',
-        textTransform: 'uppercase',
-      }}>
-        <span>Database: {syncStatusLabel}</span>
-        <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-          {ghId} · profiles {firestoreProfileCount} · zones {Object.keys(zoneAssignments).length} · activity {activityLoaded && !activityFallback ? firestoreActivity.length : activityLog.length}
-        </span>
-      </div>
-
-      {/* SCROLL BODY */}
-      <div
-        className="gm-scroll"
-        ref={scrollRef}
-        onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
-      >
-        {activeTab === 'plants' && (
-          <PlantCare
-            zones={resolvedZones}
-            loading={loading}
-            error={error}
-            plantProfiles={plantProfiles}
-            profilesById={profilesById}
-            onOpenZone={openZone}
-            onAddProfile={onAddProfile}
-            onEditProfile={onEditProfile}
-            onToast={showToast}
-            activityLog={activityLog}
-            onWaterZone={onWaterZone}
+      {trendsOpen ? (
+        /* ── TRENDS & ANALYSIS — full page with its own header (no back button)
+              and the standard bottom nav below it. ─────────────────────────── */
+        <>
+          <TrendsDashboard
+            open={trendsOpen}
             greenhouseId={ghId ?? ''}
-            firestoreActivity={firestoreActivity}
-            activityLoaded={activityLoaded}
-            activityFallback={activityFallback}
-            assignmentsLoaded={assignmentsLoaded}
-            simHistory={isSimulating ? simHistory : undefined}
-            firestoreProfileCount={firestoreProfileCount}
-            onOpenTrends={() => setTrendsOpen(true)}
-          />
-        )}
-        {activeTab === 'greenhouse' && (
-          <GreenhouseView
-            latestReading={latestReading}
-            loading={loading}
-            error={error}
-            mapKind={mapKind}
-            setMapKind={setGreenhouse}
-            profilesById={profilesById}
-            zoneAssignments={zoneAssignments}
-            onAssignPlant={onAssignPlant}
-            onOpenZone={openZone}
-            onToast={showToast}
-            layoutSettings={layoutSettings}
-            setLayoutSettings={setLayoutSettings}
-          />
-        )}
-        {activeTab === 'environment' && (
-          <EnvironmentView
-            site={mapKind}
-            greenhouse={greenhouse}
-            latestReading={latestReading}
-          />
-        )}
-        {activeTab === 'alerts' && (
-          <AlertsView
+            greenhouseName={greenhouse?.name}
             zones={resolvedZones}
-            loading={loading}
-            error={error}
             profilesById={profilesById}
-            onOpenZone={openZone}
+            plantProfiles={plantProfiles}
+            simHistory={isSimulating ? simHistory : undefined}
+            activityLog={activityLog}
+            firestoreActivity={firestoreActivity}
+            onClose={() => setTrendsOpen(false)}
+            backRef={trendsBackRef}
           />
-        )}
-        {activeTab === 'runoff' && <SimpleRunoff />}
-      </div>
-
-      {/* BOTTOM NAV */}
-      <nav className="gm-tabbar" aria-label="Primary navigation">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            className={`gm-tab${activeTab === tab.id ? ' active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
+          {bottomNav}
+        </>
+      ) : alertsOpen ? (
+        /* ── ALERTS / NOTIFICATIONS — full standalone page: back button in the
+              top-left, no bottom nav. ──────────────────────────────────────── */
+        <>
+          <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
+            <button
+              className="gm-icon-btn"
+              onClick={() => setAlertsOpen(false)}
+              aria-label="Back"
+              style={{ fontSize: 20 }}
+            >
+              ←
+            </button>
+            <div className="gm-brand">
+              <h1>
+                Notifications <span style={{ fontSize: 20, lineHeight: 1 }}>🔔</span>
+              </h1>
+              <small>Things to check</small>
+            </div>
+            <div className="gm-header-actions">{avatarButton}</div>
+          </header>
+          <div
+            className="gm-scroll"
+            ref={scrollRef}
+            onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
           >
-            <span className="gm-tab-glyph" style={{ fontSize: 20 }}>{tab.icon}</span>
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </nav>
+            <AlertsView
+              zones={resolvedZones}
+              loading={loading}
+              error={error}
+              profilesById={profilesById}
+              onOpenZone={openZone}
+            />
+          </div>
+        </>
+      ) : (
+        /* ── NORMAL TABS (Home · Map · Weather · Runoff) ─────────────────────── */
+        <>
+          {/* HEADER */}
+          <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
+            <div className="gm-brand">
+              <h1>
+                {g.title} <span style={{ fontSize: 20, lineHeight: 1 }}>{g.emoji}</span>
+              </h1>
+              <small>{g.sub(ghName)}</small>
+            </div>
+            <div className="gm-header-actions">
+              {bellButton}
+              {avatarButton}
+            </div>
+          </header>
+
+          {/* SIMULATION BANNER */}
+          {isSimulating && (
+            <div style={{
+              background: '#fffbeb',
+              borderBottom: '2px solid #f59e0b',
+              color: '#92400e',
+              padding: '5px 16px',
+              fontSize: 11,
+              fontWeight: 800,
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 6,
+              letterSpacing: '0.07em',
+              flexShrink: 0,
+            }}>
+              ⚗️ SIMULATION MODE — tap 👩‍🌾 to disable
+            </div>
+          )}
+
+          {/* SCROLL BODY */}
+          <div
+            className="gm-scroll"
+            ref={scrollRef}
+            onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
+          >
+            {activeTab === 'plants' && (
+              <PlantCare
+                zones={resolvedZones}
+                loading={loading}
+                error={error}
+                plantProfiles={plantProfiles}
+                profilesById={profilesById}
+                onOpenZone={openZone}
+                onAddProfile={onAddProfile}
+                onEditProfile={onEditProfile}
+                onToast={showToast}
+                activityLog={activityLog}
+                onWaterZone={onWaterZone}
+                greenhouseId={ghId ?? ''}
+                firestoreActivity={firestoreActivity}
+                activityLoaded={activityLoaded}
+                activityFallback={activityFallback}
+                assignmentsLoaded={assignmentsLoaded}
+                simHistory={isSimulating ? simHistory : undefined}
+                firestoreProfileCount={firestoreProfileCount}
+                onOpenTrends={() => setTrendsOpen(true)}
+              />
+            )}
+            {activeTab === 'greenhouse' && (
+              <GreenhouseView
+                latestReading={latestReading}
+                loading={loading}
+                error={error}
+                mapKind={mapKind}
+                setMapKind={setGreenhouse}
+                profilesById={profilesById}
+                zoneAssignments={zoneAssignments}
+                onAssignPlant={onAssignPlant}
+                onOpenZone={openZone}
+                onToast={showToast}
+                layoutSettings={layoutSettings}
+                setLayoutSettings={setLayoutSettings}
+              />
+            )}
+            {activeTab === 'environment' && (
+              <EnvironmentView
+                site={mapKind}
+                greenhouse={greenhouse}
+                latestReading={latestReading}
+              />
+            )}
+            {activeTab === 'runoff' && <SimpleRunoff />}
+          </div>
+
+          {bottomNav}
+        </>
+      )}
 
       {/* TOAST */}
       <div className={`gm-toast${toast ? ' show' : ''}`} aria-live="polite">
@@ -901,20 +985,6 @@ export function App() {
         onSave={onSaveProfile}
         onDelete={onDeleteProfile}
         onReset={onResetProfile}
-      />
-
-      <TrendsDashboard
-        open={trendsOpen}
-        greenhouseId={ghId ?? ''}
-        greenhouseName={greenhouse?.name}
-        zones={resolvedZones}
-        profilesById={profilesById}
-        plantProfiles={plantProfiles}
-        simHistory={isSimulating ? simHistory : undefined}
-        activityLog={activityLog}
-        firestoreActivity={firestoreActivity}
-        onClose={() => setTrendsOpen(false)}
-        backRef={trendsBackRef}
       />
     </div>
   );
