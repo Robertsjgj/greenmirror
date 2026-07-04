@@ -12,6 +12,7 @@ const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
 const { saveReading, firestoreEnabled }        = require("./firestore");
 const { buildGreenhouseReadingSnapshot }        = require("./snapshot");
 const { getWeatherCached }                      = require("./weather");
+const { getEnvironmentCached }                  = require("./services/environment");
 
 function getLanIp() {
   for (const nets of Object.values(os.networkInterfaces())) {
@@ -75,9 +76,19 @@ async function buildSnapshot(rawReading, mode) {
     alerts: analyzeZone(z),
   }));
 
-  // RPi environment sensor (live mode: from request body; sim mode: from simulator)
-  // In live mode, if no environment fields arrive, source becomes 'unavailable'.
-  const rawEnv = rawReading.environment || null;
+  // RPi environment sensor.
+  // Live mode: prefer an ESP-provided environment; otherwise fall back to the
+  // Raspberry Pi's own DHT sensor (cached, read in the background — never blocks
+  // this POST). We only adopt a cached reading that actually carries a value, so
+  // a disabled/stale sensor cleanly falls back to source 'unavailable' (unchanged
+  // behavior). Sim mode: environment is generated below.
+  let rawEnv = rawReading.environment || null;
+  if (!rawEnv && mode !== 'simulation') {
+    const cachedEnv = getEnvironmentCached();
+    if (cachedEnv && (cachedEnv.air_temp_c !== null || cachedEnv.humidity_pct !== null)) {
+      rawEnv = cachedEnv;
+    }
+  }
   let environment = null;
   if (rawEnv) {
     environment = {

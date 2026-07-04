@@ -16,6 +16,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const backend = require('./server');
 const { startProvisioning } = require('./provisioning');
+const { startEnvironmentService } = require('./services/environment');
 
 // 1. Backend API — must come up regardless of network state.
 backend.start();
@@ -24,4 +25,8 @@ backend.start();
 //    into the backend. Runs inside this same process (no separate service).
 startProvisioning();
 
-// 3. Future services initialize here.
+// 3. Greenhouse environment sensor (DHT11) — background timer, non-blocking.
+//    No-ops unless ENVIRONMENT_ENABLED=true. Feeds live snapshots via the cache.
+startEnvironmentService();
+
+// 4. Future services initialize here.
