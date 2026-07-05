@@ -57,6 +57,8 @@ import {
 } from "./zoneLayout";
 import { LoginView } from "./components/LoginView";
 import { useAuth } from "./context/AuthContext";
+import { AdminUsersView } from "./components/AdminUsersView";
+import { ChangePasswordSheet } from "./components/ChangePasswordSheet";
 
 // Re-exported so existing component imports (`import { MapKind } from '../App'`) keep working.
 export type { MapKind } from "./greenhouses";
@@ -252,6 +254,8 @@ export function App() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [toast, setToast] = useState<string | null>(null);
   const [scrolled, setScrolled] = useState(false);
+  const [adminUsersOpen, setAdminUsersOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const migratedActivityRef = useRef<Set<string>>(new Set());
@@ -267,6 +271,8 @@ export function App() {
     editorProfile,
     selectedZoneId,
     siteSheetOpen,
+    changePasswordOpen,
+    adminUsersOpen,
     trendsOpen,
     activeTab,
   });
@@ -274,6 +280,8 @@ export function App() {
     editorProfile,
     selectedZoneId,
     siteSheetOpen,
+    changePasswordOpen,
+    adminUsersOpen,
     trendsOpen,
     activeTab,
   };
@@ -286,6 +294,8 @@ export function App() {
       if (s.editorProfile !== null) setEditorProfile(null);
       else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
+      else if (s.adminUsersOpen) setAdminUsersOpen(false);
+      else if (s.changePasswordOpen) setChangePasswordOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current()))
           setTrendsOpen(false);
@@ -1073,6 +1083,16 @@ export function App() {
   const headerSubtitle =
     activeTab === "plants" ? `${ghName} Greenhouse` : g.sub(ghName);
 
+  if (adminUsersOpen) {
+    return (
+      <AdminUsersView
+        onBack={() => setAdminUsersOpen(false)}
+        greenhouseId={ghId ?? ""}
+        greenhouseName={ghName}
+      />
+    );
+  }
+
   return (
     <div className="gm-app">
       {/* HEADER */}
@@ -1246,6 +1266,19 @@ export function App() {
         currentUserRole={profile.role}
         isAdmin={isAdmin}
         onLogout={logout}
+        onOpenChangePassword={() => {
+          setSiteSheetOpen(false);
+          setChangePasswordOpen(true);
+        }}
+        onOpenAdminUsers={() => {
+          setSiteSheetOpen(false);
+          setAdminUsersOpen(true);
+        }}
+      />
+
+      <ChangePasswordSheet
+        open={changePasswordOpen}
+        onClose={() => setChangePasswordOpen(false)}
       />
 
       <ZoneDetailSheet
