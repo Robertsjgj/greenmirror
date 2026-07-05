@@ -1,35 +1,114 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // GreenMirror — open development rules.
-    // All collections are listed explicitly so the scope is visible.
-    // TODO: replace with auth-based rules before any public deployment.
+    // ─────────────────────────────────────────────
+    // Helper functions
+    // ─────────────────────────────────────────────
 
-    // Sensor readings (written by backend / ESP nodes)
-    match /latestReadings/{id}   { allow read, write: if true; }
-    match /readings/{id}         { allow read, write: if true; }
+    function signedIn() {
+      return request.auth != null;
+    }
 
-    // Hourly / daily reading rollups (written by backend; read by trend charts)
-    match /readingsRollups/{id}  { allow read, write: if true; }
+    function currentUserProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function currentUserIsActive() {
+      return signedIn()
+        && currentUserProfile().active == true;
+    }
+
+    function currentUserIsAdmin() {
+      return currentUserIsActive()
+        && currentUserProfile().role == "admin";
+    }
+
+    function currentUserGreenhouseId() {
+      return currentUserProfile().greenhouseId;
+    }
+
+    // ─────────────────────────────────────────────
+    // User profiles
+    // ─────────────────────────────────────────────
+    //
+    // Regular users can read only their own profile.
+    // Admins can read all users in their own greenhouse.
+    //
+    // Writes are blocked from the frontend.
+    // The Vercel/Firebase Admin backend endpoint can still create users
+    // because Firebase Admin SDK bypasses Firestore client rules.
+
+    match /users/{uid} {
+      allow read: if currentUserIsActive()
+        && (
+          request.auth.uid == uid
+          || (
+            currentUserIsAdmin()
+            && resource.data.greenhouseId == currentUserGreenhouseId()
+          )
+        );
+
+      allow write: if false;
+    }
+
+    // ─────────────────────────────────────────────
+    // Existing GreenMirror development rules
+    // ─────────────────────────────────────────────
+    //
+    // These are still open for now so we do not break the app while building
+    // Phase 2. Later, before public deployment, we should lock these down by
+    // greenhouseId and role.
+
+    // Sensor readings written by backend / ESP nodes
+    match /latestReadings/{id} {
+      allow read, write: if true;
+    }
+
+    match /readings/{id} {
+      allow read, write: if true;
+    }
 
     // Greenhouse metadata
-    match /greenhouses/{id}      { allow read, write: if true; }
-    match /nodes/{id}            { allow read, write: if true; }
-    match /zones/{id}            { allow read, write: if true; }
+    match /greenhouses/{id} {
+      allow read, write: if true;
+    }
 
-    // Plant profiles — one document per profile (custom + edited defaults)
-    match /plantProfiles/{id}    { allow read, write: if true; }
+    match /nodes/{id} {
+      allow read, write: if true;
+    }
+
+    match /zones/{id} {
+      allow read, write: if true;
+    }
+
+    // Plant profiles — one document per profile
+    match /plantProfiles/{id} {
+      allow read, write: if true;
+    }
 
     // Zone → plant assignments — one document per greenhouse
-    match /zoneAssignments/{id}  { allow read, write: if true; }
+    match /zoneAssignments/{id} {
+      allow read, write: if true;
+    }
 
-    // Activity and watering logs (append-only in practice)
-    match /activityLogs/{id}     { allow read, write: if true; }
-    match /wateringEvents/{id}   { allow read, write: if true; }
+    // Activity and watering logs
+    match /activityLogs/{id} {
+      allow read, write: if true;
+    }
 
-    // Alerts and tasks (future use)
-    match /alerts/{id}           { allow read, write: if true; }
-    match /tasks/{id}            { allow read, write: if true; }
+    match /wateringEvents/{id} {
+      allow read, write: if true;
+    }
+
+    // Alerts and tasks
+    match /alerts/{id} {
+      allow read, write: if true;
+    }
+
+    match /tasks/{id} {
+      allow read, write: if true;
+    }
   }
 }
