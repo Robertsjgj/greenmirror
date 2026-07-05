@@ -10,6 +10,8 @@ interface SiteSwitcherSheetProps {
   currentUserRole?: string;
   isAdmin?: boolean;
   onLogout?: () => Promise<void> | void;
+  onOpenAdminUsers?: () => void;
+  onOpenChangePassword?: () => void;
 }
 
 const SITE_EMOJIS: Record<MapKind, string> = {
@@ -24,6 +26,8 @@ export function SiteSwitcherSheet({
   currentUserRole,
   isAdmin = false,
   onLogout,
+  onOpenAdminUsers,
+  onOpenChangePassword,
 }: SiteSwitcherSheetProps) {
   const { greenhouse, setGreenhouse, clearGreenhouse } = useGreenhouse();
   const { isSimulating, startSimulation, stopSimulation } = useSimulation();
@@ -203,6 +207,65 @@ export function SiteSwitcherSheet({
                 </div>
               </div>
             </div>
+          )}
+
+          {isAdmin && onOpenAdminUsers && (
+            <button
+              className="gm-row"
+              onClick={() => {
+                onClose();
+                onOpenAdminUsers();
+              }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                padding: 14,
+                borderRadius: 22,
+                borderColor: "#bbf7d0",
+                background: "#ecfdf5",
+                marginBottom: 16,
+              }}
+            >
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 16,
+                  flexShrink: 0,
+                  background: "#bbf7d0",
+                  color: "#166534",
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 22,
+                }}
+              >
+                👥
+              </div>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontFamily: "'Baloo 2', system-ui",
+                    fontSize: 18,
+                    fontWeight: 800,
+                    color: "var(--ink)",
+                  }}
+                >
+                  Manage users
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--ink-3)",
+                    marginTop: 1,
+                    fontWeight: 600,
+                  }}
+                >
+                  Create users and assign admin/user roles
+                </div>
+              </div>
+            </button>
           )}
 
           {/* Greenhouse selector / current greenhouse */}
@@ -446,6 +509,66 @@ export function SiteSwitcherSheet({
             >
               Account
             </div>
+
+            {onOpenChangePassword && (
+              <button
+                className="gm-row"
+                onClick={() => {
+                  onClose();
+                  onOpenChangePassword();
+                }}
+                disabled={loggingOut}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  padding: 14,
+                  borderRadius: 22,
+                  marginBottom: 8,
+                  borderColor: "#bbf7d0",
+                  background: "#ecfdf5",
+                }}
+              >
+                <div
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 16,
+                    flexShrink: 0,
+                    background: "#bbf7d0",
+                    color: "#166534",
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 22,
+                  }}
+                >
+                  🔐
+                </div>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontFamily: "'Baloo 2', system-ui",
+                      fontSize: 18,
+                      fontWeight: 800,
+                      color: "var(--ink)",
+                    }}
+                  >
+                    Change password
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--ink-3)",
+                      marginTop: 1,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Update your own account password
+                  </div>
+                </div>
+              </button>
+            )}
 
             <button
               className="gm-row"
