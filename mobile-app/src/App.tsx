@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertsView } from './components/AlertsView';
-import { evaluateAllAlerts } from './alertRules';
+import { ZoneAlert, evaluateAllAlerts } from './alertRules';
 import { EnvironmentView } from './components/EnvironmentView';
 import { GreenhouseSelector } from './components/GreenhouseSelector';
 import { GreenhouseView } from './components/GreenhouseView';
@@ -22,6 +22,13 @@ import { useSimulation } from './context/SimulationContext';
 import { firebaseEnabled } from './services/firebase';
 import { subscribeToActivityLog, writeActivityEvent, writeWateringEvent } from './services/activityService';
 import { subscribeToLatestReading } from './services/readingsService';
+import {
+  NotificationDoc,
+  NotificationInput,
+  subscribeToNotifications,
+  upsertActiveNotification,
+  resolveNotification,
+} from './services/notificationsService';
 import {
   subscribeToZoneAssignments,
   writeZoneAssignment,
@@ -74,6 +81,74 @@ function loadStoredLayoutSettings(): LayoutSettings {
   } catch {
     return createDefaultSettings();
   }
+}
+
+// ── Bell badge acknowledgement (local-only, per greenhouse) ─────────────────
+// Set of alert IDs the user has already viewed — drives the "unread only" bell
+// badge. Resolution is handled separately and automatically (see below).
+const ALERTS_SEEN_KEY = (ghId: string) => `greenmirror-alerts-seen-${ghId}`;
+
+function loadIdSet(key: string): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(key);
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? new Set(arr) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveIdSet(key: string, set: Set<string>) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify([...set]));
+  } catch {
+    /* ignore quota/serialization errors — acknowledgement is best-effort */
+  }
+}
+
+// ── Notifications history store ─────────────────────────────────────────────
+// Notifications persist to the Firestore `notifications` collection. When
+// Firebase is not configured we fall back to this per-greenhouse localStorage
+// mirror so the resolved/history flow still works offline.
+const NOTIFICATIONS_KEY = (ghId: string) => `greenmirror-notifications-${ghId}`;
+
+function loadLocalNotifications(ghId: string): NotificationDoc[] {
+  try {
+    const raw = window.localStorage.getItem(NOTIFICATIONS_KEY(ghId));
+    const arr = raw ? JSON.parse(raw) : null;
+    return Array.isArray(arr) ? (arr as NotificationDoc[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalNotifications(ghId: string, docs: NotificationDoc[]) {
+  try {
+    // Keep active + the most recent resolved so history stays bounded.
+    const active = docs.filter((d) => d.status === 'active');
+    const resolved = docs
+      .filter((d) => d.status === 'resolved')
+      .sort((a, b) => (b.resolvedAt ?? '').localeCompare(a.resolvedAt ?? ''))
+      .slice(0, 100);
+    window.localStorage.setItem(NOTIFICATIONS_KEY(ghId), JSON.stringify([...active, ...resolved]));
+  } catch {
+    /* ignore */
+  }
+}
+
+// Build a Firestore/local notification snapshot from a live alert.
+function alertToNotificationInput(a: ZoneAlert): NotificationInput {
+  return {
+    alertId: a.id,
+    type: a.type,
+    severity: a.severity,
+    title: a.title,
+    message: a.message,
+    action: a.action,
+    zoneId: a.zoneId,
+    displayLabel: a.displayLabel,
+    plantName: a.plantName,
+  };
 }
 
 type Tab = 'plants' | 'greenhouse' | 'environment' | 'runoff';
@@ -156,6 +231,11 @@ export function App() {
   // nav). Kept separate from `activeTab` so closing it returns to the previous
   // screen (the tab that was showing when the bell was tapped).
   const [alertsOpen, setAlertsOpen] = useState(false);
+  // `seen` drives the unread-only bell badge (local, per greenhouse).
+  const [seenAlertIds, setSeenAlertIds] = useState<Set<string>>(new Set());
+  // Notification history (active + auto-resolved) — Firestore, with a
+  // localStorage fallback. Resolution is automatic; there is no manual resolve.
+  const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   // The sheet stores only the canonical zone ID so it always derives the latest
   // zone object from live readings (never a stale snapshot). Canonical = the
   // backend zone_id, not the friendly display name.
@@ -500,11 +580,103 @@ export function App() {
     setSelectedZoneId(zoneCanonicalId(zone));
   }, []);
 
-  // Active-alert count for the header bell badge — same source AlertsView uses.
-  const activeAlertCount = useMemo(
-    () => evaluateAllAlerts(resolvedZones, profilesById).length,
+  // Live (active) alerts — same source AlertsView uses. The bell badge counts
+  // only UNREAD alerts: currently active and not yet marked seen.
+  const allAlerts = useMemo(
+    () => evaluateAllAlerts(resolvedZones, profilesById),
     [resolvedZones, profilesById]
   );
+  const unreadAlertCount = useMemo(
+    () => allAlerts.filter((a) => !seenAlertIds.has(a.id)).length,
+    [allAlerts, seenAlertIds]
+  );
+  // Load/persist the seen set per greenhouse (bell badge only).
+  useEffect(() => {
+    if (!ghId) { setSeenAlertIds(new Set()); return; }
+    setSeenAlertIds(loadIdSet(ALERTS_SEEN_KEY(ghId)));
+  }, [ghId]);
+  useEffect(() => {
+    const id = ghIdRef.current;
+    if (id) saveIdSet(ALERTS_SEEN_KEY(id), seenAlertIds);
+  }, [seenAlertIds]);
+
+  // Viewing the Notifications page marks every currently-active alert as seen,
+  // so the bell badge resets and only reappears when a NEW alert arrives.
+  useEffect(() => {
+    if (!alertsOpen) return;
+    setSeenAlertIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      allAlerts.forEach((a) => { if (!next.has(a.id)) { next.add(a.id); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [alertsOpen, allAlerts]);
+
+  // Notification history — subscribe to Firestore (real-time), else load the
+  // localStorage fallback. Re-subscribes when the greenhouse changes.
+  useEffect(() => {
+    if (!ghId) { setNotifications([]); return; }
+    if (firebaseEnabled) {
+      const unsub = subscribeToNotifications(
+        ghId,
+        setNotifications,
+        () => setNotifications(loadLocalNotifications(ghId)),
+      );
+      if (unsub) return () => unsub();
+    }
+    setNotifications(loadLocalNotifications(ghId));
+  }, [ghId]);
+
+  // Auto-resolve: reconcile live alerts against stored notifications. A live
+  // alert that is new (or was resolved) becomes 'active'; a stored 'active'
+  // notification whose alert is no longer live is marked 'resolved'. Gated on
+  // real data so a transient empty reading never falsely resolves everything.
+  useEffect(() => {
+    if (!ghId || loading || !latestReading) return;
+
+    const liveIds = new Set(allAlerts.map((a) => a.id));
+    const byAlertId = new Map(notifications.map((n) => [n.alertId, n]));
+    const toActivate = allAlerts.filter((a) => {
+      const existing = byAlertId.get(a.id);
+      return !existing || existing.status !== 'active';
+    });
+    const toResolve = notifications.filter(
+      (n) => n.status === 'active' && !liveIds.has(n.alertId),
+    );
+    if (toActivate.length === 0 && toResolve.length === 0) return;
+
+    if (firebaseEnabled) {
+      toActivate.forEach((a) =>
+        upsertActiveNotification(ghId, alertToNotificationInput(a), !byAlertId.has(a.id)));
+      toResolve.forEach((n) => resolveNotification(ghId, n.alertId));
+      // The Firestore subscription reflects these writes back into state.
+    } else {
+      setNotifications((prev) => {
+        const map = new Map(prev.map((n) => [n.alertId, n]));
+        const now = new Date().toISOString();
+        toActivate.forEach((a) => {
+          const e = map.get(a.id);
+          const input = alertToNotificationInput(a);
+          map.set(a.id, {
+            id: `${ghId}__${a.id}`,
+            greenhouseId: ghId,
+            ...input,
+            status: 'active',
+            createdAt: e?.createdAt ?? now,
+            updatedAt: now,
+            resolvedAt: undefined,
+          });
+        });
+        toResolve.forEach((n) => {
+          const e = map.get(n.alertId);
+          if (e) map.set(n.alertId, { ...e, status: 'resolved', resolvedAt: now, updatedAt: now });
+        });
+        const next = [...map.values()];
+        saveLocalNotifications(ghId, next);
+        return next;
+      });
+    }
+  }, [allAlerts, notifications, ghId, loading, latestReading]);
 
   const localStorageFallbackActive = profilesFallback || assignmentsFallback || activityFallback;
   const syncStatusLabel = localStorageFallbackActive
@@ -769,12 +941,12 @@ export function App() {
     <button
       className="gm-bell"
       onClick={() => setAlertsOpen(true)}
-      aria-label={activeAlertCount > 0 ? `Alerts — ${activeAlertCount} active` : 'Alerts'}
+      aria-label={unreadAlertCount > 0 ? `Notifications — ${unreadAlertCount} new` : 'Notifications'}
     >
       🔔
-      {activeAlertCount > 0 && (
+      {unreadAlertCount > 0 && (
         <span className="gm-bell-badge">
-          {activeAlertCount > 99 ? '99+' : activeAlertCount}
+          {unreadAlertCount > 99 ? '99+' : unreadAlertCount}
         </span>
       )}
     </button>
@@ -856,6 +1028,7 @@ export function App() {
               error={error}
               profilesById={profilesById}
               onOpenZone={openZone}
+              notifications={notifications}
             />
           </div>
         </>
