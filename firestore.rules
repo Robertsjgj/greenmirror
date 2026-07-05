@@ -31,5 +31,8 @@ service cloud.firestore {
     // Alerts and tasks (future use)
     match /alerts/{id}           { allow read, write: if true; }
     match /tasks/{id}            { allow read, write: if true; }
+
+    // Notification history — one document per greenhouse+alert (auto-resolved)
+    match /notifications/{id}    { allow read, write: if true; }
   }
 }
