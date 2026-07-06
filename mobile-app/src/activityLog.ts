@@ -1,15 +1,15 @@
 export type ActivityType =
-  | 'watering'
-  | 'assignment'
-  | 'cleared'
-  | 'profile-update'
-  | 'sensor-failure'
-  | 'sensor-recovered'
-  | 'stale-node'
-  | 'moisture-alert'
-  | 'greenhouse-switch';
+  | "watering"
+  | "assignment"
+  | "cleared"
+  | "profile-update"
+  | "sensor-failure"
+  | "sensor-recovered"
+  | "stale-node"
+  | "moisture-alert"
+  | "greenhouse-switch";
 
-export type ActivitySource = 'manual' | 'system' | 'sensor';
+export type ActivitySource = "manual" | "system" | "sensor";
 
 export interface ActivityEntry {
   id: string;
@@ -23,15 +23,35 @@ export interface ActivityEntry {
   message: string;
   timestamp: string;
   source?: ActivitySource;
+  actorUserId?: string;
+  actorName?: string;
+  actorUsername?: string;
+  metadata?: Record<string, string | number | boolean>;
 }
 
-const STORAGE_KEY = 'greenmirror-activity-log';
+const STORAGE_KEY = "greenmirror-activity-log";
 const MAX_ENTRIES = 100;
 
 // ─── Greenhouse-scoped storage helpers ────────────────────────────────────────
 
 function scopedActivityKey(ghId: string): string {
   return `greenmirror-activity-log-${ghId}`;
+}
+
+function normalizeActivityEntry(entry: ActivityEntry): ActivityEntry {
+  return {
+    ...entry,
+    actorName: entry.actorName ?? "System activity",
+  };
+}
+
+function normalizeActivityList(value: unknown): ActivityEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is ActivityEntry =>
+      Boolean(entry && typeof entry === "object"),
+    )
+    .map(normalizeActivityEntry);
 }
 
 /**
@@ -42,38 +62,54 @@ export function loadActivityForGh(ghId: string): ActivityEntry[] {
   try {
     const scopedRaw = window.localStorage.getItem(scopedActivityKey(ghId));
     if (scopedRaw !== null) {
-      const parsed = JSON.parse(scopedRaw);
-      return Array.isArray(parsed) ? parsed : [];
+      return normalizeActivityList(JSON.parse(scopedRaw));
     }
     // One-time migration from global key → scoped key
     const globalRaw = window.localStorage.getItem(STORAGE_KEY);
     if (globalRaw) {
-      const parsed = JSON.parse(globalRaw);
-      const data: ActivityEntry[] = Array.isArray(parsed) ? parsed : [];
-      try { window.localStorage.setItem(scopedActivityKey(ghId), JSON.stringify(data.slice(0, MAX_ENTRIES))); } catch { /* storage full */ }
+      const data = normalizeActivityList(JSON.parse(globalRaw));
+      try {
+        window.localStorage.setItem(
+          scopedActivityKey(ghId),
+          JSON.stringify(data.slice(0, MAX_ENTRIES)),
+        );
+      } catch {
+        /* storage full */
+      }
       return data;
     }
-  } catch { /* storage unavailable */ }
+  } catch {
+    /* storage unavailable */
+  }
   return [];
 }
 
-export function saveActivityForGh(ghId: string, entries: ActivityEntry[]): void {
+export function saveActivityForGh(
+  ghId: string,
+  entries: ActivityEntry[],
+): void {
   try {
-    window.localStorage.setItem(scopedActivityKey(ghId), JSON.stringify(entries.slice(0, MAX_ENTRIES)));
-  } catch { /* storage full */ }
+    const normalized = entries.map(normalizeActivityEntry);
+    window.localStorage.setItem(
+      scopedActivityKey(ghId),
+      JSON.stringify(normalized.slice(0, MAX_ENTRIES)),
+    );
+  } catch {
+    /* storage full */
+  }
 }
 
 /** Log an entry scoped to a specific greenhouse. */
 export function logActivityForGh(
   ghId: string,
-  entry: Omit<ActivityEntry, 'id' | 'timestamp'>,
+  entry: Omit<ActivityEntry, "id" | "timestamp">,
 ): ActivityEntry {
-  const newEntry: ActivityEntry = {
+  const newEntry: ActivityEntry = normalizeActivityEntry({
     ...entry,
     greenhouseId: ghId,
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     timestamp: new Date().toISOString(),
-  };
+  });
   const existing = loadActivityForGh(ghId);
   saveActivityForGh(ghId, [newEntry, ...existing]);
   return newEntry;
@@ -83,8 +119,7 @@ export function loadActivity(): ActivityEntry[] {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return normalizeActivityList(JSON.parse(raw));
   } catch {
     return [];
   }
@@ -92,51 +127,136 @@ export function loadActivity(): ActivityEntry[] {
 
 function saveActivity(entries: ActivityEntry[]): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
-  } catch { /* storage full or unavailable */ }
+    const normalized = entries.map(normalizeActivityEntry);
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(normalized.slice(0, MAX_ENTRIES)),
+    );
+  } catch {
+    /* storage full or unavailable */
+  }
 }
 
-export function logActivity(entry: Omit<ActivityEntry, 'id' | 'timestamp'>): ActivityEntry {
-  const newEntry: ActivityEntry = {
+export function logActivity(
+  entry: Omit<ActivityEntry, "id" | "timestamp">,
+): ActivityEntry {
+  const newEntry: ActivityEntry = normalizeActivityEntry({
     ...entry,
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     timestamp: new Date().toISOString(),
-  };
+  });
   const existing = loadActivity();
   saveActivity([newEntry, ...existing]);
   return newEntry;
 }
 
-export function formatActivityTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.round(diffMs / 60000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-
-  const diffHours = Math.round(diffMins / 60);
-  if (diffHours < 24) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  const diffDays = Math.round(diffHours / 24);
-  if (diffDays === 1) return `Yesterday ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  if (diffDays < 7) return `${diffDays} days ago`;
-
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+function sameDate(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
+function timeText(date: Date): string {
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Compact timestamp for activity feeds.
+ * Examples: Today, 2:35 PM · Yesterday, 9:10 AM · Jul 3, 2026, 4:22 PM
+ */
+export function formatActivityDateTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+
+  if (sameDate(date, now)) return `Today, ${timeText(date)}`;
+  if (sameDate(date, yesterday)) return `Yesterday, ${timeText(date)}`;
+
+  return date.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Kept for existing imports; now always includes a useful date/time label. */
+export function formatActivityTime(timestamp: string): string {
+  return formatActivityDateTime(timestamp);
+}
+
+export function getActivityActorName(entry: ActivityEntry): string {
+  const displayName = entry.actorName?.trim();
+
+  if (displayName) {
+    return displayName;
+  }
+
+  const username = entry.actorUsername?.trim();
+
+  if (username) {
+    return username;
+  }
+
+  return "System activity";
+}
+
+export function getActivityTypeLabel(type: ActivityType): string {
+  switch (type) {
+    case "watering":
+      return "Watering";
+    case "assignment":
+      return "Plant assignment";
+    case "cleared":
+      return "Cleared plant";
+    case "profile-update":
+      return "Plant profile";
+    case "sensor-failure":
+      return "Sensor issue";
+    case "sensor-recovered":
+      return "Sensor recovered";
+    case "stale-node":
+      return "Stale sensor";
+    case "moisture-alert":
+      return "Moisture alert";
+    case "greenhouse-switch":
+      return "Greenhouse switch";
+    default:
+      return "Activity";
+  }
+}
+
+export const ACTIVITY_TYPE_ORDER: ActivityType[] = [
+  "watering",
+  "assignment",
+  "cleared",
+  "profile-update",
+  "sensor-failure",
+  "sensor-recovered",
+  "stale-node",
+  "moisture-alert",
+  "greenhouse-switch",
+];
+
 /** Filter entries down to the ones useful in a "Recent Activity" feed. */
-export function filterUsefulActivity(entries: ActivityEntry[]): ActivityEntry[] {
+export function filterUsefulActivity(
+  entries: ActivityEntry[],
+): ActivityEntry[] {
   const useful: ActivityType[] = [
-    'watering',
-    'sensor-failure',
-    'sensor-recovered',
-    'stale-node',
-    'moisture-alert',
-    'assignment',
+    "watering",
+    "sensor-failure",
+    "sensor-recovered",
+    "stale-node",
+    "moisture-alert",
+    "assignment",
+    "cleared",
+    "profile-update",
   ];
   return entries.filter((e) => useful.includes(e.type));
 }

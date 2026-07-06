@@ -60,6 +60,7 @@ import { useAuth } from "./context/AuthContext";
 import { AdminUsersView } from "./components/AdminUsersView";
 import { ChangePasswordSheet } from "./components/ChangePasswordSheet";
 import { WateringScheduleView } from "./components/WateringScheduleView";
+import { ActivityHistoryView } from "./components/ActivityHistoryView";
 
 // Re-exported so existing component imports (`import { MapKind } from '../App'`) keep working.
 export type { MapKind } from "./greenhouses";
@@ -258,6 +259,7 @@ export function App() {
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [wateringScheduleOpen, setWateringScheduleOpen] = useState(false);
+  const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const migratedActivityRef = useRef<Set<string>>(new Set());
@@ -275,6 +277,7 @@ export function App() {
     siteSheetOpen,
     changePasswordOpen,
     wateringScheduleOpen,
+    activityHistoryOpen,
     adminUsersOpen,
     trendsOpen,
     activeTab,
@@ -285,6 +288,7 @@ export function App() {
     siteSheetOpen,
     changePasswordOpen,
     wateringScheduleOpen,
+    activityHistoryOpen,
     adminUsersOpen,
     trendsOpen,
     activeTab,
@@ -300,6 +304,7 @@ export function App() {
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
       else if (s.changePasswordOpen) setChangePasswordOpen(false);
       else if (s.wateringScheduleOpen) setWateringScheduleOpen(false);
+      else if (s.activityHistoryOpen) setActivityHistoryOpen(false);
       else if (s.adminUsersOpen) setAdminUsersOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current()))
@@ -546,6 +551,9 @@ export function App() {
                 amountMl: entry.amountMl,
                 message: entry.message,
                 source: entry.source,
+                actorUserId: entry.actorUserId ?? "system",
+                actorName: entry.actorName ?? "System activity",
+                actorUsername: entry.actorUsername,
               });
             });
             console.info(
@@ -558,7 +566,7 @@ export function App() {
         setActivityLoaded(true);
         setActivityFallback(false);
       },
-      30,
+      200,
       (err) => {
         console.warn(
           `[GreenMirror] localStorage fallback used for activity in "${currentGhId}":`,
@@ -755,6 +763,15 @@ export function App() {
     toastTimerRef.current = setTimeout(() => setToast(null), 2200);
   }, []);
 
+  const activityActor = useMemo(
+    () => ({
+      actorUserId: firebaseUser?.uid,
+      actorName: profile?.displayName ?? profile?.username ?? firebaseUser?.displayName ?? undefined,
+      actorUsername: profile?.username ?? undefined,
+    }),
+    [firebaseUser?.displayName, firebaseUser?.uid, profile?.displayName, profile?.username],
+  );
+
   // Plant profile CRUD
   const onAddProfile = useCallback((prefill?: string) => {
     if (prefill) {
@@ -806,11 +823,13 @@ export function App() {
           greenhouseId: ghId,
           plantName: p.name,
           message: `Saved plant profile ${p.name}`,
+          source: "manual",
+          ...activityActor,
         });
       }
       showToast(p.name ? `Saved ${p.name}` : "Profile saved");
     },
-    [ghId, showToast],
+    [activityActor, ghId, showToast],
   );
 
   const onDeleteProfile = useCallback(
@@ -851,11 +870,13 @@ export function App() {
           greenhouseId: ghId,
           plantName: p?.name,
           message: `Deleted plant profile ${p?.name ?? id}`,
+          source: "manual",
+          ...activityActor,
         });
       }
       showToast(`Deleted ${p?.name ?? "profile"}`);
     },
-    [ghId, plantProfiles, showToast, zoneAssignments],
+    [activityActor, ghId, plantProfiles, showToast, zoneAssignments],
   );
 
   const onResetProfile = useCallback(
@@ -886,11 +907,13 @@ export function App() {
           greenhouseId: ghId,
           plantName: def.name,
           message: `Reset ${def.name} profile to defaults`,
+          source: "manual",
+          ...activityActor,
         });
       }
       showToast(`Reset ${def.name} to defaults`);
     },
-    [ghId, showToast],
+    [activityActor, ghId, showToast],
   );
 
   const onWaterZone = useCallback(
@@ -910,6 +933,7 @@ export function App() {
             amountMl,
             message: `[Sim] Watered ${zoneName}${plantName ? ` (${plantName})` : ""} · ${amountMl}ml`,
             source: "manual",
+            ...activityActor,
           });
           setActivityLog(loadActivityForGh(ghId));
         }
@@ -924,6 +948,7 @@ export function App() {
             amountMl,
             message: `Watered ${zoneName}${plantName ? ` (${plantName})` : ""} · ${amountMl}ml`,
             source: "manual",
+            ...activityActor,
           });
           setActivityLog(loadActivityForGh(ghId));
           writeWateringEvent({
@@ -933,12 +958,13 @@ export function App() {
             plantName,
             nodeId: zone.nodeId ?? undefined,
             source: "manual",
+            ...activityActor,
           });
         }
       }
       showToast(`💧 Watered ${zoneName} (${amountMl}ml)`);
     },
-    [ghId, isSimulating, waterSimZone, profilesById, showToast],
+    [activityActor, ghId, isSimulating, waterSimZone, profilesById, showToast],
   );
 
   const onAssignPlant = useCallback(
@@ -964,6 +990,8 @@ export function App() {
             visualZoneId: zoneKey,
             plantName,
             message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
+            source: "manual",
+            ...activityActor,
           });
           writeActivityEvent({
             type: "assignment",
@@ -972,6 +1000,7 @@ export function App() {
             plantName,
             message: `Assigned ${plantName ?? plantId} to ${zoneKey}`,
             source: "manual",
+            ...activityActor,
           });
         } else {
           clearZoneAssignment(ghId, zoneKey);
@@ -979,6 +1008,8 @@ export function App() {
             type: "cleared",
             visualZoneId: zoneKey,
             message: `Cleared plant from ${zoneKey}`,
+            source: "manual",
+            ...activityActor,
           });
           writeActivityEvent({
             type: "cleared",
@@ -986,12 +1017,13 @@ export function App() {
             visualZoneId: zoneKey,
             message: `Cleared plant from ${zoneKey}`,
             source: "manual",
+            ...activityActor,
           });
         }
         setActivityLog(loadActivityForGh(ghId));
       }
     },
-    [ghId, profilesById],
+    [activityActor, ghId, profilesById],
   );
 
   // ── ALL HOOKS ABOVE THIS LINE ───────────────────────────────────────────────
@@ -1088,6 +1120,19 @@ export function App() {
   const headerSubtitle =
     activeTab === "plants" ? `${ghName} Greenhouse` : g.sub(ghName);
 
+  if (activityHistoryOpen) {
+    const activityHistoryEntries = activityLoaded && !activityFallback ? firestoreActivity : activityLog;
+
+    return (
+      <ActivityHistoryView
+        onBack={() => setActivityHistoryOpen(false)}
+        greenhouseName={ghName}
+        activities={activityHistoryEntries}
+        loading={!activityLoaded}
+      />
+    );
+  }
+
   if (wateringScheduleOpen) {
     return (
       <WateringScheduleView
@@ -1097,6 +1142,7 @@ export function App() {
         isAdmin={isAdmin}
         currentUserId={firebaseUser.uid}
         currentUserName={displayName}
+        currentUsername={profile.username}
         latestReading={latestReading}
         zones={resolvedZones}
         onToast={showToast}
@@ -1220,6 +1266,7 @@ export function App() {
             simHistory={isSimulating ? simHistory : undefined}
             firestoreProfileCount={firestoreProfileCount}
             onOpenTrends={() => setTrendsOpen(true)}
+            onOpenActivityHistory={() => setActivityHistoryOpen(true)}
           />
         )}
         {activeTab === "greenhouse" && (

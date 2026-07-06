@@ -48,6 +48,7 @@ interface WateringScheduleViewProps {
   isAdmin: boolean;
   currentUserId: string;
   currentUserName: string;
+  currentUsername?: string;
   latestReading: LatestReading | null;
   zones: VisualZone[];
   onToast?: (message: string) => void;
@@ -89,6 +90,7 @@ export function WateringScheduleView({
   isAdmin,
   currentUserId,
   currentUserName,
+  currentUsername,
   latestReading,
   zones,
   onToast,
@@ -336,6 +338,9 @@ export function WateringScheduleView({
         amountMl: Math.round(schedule.totalLitresPerRound * 1000),
         message: `${currentUserName} completed ${schedule.rounds.find((round) => round.id === roundId)?.label ?? "watering"} for ${greenhouseName}.`,
         source: "manual",
+        actorUserId: currentUserId,
+        actorName: currentUserName,
+        actorUsername: currentUsername,
         metadata: {
           scheduleId: schedule.id,
           roundId,
