@@ -16,13 +16,14 @@ interface AlertsViewProps {
 }
 
 type CategoryId =
-  | 'all' | 'critical' | 'water' | 'temperature'
+  | 'all' | 'critical' | 'warnings' | 'water' | 'temperature'
   | 'sensor' | 'runoff' | 'maintenance' | 'resolved';
 
-// Priority order left→right; the row scrolls horizontally with edge arrows.
+// Priority order left→right (most severe first); the row scrolls horizontally.
 const CATEGORIES: { id: CategoryId; label: string; icon: string }[] = [
   { id: 'all',         label: 'All',            icon: '📋' },
   { id: 'critical',    label: 'Critical',       icon: '🚨' },
+  { id: 'warnings',    label: 'Warnings',       icon: '⚠️' },
   { id: 'water',       label: 'Needs Water',    icon: '💧' },
   { id: 'temperature', label: 'Temperature',    icon: '🌡️' },
   { id: 'sensor',      label: 'Sensor Offline', icon: '📡' },
@@ -68,6 +69,7 @@ function matchesCategory(a: ZoneAlert, cat: CategoryId): boolean {
   switch (cat) {
     case 'all':         return true;
     case 'critical':    return a.severity === 'critical';
+    case 'warnings':    return a.severity === 'warning';
     case 'water':       return a.type === 'moisture';
     case 'temperature': return a.type === 'temperature';
     case 'sensor':      return a.type === 'sensor' || a.type === 'node';
@@ -248,10 +250,10 @@ export function AlertsView({
 
   const counts = useMemo(() => {
     const c: Record<CategoryId, number> = {
-      all: 0, critical: 0, water: 0, temperature: 0,
+      all: 0, critical: 0, warnings: 0, water: 0, temperature: 0,
       sensor: 0, runoff: 0, maintenance: 0, resolved: resolvedNotifications.length,
     };
-    const cats: CategoryId[] = ['all', 'critical', 'water', 'temperature', 'sensor', 'runoff', 'maintenance'];
+    const cats: CategoryId[] = ['all', 'critical', 'warnings', 'water', 'temperature', 'sensor', 'runoff', 'maintenance'];
     activeAlerts.forEach((a) => cats.forEach((cat) => { if (matchesCategory(a, cat)) c[cat]++; }));
     return c;
   }, [activeAlerts, resolvedNotifications]);
