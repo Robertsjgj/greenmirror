@@ -130,10 +130,18 @@ export function GreenhouseView({
         <div style={{ fontFamily: "'Baloo 2', system-ui", fontSize: 20, color: 'var(--ink)', fontWeight: 800 }}>
           {isSimulating ? 'Simulation' : 'Garden Layout'} · {siteInfo.name}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2, fontWeight: 600 }}>
-          {isSimulating
-            ? 'Simulated sensor data — values update live. Tap a bed to water it.'
-            : 'Tap a bed to check on it or assign a plant'}
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            padding: '8px 16px', borderRadius: 999,
+            background: 'var(--primary-soft)', border: '1.5px solid var(--primary)',
+            color: 'var(--primary)', fontSize: 13.5, fontWeight: 800, lineHeight: 1.3,
+          }}>
+            <span style={{ fontSize: 16 }}>👆</span>
+            {isSimulating
+              ? 'Tap a bed to water it'
+              : 'Tap a bed to check it or assign a plant'}
+          </div>
         </div>
       </div>
 
