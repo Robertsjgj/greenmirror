@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading, tempDomain,
+  LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading, tempDomain, BackButton,
 } from './TrendsCharts';
 import type { ChartSeries } from './TrendsCharts';
 import { relTime } from './trendsModel';
@@ -159,7 +159,7 @@ export function GreenhouseTrendCard({ gm, range, setRange, loading }: TabProps) 
   const series: ChartSeries[] = [
     { key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) },
   ];
-  if (hasTemp) series.push({ key: 't', name: 'Avg soil temp', color: '#16a34a', axis: 'R', width: 2.6, data: s.map((d) => ({ value: d.temp ?? 0, t: d.t })) });
+  if (hasTemp) series.push({ key: 't', name: 'Avg soil temp', color: '#16a34a', axis: 'R', width: 2.6, data: s.map((d) => ({ value: d.temp, t: d.t })) });
 
   const lastTs = s.length ? s[s.length - 1].t : null;
 
@@ -294,6 +294,7 @@ function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneLi
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{zone.label}</div>
               <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cur.plant?.name ?? 'Empty'}</div>
+              <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 96 }}>
               <div style={{ fontSize: 19, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{cur.moisture}%</div>
@@ -304,14 +305,6 @@ function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneLi
         ))}
       </div>
     </>
-  );
-}
-
-function BackLink({ label, onBack }: { label: string; onBack: () => void }) {
-  return (
-    <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 2px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', fontWeight: 800, fontSize: 13, fontFamily: 'inherit' }}>
-      ‹ {label}
-    </button>
   );
 }
 
@@ -349,7 +342,7 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
 
   const axis = buildAxis(range, gm.NOW);
   const series: ChartSeries[] = isTemp
-    ? [{ key: 't', name: 'Soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: tempData }]
+    ? [{ key: 't', name: 'Soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: s.map((d) => ({ value: d.temp, t: d.t })) }]
     : [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
   const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, 100];
   const bands = !isTemp && plant ? [{ from: plant.moistureMin, to: plant.moistureMax, color: '#16a34a' }] : [];
@@ -363,7 +356,7 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
 
   return (
     <Page>
-      <BackLink label="All zones" onBack={onBack} />
+      <BackButton onClick={onBack} />
 
       {/* Header + key stats */}
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
@@ -451,6 +444,7 @@ export function PlantsView({ gm, range, setRange, loading, selected, onSelect, o
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink)', fontFamily: "'Baloo 2', system-ui" }}>{plant.name}</div>
             <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{agg.count} zone{agg.count !== 1 ? 's' : ''}</div>
+            <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{agg.moisture}%</div>
@@ -459,7 +453,6 @@ export function PlantsView({ gm, range, setRange, loading, selected, onSelect, o
           </div>
         </div>
       ))}
-      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, textAlign: 'center', padding: '4px 0 2px' }}>Tap a plant to see its trend over time.</div>
     </Page>
   );
 }
@@ -483,13 +476,13 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
   const hasChart = isTemp ? tempData.length >= 2 : s.length >= 2;
   const axis = buildAxis(range, gm.NOW);
   const series: ChartSeries[] = isTemp
-    ? [{ key: 't', name: 'Avg soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: tempData }]
+    ? [{ key: 't', name: 'Avg soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: s.map((d) => ({ value: d.temp, t: d.t })) }]
     : [{ key: 'm', name: 'Avg moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
   const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, 100];
 
   return (
     <Page>
-      <BackLink label="All plants" onBack={onBack} />
+      <BackButton onClick={onBack} />
 
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -564,7 +557,19 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
         ))}
       </div>
 
-      {/* Did watering help? */}
+      {/* Watering trends — shown before the before/after results */}
+      {weekly.some((w) => w.n > 0) && (
+        <>
+          <SectionCard title="Watering Activity" pad="14px 14px 14px">
+            <BarsChart data={weekly} valueKey="n" unit="" color="#0ea5e9" height={150} highlightLast />
+          </SectionCard>
+          <SectionCard title="Water used per week" pad="14px 14px 14px">
+            <BarsChart data={weekly.map((w) => ({ ...w, liters: Math.round(w.ml / 100) / 10 }))} valueKey="liters" unit="L" color="#16a34a" height={150} highlightLast />
+          </SectionCard>
+        </>
+      )}
+
+      {/* Did watering help? — after the weekly trends */}
       <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '4px 2px 0' }}>Did watering help?</div>
       {results.length === 0 ? (
         <div className="gm-card" style={{ padding: '14px 16px', display: 'flex', gap: 11, alignItems: 'flex-start' }}>
@@ -593,18 +598,6 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
           </div>
         </div>
       ))}
-
-      {/* Simple watering trends */}
-      {weekly.some((w) => w.n > 0) && (
-        <>
-          <SectionCard title="Waterings per week" pad="14px 14px 14px">
-            <BarsChart data={weekly} valueKey="n" unit="" color="#0ea5e9" height={150} highlightLast />
-          </SectionCard>
-          <SectionCard title="Water used per week" pad="14px 14px 14px">
-            <BarsChart data={weekly.map((w) => ({ ...w, liters: Math.round(w.ml / 100) / 10 }))} valueKey="liters" unit="L" color="#16a34a" height={150} highlightLast />
-          </SectionCard>
-        </>
-      )}
 
       <Insight icon="🌿">Consistent watering keeps your plants happy and healthy! 🌿</Insight>
     </Page>
