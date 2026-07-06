@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityEntry, filterUsefulActivity, formatActivityTime } from '../activityLog';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import type { LatestReading, VisualZone } from '../zoneLayout';
-import { TrendsPreview } from './TrendsPreview';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -29,8 +28,6 @@ interface PlantCareProps {
   simHistory?: LatestReading[];
   /** Number of plant profiles loaded from Firestore (diagnostic) */
   firestoreProfileCount?: number;
-  /** Opens the full Trends & Analysis dashboard */
-  onOpenTrends: () => void;
 }
 
 type TaskKind = 'water' | 'check';
@@ -126,8 +123,8 @@ export function PlantCare({
   plantProfiles, profilesById,
   onOpenZone, onAddProfile, onEditProfile, onToast,
   activityLog, onWaterZone,
-  greenhouseId, firestoreActivity, activityLoaded, activityFallback, assignmentsLoaded, simHistory,
-  firestoreProfileCount, onOpenTrends,
+  greenhouseId, firestoreActivity, activityLoaded, activityFallback, assignmentsLoaded,
+  firestoreProfileCount,
 }: PlantCareProps) {
   const [query, setQuery] = useState('');
   const [profilePage, setProfilePage] = useState(0);
@@ -230,7 +227,7 @@ export function PlantCare({
           </div>
         ) : (
           <div className="gm-callout">
-            <div className="gm-callout-emoji">🏡</div>
+            <div className="gm-callout-emoji">⚠️</div>
             <div>
               <h3>Greenhouse: {needsAttention} section{needsAttention !== 1 ? 's' : ''} need attention</h3>
               <p>Check your tasks below.</p>
@@ -361,16 +358,6 @@ export function PlantCare({
           </div>
         )}
       </div>
-
-      {/* ── SECTION 3: Sensor Trends (compact preview) ───────────────── */}
-      <TrendsPreview
-        zones={zones}
-        profilesById={profilesById}
-        plantProfiles={plantProfiles}
-        greenhouseId={greenhouseId}
-        simHistory={simHistory}
-        onOpenDashboard={onOpenTrends}
-      />
 
       {/* ── SECTION 4: Your Plants / Plant Profiles ───────────────────── */}
       <div>
