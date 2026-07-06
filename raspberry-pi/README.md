@@ -17,8 +17,7 @@ PM2; the same code runs on a laptop for development. Part of the
 | `rollups.js` | Hourly/daily aggregates written to `readingsRollups` |
 | `simulator.js` | Generates simulated sensor data (`USE_SIMULATION=true`) |
 | `weather.js` | Cached external weather (Open-Meteo) |
-| `services/` | Reusable services — `wifi-manager.js` (nmcli abstraction), `system-status.js` (health) |
-| `aggregator.js` | Merges the latest zones from all active ESP nodes into one snapshot |
+| `services/` | Reusable services — `wifi-manager.js` (nmcli), `system-status.js` (health), `environment/` (DHT11 sensing) |
 | `provisioning/` | Wi-Fi provisioning lifecycle + setup page, started by the bootstrap |
 | `.env.example` | Documented environment variables (copy to `.env`) |
 
@@ -79,12 +78,116 @@ writes.
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account JSON (alternative to inline) |
 | `FIRESTORE_LIVE_WRITE_INTERVAL_MS` / `FIRESTORE_HISTORY_WRITE_INTERVAL_MS` | Write-throttle intervals |
 | `FIRESTORE_VERBOSE` | Log every successful Firestore write |
-| `NODE_STALE_TIMEOUT_MS` | Drop an ESP node from the merge after this long without a post (default `60000`) — see [Multi-node aggregation](#multi-node-aggregation) |
+| `ENVIRONMENT_ENABLED` / `ENVIRONMENT_SENSOR_TYPE` / `ENVIRONMENT_DHT_GPIO` / `ENVIRONMENT_REFRESH_SECONDS` / `ENVIRONMENT_STALE_SECONDS` / `ENVIRONMENT_PYTHON` | Greenhouse DHT11 air temp/humidity — see [Greenhouse environment sensor](#greenhouse-environment-sensor-dht11) |
 
 Firestore credentials can also be supplied as a `firebase-service-account.json`
 file in this folder. `.env` and `firebase-service-account.json` are git-ignored —
 never commit them. The data model is documented in
 [docs/firestore-schema.md](../docs/firestore-schema.md).
+
+## Greenhouse environment sensor (DHT11)
+
+ESP nodes report soil only; the greenhouse **air temperature and humidity** come
+from a **DHT11 wired to the Raspberry Pi**. When enabled, the backend reads it in
+the background and injects the values into every live snapshot as
+`environment.air_temp_c` / `environment.humidity_pct` (plus the top-level
+`env_temp_c` / `env_humidity_pct` mirrors). The existing **frontend Environment
+view works automatically** — no frontend changes. There is **no light sensor**, so
+`light_lux` and `brightness_pct` stay `null` ("Light: Not available").
+
+Off by default: with `ENVIRONMENT_ENABLED` unset, live environment stays
+"unavailable" exactly as before.
+
+### Wiring
+
+| DHT11 pin | Raspberry Pi |
+|-----------|--------------|
+| VCC | 3.3V |
+| DATA | **GPIO4 (BCM 4 = physical pin 7)** |
+| GND | Ground |
+
+A 10kΩ pull-up between VCC and DATA is recommended (many DHT11 breakout boards
+have it on-board).
+
+### How it reads (Python helper — Adafruit CircuitPython DHT)
+
+The DHT one-wire protocol is microsecond-timed, which the JS event loop can't meet
+reliably, so the timed read is delegated to a small Python helper
+([`services/environment/read_dht.py`](services/environment/read_dht.py)) using the
+**Adafruit CircuitPython DHT** library. The Node service
+[`services/environment/index.js`](services/environment/index.js) spawns it on a
+timer and owns polling, caching, staleness, status, and logging.
+
+> Note: the kernel `dht11` IIO overlay is *not* used here — on our hardware the
+> `/sys/bus/iio/...` reads timed out repeatedly, so we read via the Adafruit
+> library instead.
+
+#### 1. Install the Python DHT reader (one-time, on the Pi)
+
+```bash
+sudo apt-get install -y python3-pip libgpiod2
+pip3 install --break-system-packages adafruit-circuitpython-dht
+```
+
+(If `--break-system-packages` is rejected on an older pip, use a venv or
+`sudo pip3 install adafruit-circuitpython-dht`. The helper falls back to the
+legacy `Adafruit_DHT` library if `adafruit-circuitpython-dht` isn't present.)
+
+#### 2. Test the reader directly
+
+```bash
+cd raspberry-pi
+python3 services/environment/read_dht.py --gpio 4 --type dht11
+#   expect: {"temperature_c": 21.4, "humidity_pct": 55.0}
+#   (DHT11 fails a read now and then — just run it again)
+```
+
+#### 3. Configure and restart
+
+In `.env` (see `.env.example`):
+
+```ini
+ENVIRONMENT_ENABLED=true
+ENVIRONMENT_SENSOR_TYPE=dht11        # dht11 | dht22
+ENVIRONMENT_DHT_GPIO=4               # BCM GPIO the DATA pin is wired to (4 = physical pin 7)
+ENVIRONMENT_REFRESH_SECONDS=30       # background read cadence
+ENVIRONMENT_STALE_SECONDS=120        # after this long with no good read, values go null
+# ENVIRONMENT_PYTHON=python3          # python binary used to run the reader (optional)
+```
+
+Then restart the backend (`pm2 restart greenmirror-backend`). Watch the logs:
+
+```
+[environment] starting — dht11 on GPIO4 (Python helper) · refresh 30s · stale 120s
+[environment] read OK — 21.4°C · 55%
+```
+
+The service reads in the **background only** — every ESP POST reads from the cache
+(`getEnvironmentCached()`), so ingest is never blocked or slowed. On a read
+failure the last good value is served until `ENVIRONMENT_STALE_SECONDS`, after
+which the values go `null` (status `stale`). The cached object carries a `status`
+of `ok` / `stale` / `error` / `disabled`; `getEnvironmentStatus()` exposes
+`{ enabled, sensor, status, lastRead, lastSuccess, lastError, refreshSeconds }`
+for diagnostics / the future management dashboard.
+
+### Troubleshooting
+
+| Symptom | Check |
+|---------|-------|
+| Air temp/humidity stay "Unavailable" | `ENVIRONMENT_ENABLED=true`? Backend restarted? `pm2 logs greenmirror-backend` for `[environment]` lines |
+| `read failed: ... No module named 'board'` (or `adafruit_dht`) | Reader not installed — `pip3 install --break-system-packages adafruit-circuitpython-dht` |
+| `read failed: spawn python3 ENOENT` | Python not found — `sudo apt-get install -y python3`, or set `ENVIRONMENT_PYTHON` to the python path |
+| Intermittent `read failed` then recovers | Normal for DHT11 (transient CRC/timeout) — the helper retries and the cache holds the last good value |
+| Values look frozen | A stuck sensor; readings older than `ENVIRONMENT_STALE_SECONDS` report `null` with status `stale` |
+| Permission error accessing GPIO | Run the backend as a user in the `gpio` group (default `pi`), or under PM2 as that user |
+| Wrong pin | `ENVIRONMENT_DHT_GPIO` is the **BCM** number (4), not the physical pin (7) |
+
+### Swapping sensors later
+
+The service is sensor-agnostic behind `getEnvironmentCached()`. For a DHT22 set
+`ENVIRONMENT_SENSOR_TYPE=dht22` (the reader supports both). For a different sensor,
+adjust `read_dht.py` (or add a new reader) — `server.js`, `snapshot.js`, Firestore,
+and the frontend need no changes.
 
 ## Install
 
