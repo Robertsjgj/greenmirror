@@ -1,7 +1,20 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { PlantProfile, evaluateZoneAgainstPlant } from '../plantProfiles';
 import { VisualZone } from '../zoneLayout';
 import { getZoneDisplayName } from '../zoneRegistry';
+
+// Simple labelled row for the user-friendly "Details" section.
+function DetailRow({ label, value, last }: { label: string; value: string; last?: boolean }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12,
+      padding: '9px 0', borderBottom: last ? 'none' : '1px solid var(--line)',
+    }}>
+      <span style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 700, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 13, color: 'var(--ink)', fontWeight: 700, textAlign: 'right', minWidth: 0 }}>{value}</span>
+    </div>
+  );
+}
 
 interface ZoneDetailSheetProps {
   zone: VisualZone | null;
@@ -245,7 +258,32 @@ export function ZoneDetailSheet({
   zone, plantProfiles, profilesById, onAssignPlant, onClose, onToast, onWaterZone,
 }: ZoneDetailSheetProps) {
   const [showPicker, setShowPicker] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const open = zone !== null;
+
+  // ── Swipe-down-to-dismiss ────────────────────────────────────────────────
+  // Drag the sheet down with a finger to close it (in addition to ✕ / tapping
+  // the backdrop). Only engages when the body is scrolled to the top, so normal
+  // scrolling of the sheet content still works.
+  const [dragY, setDragY] = useState(0);
+  const dragStartY = useRef<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    if ((bodyRef.current?.scrollTop ?? 0) > 0) { dragStartY.current = null; return; }
+    dragStartY.current = e.touches[0].clientY;
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (dragStartY.current == null) return;
+    const dy = e.touches[0].clientY - dragStartY.current;
+    setDragY(dy > 0 ? dy : 0);
+  };
+  const onTouchEnd = () => {
+    if (dragStartY.current == null) return;
+    if (dragY > 110) onClose();   // dragged far enough → dismiss
+    setDragY(0);
+    dragStartY.current = null;
+  };
 
   const profile = zone?.assignedPlant ? (profilesById.get(zone.assignedPlant) ?? null) : null;
   const evaluation = zone ? evaluateZoneAgainstPlant(zone, profile) : null;
@@ -264,6 +302,15 @@ export function ZoneDetailSheet({
     zone?.soilTempStatus === 'not_detected' || zone?.soilTempStatus === 'not_connected' ||
     (hasReading && zone?.soilTempC == null);
 
+  // Plain-language sensor status for the basic "Details" section.
+  const sensorStatusText =
+    !hasReading ? 'Not reporting'
+    : sensorOffline ? 'Sensor offline'
+    : (moistureNotConnected && tempNotConnected) ? 'Sensors not connected'
+    : moistureNotConnected ? 'Moisture sensor not connected'
+    : tempNotConnected ? 'Temperature sensor not connected'
+    : 'Connected';
+
   // Label model:
   // - friendlyName: user-facing bed name (e.g. "Greenhouse Bed 1") — shown in header
   // - physicalId: short technical zone identifier — Advanced details only
@@ -281,6 +328,8 @@ export function ZoneDetailSheet({
     if (plantId) {
       const p = profilesById.get(plantId);
       onToast(p ? `${p.icon ?? '🌱'} ${p.name} assigned to ${zone.displayLabel ?? zone.visualLabel}` : 'Plant assigned');
+      // Close the zone modal so the user immediately sees the updated map state.
+      onClose();
     } else {
       onToast(`Cleared plant for ${zone.displayLabel ?? zone.visualLabel}`);
     }
@@ -302,10 +351,16 @@ export function ZoneDetailSheet({
     <>
       {/* Main zone sheet */}
       <div className={`gm-scrim${open && !showPicker ? ' open' : ''}`} onClick={onClose} />
-      <div className={`gm-sheet${open && !showPicker ? ' open' : ''}`}>
+      <div
+        className={`gm-sheet${open && !showPicker ? ' open' : ''}`}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        style={dragY > 0 ? { transform: `translateY(${dragY}px)`, transition: 'none' } : undefined}
+      >
         <div className="gm-grab" />
         {zone && (
-          <div className="gm-sheet-body" style={{ paddingBottom: 32 }}>
+          <div className="gm-sheet-body" ref={bodyRef} style={{ paddingBottom: 32 }}>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
               <div style={{ minWidth: 0 }}>
@@ -313,10 +368,10 @@ export function ZoneDetailSheet({
                 <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>
                   {friendlyName}
                 </div>
-                {/* Main title: plant name or zone name */}
+                {/* Main title: plant name (normal color) or "Unassigned" (grey) */}
                 <div style={{
                   fontFamily: "'Baloo 2', system-ui", fontSize: 26, fontWeight: 800,
-                  color: 'var(--ink)', lineHeight: 1.05, marginTop: 2,
+                  color: profile ? 'var(--ink)' : 'var(--ink-3)', lineHeight: 1.05, marginTop: 2,
                 }}>
                   {mainTitle}
                 </div>
@@ -502,25 +557,44 @@ export function ZoneDetailSheet({
               </div>
             )}
 
-            {/* Advanced / debug details — technical IDs only shown here */}
-            <div style={{ margin: '16px 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)' }}>
-              Advanced details
+            {/* Basic, user-friendly details */}
+            <div className="gm-card" style={{ padding: '4px 14px 6px', marginTop: 16 }}>
+              <div style={{ padding: '10px 0 2px', fontSize: 14, fontWeight: 800, color: 'var(--ink)' }}>Details</div>
+              <DetailRow label="Zone name" value={friendlyName} />
+              <DetailRow label="Plants assigned" value={profile ? profile.name : 'None'} />
+              <DetailRow label="Sensor status" value={sensorStatusText} last />
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {[
-                { label: 'Physical zone', value: physicalId },
-                { label: 'Site',          value: siteName },
-                { label: 'Backend zone',  value: zone.backendZoneId ?? '—' },
-                { label: 'Node',          value: zone.nodeId ?? '—' },
-                { label: 'Area',          value: zone.rowLabel ?? '—' },
-                { label: 'Temp status',   value: zone.soilTempStatus ?? '—' },
-              ].map((kv) => (
-                <div key={kv.label} className="gm-kv">
-                  <label>{kv.label}</label>
-                  <span>{kv.value}</span>
-                </div>
-              ))}
-            </div>
+
+            {/* Advanced / technical details — collapsed by default */}
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              aria-expanded={showAdvanced}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                margin: '16px 0 8px', padding: '4px 2px', background: 'none', border: 'none',
+                cursor: 'pointer', fontSize: 13, fontWeight: 700, color: 'var(--ink-3)', fontFamily: 'inherit',
+              }}
+            >
+              <span>Advanced Details</span>
+              <span style={{ fontSize: 15, transform: showAdvanced ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>▾</span>
+            </button>
+            {showAdvanced && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {[
+                  { label: 'Physical zone', value: physicalId },
+                  { label: 'Site',          value: siteName },
+                  { label: 'Backend zone',  value: zone.backendZoneId ?? '—' },
+                  { label: 'Node',          value: zone.nodeId ?? '—' },
+                  { label: 'Area',          value: zone.rowLabel ?? '—' },
+                  { label: 'Temp status',   value: zone.soilTempStatus ?? '—' },
+                ].map((kv) => (
+                  <div key={kv.label} className="gm-kv">
+                    <label>{kv.label}</label>
+                    <span>{kv.value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Backend alerts */}
             {zone.alerts.length > 0 && (
