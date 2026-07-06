@@ -3,10 +3,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ─────────────────────────────────────────────
-    // Helper functions
-    // ─────────────────────────────────────────────
-
     function signedIn() {
       return request.auth != null;
     }
@@ -29,17 +25,6 @@ service cloud.firestore {
       return currentUserProfile().greenhouseId;
     }
 
-    // ─────────────────────────────────────────────
-    // User profiles
-    // ─────────────────────────────────────────────
-    //
-    // Regular users can read only their own profile.
-    // Admins can read all users in their own greenhouse.
-    //
-    // Writes are blocked from the frontend.
-    // The Vercel/Firebase Admin backend endpoint can still create users
-    // because Firebase Admin SDK bypasses Firestore client rules.
-
     match /users/{uid} {
       allow read: if currentUserIsActive()
         && (
@@ -53,15 +38,40 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // ─────────────────────────────────────────────
-    // Existing GreenMirror development rules
-    // ─────────────────────────────────────────────
-    //
-    // These are still open for now so we do not break the app while building
-    // Phase 2. Later, before public deployment, we should lock these down by
-    // greenhouseId and role.
+    match /wateringSettings/{greenhouseId} {
+      allow read: if currentUserIsActive()
+        && greenhouseId == currentUserGreenhouseId();
 
-    // Sensor readings written by backend / ESP nodes
+      allow create, update, delete: if currentUserIsAdmin()
+        && greenhouseId == currentUserGreenhouseId();
+    }
+
+    match /wateringSchedules/{id} {
+      allow read: if currentUserIsActive()
+        && resource.data.greenhouseId == currentUserGreenhouseId()
+        && (
+          currentUserIsAdmin()
+          || resource.data.assignedUserId == request.auth.uid
+        );
+
+      allow create: if currentUserIsAdmin()
+        && request.resource.data.greenhouseId == currentUserGreenhouseId();
+
+      allow update: if currentUserIsActive()
+        && resource.data.greenhouseId == currentUserGreenhouseId()
+        && request.resource.data.greenhouseId == resource.data.greenhouseId
+        && (
+          currentUserIsAdmin()
+          || (
+            resource.data.assignedUserId == request.auth.uid
+            && request.resource.data.assignedUserId == request.auth.uid
+          )
+        );
+
+      allow delete: if currentUserIsAdmin()
+        && resource.data.greenhouseId == currentUserGreenhouseId();
+    }
+
     match /latestReadings/{id} {
       allow read, write: if true;
     }
@@ -70,7 +80,6 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Greenhouse metadata
     match /greenhouses/{id} {
       allow read, write: if true;
     }
@@ -83,17 +92,14 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Plant profiles — one document per profile
     match /plantProfiles/{id} {
       allow read, write: if true;
     }
 
-    // Zone → plant assignments — one document per greenhouse
     match /zoneAssignments/{id} {
       allow read, write: if true;
     }
 
-    // Activity and watering logs
     match /activityLogs/{id} {
       allow read, write: if true;
     }
@@ -102,12 +108,15 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Alerts and tasks
     match /alerts/{id} {
       allow read, write: if true;
     }
 
     match /tasks/{id} {
+      allow read, write: if true;
+    }
+
+    match /notifications/{id} {
       allow read, write: if true;
     }
   }

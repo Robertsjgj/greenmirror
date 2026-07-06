@@ -59,6 +59,7 @@ import { LoginView } from "./components/LoginView";
 import { useAuth } from "./context/AuthContext";
 import { AdminUsersView } from "./components/AdminUsersView";
 import { ChangePasswordSheet } from "./components/ChangePasswordSheet";
+import { WateringScheduleView } from "./components/WateringScheduleView";
 
 // Re-exported so existing component imports (`import { MapKind } from '../App'`) keep working.
 export type { MapKind } from "./greenhouses";
@@ -256,6 +257,7 @@ export function App() {
   const [scrolled, setScrolled] = useState(false);
   const [adminUsersOpen, setAdminUsersOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [wateringScheduleOpen, setWateringScheduleOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const migratedActivityRef = useRef<Set<string>>(new Set());
@@ -272,6 +274,7 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     changePasswordOpen,
+    wateringScheduleOpen,
     adminUsersOpen,
     trendsOpen,
     activeTab,
@@ -281,6 +284,7 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     changePasswordOpen,
+    wateringScheduleOpen,
     adminUsersOpen,
     trendsOpen,
     activeTab,
@@ -294,8 +298,9 @@ export function App() {
       if (s.editorProfile !== null) setEditorProfile(null);
       else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
-      else if (s.adminUsersOpen) setAdminUsersOpen(false);
       else if (s.changePasswordOpen) setChangePasswordOpen(false);
+      else if (s.wateringScheduleOpen) setWateringScheduleOpen(false);
+      else if (s.adminUsersOpen) setAdminUsersOpen(false);
       else if (s.trendsOpen) {
         if (!(trendsBackRef.current && trendsBackRef.current()))
           setTrendsOpen(false);
@@ -1083,6 +1088,22 @@ export function App() {
   const headerSubtitle =
     activeTab === "plants" ? `${ghName} Greenhouse` : g.sub(ghName);
 
+  if (wateringScheduleOpen) {
+    return (
+      <WateringScheduleView
+        onBack={() => setWateringScheduleOpen(false)}
+        greenhouseId={ghId ?? ""}
+        greenhouseName={ghName}
+        isAdmin={isAdmin}
+        currentUserId={firebaseUser.uid}
+        currentUserName={displayName}
+        latestReading={latestReading}
+        zones={resolvedZones}
+        onToast={showToast}
+      />
+    );
+  }
+
   if (adminUsersOpen) {
     return (
       <AdminUsersView
@@ -1266,6 +1287,10 @@ export function App() {
         currentUserRole={profile.role}
         isAdmin={isAdmin}
         onLogout={logout}
+        onOpenWateringSchedule={() => {
+          setSiteSheetOpen(false);
+          setWateringScheduleOpen(true);
+        }}
         onOpenChangePassword={() => {
           setSiteSheetOpen(false);
           setChangePasswordOpen(true);

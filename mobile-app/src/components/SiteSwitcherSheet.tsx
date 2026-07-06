@@ -12,6 +12,7 @@ interface SiteSwitcherSheetProps {
   onLogout?: () => Promise<void> | void;
   onOpenAdminUsers?: () => void;
   onOpenChangePassword?: () => void;
+  onOpenWateringSchedule?: () => void;
 }
 
 const SITE_EMOJIS: Record<MapKind, string> = {
@@ -28,6 +29,7 @@ export function SiteSwitcherSheet({
   onLogout,
   onOpenAdminUsers,
   onOpenChangePassword,
+  onOpenWateringSchedule,
 }: SiteSwitcherSheetProps) {
   const { greenhouse, setGreenhouse, clearGreenhouse } = useGreenhouse();
   const { isSimulating, startSimulation, stopSimulation } = useSimulation();
@@ -207,6 +209,65 @@ export function SiteSwitcherSheet({
                 </div>
               </div>
             </div>
+          )}
+
+          {onOpenWateringSchedule && (
+            <button
+              className="gm-row"
+              onClick={() => {
+                onClose();
+                onOpenWateringSchedule();
+              }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                padding: 14,
+                borderRadius: 22,
+                borderColor: "#bae6fd",
+                background: "#f0f9ff",
+                marginBottom: 12,
+              }}
+            >
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 16,
+                  flexShrink: 0,
+                  background: "#bae6fd",
+                  color: "#0369a1",
+                  display: "grid",
+                  placeItems: "center",
+                  fontSize: 22,
+                }}
+              >
+                💧
+              </div>
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontFamily: "'Baloo 2', system-ui",
+                    fontSize: 18,
+                    fontWeight: 800,
+                    color: "var(--ink)",
+                  }}
+                >
+                  Watering schedule
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--ink-3)",
+                    marginTop: 1,
+                    fontWeight: 600,
+                  }}
+                >
+                  See who waters today and what each bed needs
+                </div>
+              </div>
+            </button>
           )}
 
           {isAdmin && onOpenAdminUsers && (
