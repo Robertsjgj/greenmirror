@@ -546,11 +546,11 @@ export function App() {
     window.localStorage.setItem(LAYOUT_SETTINGS_KEY, JSON.stringify(layoutSettings));
   }, [layoutSettings]);
 
-  // Reset scroll on tab change (and when entering/leaving the alerts page)
+  // Reset scroll on tab change (and when entering/leaving the alerts/trends pages)
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
     setScrolled(false);
-  }, [activeTab, alertsOpen]);
+  }, [activeTab, alertsOpen, trendsOpen]);
 
   const profilesById = useMemo(
     () => new Map(plantProfiles.map((p) => [p.id, p])),
@@ -940,7 +940,9 @@ export function App() {
   const bellButton = (
     <button
       className="gm-bell"
-      onClick={() => setAlertsOpen(true)}
+      // Close Trends first — the render checks `trendsOpen` before `alertsOpen`,
+      // so without this the bell appeared to do nothing while on the Trends page.
+      onClick={() => { setTrendsOpen(false); setAlertsOpen(true); }}
       aria-label={unreadAlertCount > 0 ? `Notifications — ${unreadAlertCount} new` : 'Notifications'}
     >
       🔔
@@ -978,22 +980,41 @@ export function App() {
   return (
     <div className="gm-app">
       {trendsOpen ? (
-        /* ── TRENDS & ANALYSIS — full page with its own header (no back button)
-              and the standard bottom nav below it. ─────────────────────────── */
+        /* ── TRENDS & ANALYSIS — standard app bar + scroll body + bottom nav,
+              matching every other main page. ──────────────────────────────── */
         <>
-          <TrendsDashboard
-            open={trendsOpen}
-            greenhouseId={ghId ?? ''}
-            greenhouseName={greenhouse?.name}
-            zones={resolvedZones}
-            profilesById={profilesById}
-            plantProfiles={plantProfiles}
-            simHistory={isSimulating ? simHistory : undefined}
-            activityLog={activityLog}
-            firestoreActivity={firestoreActivity}
-            onClose={() => setTrendsOpen(false)}
-            backRef={trendsBackRef}
-          />
+          <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
+            <div className="gm-brand">
+              <h1>
+                Trends &amp; Analysis <span style={{ fontSize: 20, lineHeight: 1 }}>📈</span>
+              </h1>
+              <small>{ghName}</small>
+            </div>
+            <div className="gm-header-actions">
+              {bellButton}
+              {avatarButton}
+            </div>
+          </header>
+          <div
+            className="gm-scroll"
+            ref={scrollRef}
+            onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
+          >
+            <TrendsDashboard
+              open={trendsOpen}
+              greenhouseId={ghId ?? ''}
+              greenhouseName={greenhouse?.name}
+              zones={resolvedZones}
+              profilesById={profilesById}
+              plantProfiles={plantProfiles}
+              simHistory={isSimulating ? simHistory : undefined}
+              activityLog={activityLog}
+              firestoreActivity={firestoreActivity}
+              onClose={() => setTrendsOpen(false)}
+              scrollRef={scrollRef}
+              backRef={trendsBackRef}
+            />
+          </div>
           {bottomNav}
         </>
       ) : alertsOpen ? (
@@ -1002,10 +1023,14 @@ export function App() {
         <>
           <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
             <button
-              className="gm-icon-btn"
               onClick={() => setAlertsOpen(false)}
               aria-label="Back"
-              style={{ fontSize: 20 }}
+              style={{
+                width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+                background: 'var(--primary-soft)', border: '1.5px solid var(--primary)',
+                color: 'var(--primary)', fontSize: 20, fontWeight: 800,
+                display: 'grid', placeItems: 'center', cursor: 'pointer',
+              }}
             >
               ←
             </button>
@@ -1095,7 +1120,6 @@ export function App() {
                 assignmentsLoaded={assignmentsLoaded}
                 simHistory={isSimulating ? simHistory : undefined}
                 firestoreProfileCount={firestoreProfileCount}
-                onOpenTrends={() => setTrendsOpen(true)}
               />
             )}
             {activeTab === 'greenhouse' && (
