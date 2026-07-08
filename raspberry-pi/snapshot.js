@@ -9,9 +9,9 @@
  *
  * Sanitizes all undefined → null so Firestore never rejects the write.
  * Classifies zones as inside/outside/unknown using zone_id conventions:
- *   inside  — starts with "GH" or contains "-GH-"
- *   outside — starts with "OUTDOOR" or contains "-OUTDOOR-"
- *   unknown — everything else (corn, pumpkin, shed beds, etc.)
+ *   inside  — contains "-INSIDE-"  (legacy: "GH"/"-GH-")
+ *   outside — contains "-OUTSIDE-" (legacy: "OUTDOOR"/"-OUTDOOR-")
+ *   unknown — everything else (shed beds, etc.)
  */
 
 const GREENHOUSE_NAMES = {
@@ -31,6 +31,9 @@ function nullify(val) {
 }
 
 function toFinite(val) {
+  // Treat null/undefined/'' as "no reading" → null. (Number(null) is 0, which
+  // would otherwise pull a disconnected 0°C/0% into averages.)
+  if (val === null || val === undefined || val === '') return null;
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
 }
@@ -43,15 +46,22 @@ function avg(values) {
 
 function classifyZone(zoneId) {
   const upper = (zoneId || '').toUpperCase();
-  if (upper.startsWith('GH') || upper.includes('-GH-')) return 'inside';
-  if (upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-')) return 'outside';
+  // New scheme: "-INSIDE-" / "-OUTSIDE-". Legacy GH / OUTDOOR kept for
+  // backward compatibility with older readings.
+  if (upper.includes('-INSIDE-') || upper.startsWith('GH') || upper.includes('-GH-')) return 'inside';
+  if (upper.includes('-OUTSIDE-') || upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-')) return 'outside';
   return 'unknown';
 }
 
 // ─── Zone normalization ───────────────────────────────────────────────────────
 
 function buildZoneSnapshot(rawZone) {
-  const moisture = toFinite(rawZone.soil_moisture_pct);
+  // Moisture sensor connection status from firmware. When the sensor is not
+  // connected (or invalid) the pct is forced null so it never counts toward
+  // averages or produces dry/wet status.
+  const moistureSensor = rawZone.soil_moisture_status || 'ok';
+  const moistureConnected = moistureSensor !== 'not_connected' && moistureSensor !== 'invalid';
+  const moisture = moistureConnected ? toFinite(rawZone.soil_moisture_pct) : null;
   const temp     = toFinite(rawZone.soil_temp_c);
   const locType  = classifyZone(rawZone.zone_id);
 
@@ -85,6 +95,7 @@ function buildZoneSnapshot(rawZone) {
     plant_name:      null,
     soil_moisture_raw: nullify(toFinite(rawZone.soil_moisture_raw)),
     soil_moisture_pct: moisture,
+    soil_moisture_status: moistureSensor,
     soil_temp_c:       temp,
     moisture_status:   moistureStatus,
     soil_temp_status:  rawZone.soil_temp_status || tempStatus,

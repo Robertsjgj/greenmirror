@@ -131,17 +131,16 @@ function bucketLabel(key: string, range: TimeRange): string {
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
 
-// Zone classification: inside = GH-prefix, outside = OUTDOOR-prefix
-// Handles both bare prefixes (real hardware: "GH-01", "OUTDOOR-01") and
-// compound IDs (simulation: "SYD-GH-LEFT-01", "SYD-OUTDOOR-05").
+// Zone classification. New scheme uses "-INSIDE-" / "-OUTSIDE-"; legacy GH /
+// OUTDOOR prefixes are still recognized so historical readings classify too.
 const isInsideZone = (zoneId: string): boolean => {
   const upper = (zoneId ?? '').toUpperCase();
-  return upper.startsWith('GH') || upper.includes('-GH-');
+  return upper.includes('-INSIDE-') || upper.startsWith('GH') || upper.includes('-GH-');
 };
 
 const isOutsideZone = (zoneId: string): boolean => {
   const upper = (zoneId ?? '').toUpperCase();
-  return upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-');
+  return upper.includes('-OUTSIDE-') || upper.startsWith('OUTDOOR') || upper.includes('-OUTDOOR-');
 };
 
 /** Collapse an array of LatestReading into bucketed TrendPoint[]. */

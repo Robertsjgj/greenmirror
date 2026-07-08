@@ -48,13 +48,15 @@ function moistureAlerts(zone: VisualZone, profile: PlantProfile | null): ZoneAle
   const label = zoneLabel(zone);
   const base = { zoneId: zone.visualLabel, nodeId: zone.nodeId, displayLabel: zone.displayLabel, zone };
 
-  if (pct < 0 || pct > 100) {
+  // Firmware reports 0–200% (values >100 = overwatered, not an error). Only
+  // values outside 0–200 indicate a damaged/miscalibrated sensor.
+  if (pct < 0 || pct > 200) {
     return [{
       ...base,
       id: `${zone.visualLabel}-moisture-invalid`,
       type: 'sensor' as const,
       severity: 'critical' as const,
-      title: 'Invalid moisture reading',
+      title: `Invalid moisture reading on ${label}`,
       message: `${label} reports ${pct}% — sensor may be damaged or miscalibrated.`,
       action: 'Check sensor wiring',
     }];
@@ -98,7 +100,7 @@ function moistureAlerts(zone: VisualZone, profile: PlantProfile | null): ZoneAle
       id: `${zone.visualLabel}-moisture-dry`,
       type: 'moisture' as const,
       severity: 'warning' as const,
-      title: 'Zone getting dry',
+      title: `${label} getting dry`,
       message: `${label} soil at ${pct}% — looking dry.`,
       action: 'Consider watering',
     }];
@@ -109,7 +111,7 @@ function moistureAlerts(zone: VisualZone, profile: PlantProfile | null): ZoneAle
       id: `${zone.visualLabel}-moisture-wet`,
       type: 'moisture' as const,
       severity: 'warning' as const,
-      title: 'Zone may be overwatered',
+      title: `${label} may be overwatered`,
       message: `${label} soil at ${pct}% — very wet.`,
       action: 'Check drainage',
     }];
@@ -133,7 +135,7 @@ function temperatureAlerts(zone: VisualZone, profile: PlantProfile | null): Zone
       id: `${zone.visualLabel}-temp-disconnect`,
       type: 'sensor' as const,
       severity: 'critical' as const,
-      title: 'Temperature sensor disconnected',
+      title: `Temperature sensor disconnected on ${label}`,
       message: `${label} returned −127°C — probe may be unplugged.`,
       action: 'Check sensor cable',
     }];
@@ -144,7 +146,7 @@ function temperatureAlerts(zone: VisualZone, profile: PlantProfile | null): Zone
       id: `${zone.visualLabel}-temp-power-on`,
       type: 'sensor' as const,
       severity: 'warning' as const,
-      title: 'Temperature sensor initialising',
+      title: `Temperature sensor initialising on ${label}`,
       message: `${label} returned 85°C — probe may still be warming up.`,
       action: 'Wait and recheck',
     }];
@@ -189,9 +191,25 @@ function sensorAlerts(zone: VisualZone): ZoneAlert[] {
   const label = zoneLabel(zone);
   const base = { zoneId: zone.visualLabel, nodeId: zone.nodeId, displayLabel: zone.displayLabel, zone };
 
+  const moistureNotConnected =
+    zone.soilMoistureStatus === 'not_connected' || zone.soilMoistureStatus === 'invalid';
+
   const tempMissing =
     zone.soilTempStatus === 'not_detected' ||
+    zone.soilTempStatus === 'not_connected' ||
     (zone.soilTempC === null && zone.soilTempStatus !== 'ok' && zone.soilTempStatus != null);
+
+  if (moistureNotConnected) {
+    alerts.push({
+      ...base,
+      id: `${zone.visualLabel}-sensor-moisture-missing`,
+      type: 'sensor' as const,
+      severity: 'warning' as const,
+      title: `Moisture sensor not connected on ${label}`,
+      message: `Moisture sensor not connected in ${label}.`,
+      action: 'Connect or check the soil moisture sensor',
+    });
+  }
 
   if (tempMissing) {
     alerts.push({
@@ -199,20 +217,21 @@ function sensorAlerts(zone: VisualZone): ZoneAlert[] {
       id: `${zone.visualLabel}-sensor-temp-missing`,
       type: 'sensor' as const,
       severity: 'warning' as const,
-      title: 'Temperature sensor not detected',
-      message: `${label} — no temperature probe responding.`,
-      action: 'Check sensor cable',
+      title: `Temperature sensor not connected on ${label}`,
+      message: `Temperature sensor not connected in ${label}.`,
+      action: 'Check the DS18B20 probe cable',
     });
   }
 
-  // Raw value present but percentage couldn't be computed = calibration issue
-  if (zone.soilMoisturePct === null && zone.soilMoistureRaw !== null) {
+  // Raw value present but percentage couldn't be computed while the sensor IS
+  // reported connected = calibration issue (not a disconnected sensor).
+  if (!moistureNotConnected && zone.soilMoisturePct === null && zone.soilMoistureRaw !== null) {
     alerts.push({
       ...base,
       id: `${zone.visualLabel}-sensor-moisture-calc`,
       type: 'sensor' as const,
       severity: 'warning' as const,
-      title: 'Moisture reading unavailable',
+      title: `Moisture reading unavailable on ${label}`,
       message: `${label} — moisture percentage could not be calculated from raw value.`,
       action: 'Check sensor calibration',
     });
@@ -238,7 +257,7 @@ function staleAlert(zone: VisualZone): ZoneAlert | null {
     displayLabel: zone.displayLabel,
     type: 'node',
     severity: critical ? 'critical' : 'warning',
-    title: critical ? 'Zone data is stale' : 'Zone data may be stale',
+    title: critical ? `${label} data is stale` : `${label} data may be stale`,
     message: `${label} last updated ${minutes}min ago — ESP node may be offline.`,
     action: 'Check ESP node power and WiFi',
     zone,

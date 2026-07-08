@@ -14,45 +14,45 @@ const Y = 1.90;
 
 const SYD_LAYOUT: Record<string, { x: number; y: number; w: number; h: number; shape: 'rect' | 'circle' }> = {
   // ── Left outdoor – squares at top ────────────────────────
-  'SYD-OUTDOOR-01': { x: 1,  y: 2,   w: 10, h: 10, shape: 'rect' },
-  'SYD-OUTDOOR-02': { x: 13, y: 2,   w: 10, h: 10, shape: 'rect' },
+  'SYD-OUTSIDE-01': { x: 1,  y: 2,   w: 10, h: 10, shape: 'rect' },
+  'SYD-OUTSIDE-02': { x: 13, y: 2,   w: 10, h: 10, shape: 'rect' },
   // ── Left outdoor – landscape beds (gap=8) ────────────────
-  'SYD-OUTDOOR-03': { x: 1,  y: 20,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-OUTDOOR-04': { x: 1,  y: 35,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-OUTDOOR-05': { x: 1,  y: 50,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-OUTDOOR-06': { x: 1,  y: 65,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-OUTDOOR-07': { x: 1,  y: 80,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-OUTDOOR-08': { x: 1,  y: 95,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-03': { x: 1,  y: 20,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-04': { x: 1,  y: 35,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-05': { x: 1,  y: 50,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-06': { x: 1,  y: 65,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-07': { x: 1,  y: 80,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-OUTSIDE-08': { x: 1,  y: 95,  w: 22, h: 7,  shape: 'rect' },
   // ── Left outdoor – portrait beds at bottom ────────────────
-  'SYD-OUTDOOR-09': { x: 1,  y: 110, w: 7,  h: 22, shape: 'rect' },
-  'SYD-OUTDOOR-10': { x: 16, y: 110, w: 7,  h: 22, shape: 'rect' },
+  'SYD-OUTSIDE-09': { x: 1,  y: 110, w: 7,  h: 22, shape: 'rect' },
+  'SYD-OUTSIDE-10': { x: 16, y: 110, w: 7,  h: 22, shape: 'rect' },
 
   // ── Greenhouse left – VEGGIES circles ────────────────────
-  'SYD-GH-LEFT-01': { x: 28, y: 3,   w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-LEFT-02': { x: 36, y: 3,   w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-LEFT-03': { x: 28, y: 14,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-LEFT-04': { x: 36, y: 14,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-LEFT-01': { x: 28, y: 3,   w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-LEFT-02': { x: 36, y: 3,   w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-LEFT-03': { x: 28, y: 14,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-LEFT-04': { x: 36, y: 14,  w: 7,  h: 7,  shape: 'circle' },
   // ── Greenhouse left – landscape beds (gap=8) ─────────────
-  'SYD-GH-LEFT-05': { x: 27, y: 33,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-06': { x: 27, y: 48,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-07': { x: 27, y: 63,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-08': { x: 27, y: 78,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-09': { x: 27, y: 93,  w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-10': { x: 27, y: 108, w: 22, h: 7,  shape: 'rect' },
-  'SYD-GH-LEFT-11': { x: 27, y: 123, w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-05': { x: 27, y: 33,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-06': { x: 27, y: 48,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-07': { x: 27, y: 63,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-08': { x: 27, y: 78,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-09': { x: 27, y: 93,  w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-10': { x: 27, y: 108, w: 22, h: 7,  shape: 'rect' },
+  'SYD-INSIDE-LEFT-11': { x: 27, y: 123, w: 22, h: 7,  shape: 'rect' },
 
   // ── Greenhouse mid – CUCUMBERS circles ───────────────────
-  'SYD-GH-MID-01':  { x: 58, y: 43,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-MID-02':  { x: 66, y: 43,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-MID-03':  { x: 58, y: 54,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-MID-04':  { x: 66, y: 54,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-MID-05':  { x: 58, y: 65,  w: 7,  h: 7,  shape: 'circle' },
-  'SYD-GH-MID-06':  { x: 66, y: 65,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-01':  { x: 58, y: 43,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-02':  { x: 66, y: 43,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-03':  { x: 58, y: 54,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-04':  { x: 66, y: 54,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-05':  { x: 58, y: 65,  w: 7,  h: 7,  shape: 'circle' },
+  'SYD-INSIDE-CENTER-06':  { x: 66, y: 65,  w: 7,  h: 7,  shape: 'circle' },
 
   // ── Greenhouse right – portrait beds (gap=8) ─────────────
-  'SYD-GH-RIGHT-01':{ x: 88, y: 3,   w: 7,  h: 22, shape: 'rect' },
-  'SYD-GH-RIGHT-02':{ x: 88, y: 33,  w: 7,  h: 22, shape: 'rect' },
-  'SYD-GH-RIGHT-03':{ x: 88, y: 63,  w: 7,  h: 22, shape: 'rect' },
+  'SYD-INSIDE-RIGHT-01':{ x: 88, y: 3,   w: 7,  h: 22, shape: 'rect' },
+  'SYD-INSIDE-RIGHT-02':{ x: 88, y: 33,  w: 7,  h: 22, shape: 'rect' },
+  'SYD-INSIDE-RIGHT-03':{ x: 88, y: 63,  w: 7,  h: 22, shape: 'rect' },
 
   // ── Corn – touching GH bottom, right side ────────────────
   'SYD-CORN-01':    { x: 78, y: 135, w: 20, h: 7,  shape: 'rect' },
@@ -62,8 +62,8 @@ const SYD_LAYOUT: Record<string, { x: number; y: number; w: number; h: number; s
   'SYD-PUMPKIN-02': { x: 10, y: 162, w: 7,  h: 20, shape: 'rect' },
 };
 
-const CLUSTER_VEGGIES = new Set(['SYD-GH-LEFT-01','SYD-GH-LEFT-02','SYD-GH-LEFT-03','SYD-GH-LEFT-04']);
-const CLUSTER_CUKES   = new Set(['SYD-GH-MID-01','SYD-GH-MID-02','SYD-GH-MID-03','SYD-GH-MID-04','SYD-GH-MID-05','SYD-GH-MID-06']);
+const CLUSTER_VEGGIES = new Set(['SYD-INSIDE-LEFT-01','SYD-INSIDE-LEFT-02','SYD-INSIDE-LEFT-03','SYD-INSIDE-LEFT-04']);
+const CLUSTER_CUKES   = new Set(['SYD-INSIDE-CENTER-01','SYD-INSIDE-CENTER-02','SYD-INSIDE-CENTER-03','SYD-INSIDE-CENTER-04','SYD-INSIDE-CENTER-05','SYD-INSIDE-CENTER-06']);
 
 // Small square beds have no room for labels.
 // All other beds (including portrait and pumpkin) get labels via the bed-level renderer.
@@ -161,7 +161,7 @@ export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewPr
           <div style={{ ...MAP_LABEL, left: '27%', width: '17%', top: `${22 / Y}%` }}>
             VEGGIES
           </div>
-          {/* CUCUMBERS: below last circle row (GH-MID-05/06 bottom=100) */}
+          {/* CUCUMBERS: below last circle row (INSIDE-CENTER-05/06 bottom=100) */}
           <div style={{ ...MAP_LABEL, left: '57%', width: '17%', top: `${73 / Y}%` }}>
             CUCUMBERS
           </div>
@@ -286,7 +286,7 @@ export function SydneyMapView({ zones, profilesById, onSelect }: SydneyMapViewPr
                     }}>
                       {label}
                     </div>
-                  ) : (zone.visualLabel === 'SYD-OUTDOOR-01' || zone.visualLabel === 'SYD-OUTDOOR-02') ? (
+                  ) : (zone.visualLabel === 'SYD-OUTSIDE-01' || zone.visualLabel === 'SYD-OUTSIDE-02') ? (
                     // Narrow square beds: continuous right-to-left marquee
                     <div style={{
                       ...HORIZ_LABEL,

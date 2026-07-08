@@ -3,9 +3,9 @@
 /**
  * Hardware simulator — runs inside server.js when USE_SIMULATION=true.
  *
- * Zone ID conventions (must match frontend classification):
- *   GH-NN-Z      — inside greenhouse zones  (nodes 01–10)
- *   OUTDOOR-NN-Z — outside / garden zones   (nodes 11–15)
+ * Zone IDs use the canonical scheme (must match the frontend zone registry):
+ *   SYD-INSIDE-LEFT/CENTER/RIGHT-NN — inside greenhouse zones
+ *   SYD-OUTSIDE-NN                  — outside / garden zones
  *
  * The first 5 inside nodes with index % 3 === 0 get 2 zones each.
  */
@@ -15,6 +15,14 @@ const UPDATE_INTERVAL_MS = 5000;
 function padNum(n) {
   return String(n).padStart(2, '0');
 }
+
+// Canonical zone-ID pools (kept in sync with mobile-app/src/zoneRegistry.ts).
+const INSIDE_ZONE_IDS = [
+  ...Array.from({ length: 11 }, (_, i) => `SYD-INSIDE-LEFT-${padNum(i + 1)}`),
+  ...Array.from({ length: 6 },  (_, i) => `SYD-INSIDE-CENTER-${padNum(i + 1)}`),
+  ...Array.from({ length: 3 },  (_, i) => `SYD-INSIDE-RIGHT-${padNum(i + 1)}`),
+];
+const OUTSIDE_ZONE_IDS = Array.from({ length: 10 }, (_, i) => `SYD-OUTSIDE-${padNum(i + 1)}`);
 
 function moisturePctToRaw(pct) {
   // Capacitive sensor: wetter = lower ADC value
@@ -27,17 +35,18 @@ function clamp(v, min, max) {
 
 /**
  * Build the initial node/zone list.
- * Nodes 0–9  → inside  (GH-01 … GH-10)
- * Nodes 10–14 → outside (OUTDOOR-01 … OUTDOOR-05)
+ * Nodes 0–9  → inside  (canonical SYD-INSIDE-* IDs)
+ * Nodes 10–14 → outside (canonical SYD-OUTSIDE-* IDs)
+ * Zone IDs are drawn in order from the canonical pools so each maps 1:1 to a
+ * registry bed (no duplicates).
  */
 function createInitialNodes(greenhouseId) {
   const NODE_COUNT = 15;
+  let insideIdx = 0;
+  let outsideIdx = 0;
 
   return Array.from({ length: NODE_COUNT }, (_, i) => {
-    const isOutside  = i >= 10;
-    const locationNum = isOutside ? (i - 9) : (i + 1);
-    const prefix      = isOutside ? 'OUTDOOR' : 'GH';
-    const numStr      = padNum(locationNum);
+    const isOutside = i >= 10;
 
     // Two zones for every third node, one for the rest
     const zoneCount = i % 3 === 0 ? 2 : 1;
@@ -48,10 +57,13 @@ function createInitialNodes(greenhouseId) {
       zones: Array.from({ length: zoneCount }, (__, zi) => {
         const baseMoisture = 35 + ((i * 7 + zi * 13) % 45);
         const baseTemp     = 16 + ((i * 3 + zi * 4)  % 12);
+        const zoneId = isOutside
+          ? OUTSIDE_ZONE_IDS[outsideIdx++ % OUTSIDE_ZONE_IDS.length]
+          : INSIDE_ZONE_IDS[insideIdx++ % INSIDE_ZONE_IDS.length];
 
         return {
-          zone_id:           `${prefix}-${numStr}-${zi + 1}`,
-          zone_name:         `${prefix}-${numStr}-${zi + 1}`,
+          zone_id:           zoneId,
+          zone_name:         zoneId,
           soil_moisture_raw: moisturePctToRaw(baseMoisture),
           soil_moisture_pct: baseMoisture,
           soil_temp_c:       baseTemp,

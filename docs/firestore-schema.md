@@ -14,6 +14,7 @@ All data is stored under top-level collections.  No deeply-nested sub-collection
 greenhouses/
 latestReadings/        ← overwritten on every reading (real-time listeners)
 readings/              ← append-only history
+readingsRollups/       ← pre-aggregated hourly/daily summaries (trends)
 nodes/
 zones/
 plantProfiles/
@@ -61,18 +62,24 @@ Frontend Firestore listeners subscribe to this for near-real-time updates.
 | `_savedAt`      | timestamp   | Firestore server timestamp on write      |
 | `zones`         | ZoneReading[] | Inline array (see below)               |
 
-**ZoneReading (inline)**
+**ZoneReading (inline)** — produced by `snapshot.js` (`buildZoneSnapshot`).
 
-| Field                | Type     | Description                    |
-|----------------------|----------|--------------------------------|
-| `zone_id`            | string   | Backend zone ID (e.g. `zone-01-1`) |
-| `node_id`            | string?  | Originating node               |
-| `greenhouse_id`      | string?  | Site identifier                |
-| `soil_moisture_raw`  | number?  | Raw ADC value                  |
-| `soil_moisture_pct`  | number?  | Normalised 0–100               |
-| `soil_temp_c`        | number?  | DS18B20 reading in °C          |
-| `soil_temp_status`   | string?  | `"ok"` / `"disconnected"` etc. |
-| `alerts`             | string[] | Backend-generated alert strings|
+| Field                  | Type     | Description                    |
+|------------------------|----------|--------------------------------|
+| `zone_id`              | string   | Backend zone ID (e.g. `SYD-INSIDE-LEFT-01`) |
+| `zone_name`            | string   | Display name (falls back to `zone_id`) |
+| `location_type`        | string   | `"inside"` / `"outside"` / `"unknown"` |
+| `node_id`              | string   | Originating node               |
+| `plant_profile_id`     | null     | Reserved (assignments live in `zoneAssignments`) |
+| `plant_name`           | null     | Reserved                       |
+| `soil_moisture_raw`    | number?  | Raw ADC value                  |
+| `soil_moisture_pct`    | number?  | Normalised 0–100; `null` when the sensor is not connected |
+| `soil_moisture_status` | string   | Sensor state from firmware: `"ok"` / `"not_connected"` / `"invalid"` |
+| `soil_temp_c`          | number?  | DS18B20 reading in °C          |
+| `moisture_status`      | string   | Derived: `"dry"` / `"ok"` / `"wet"` / `"unknown"` |
+| `soil_temp_status`     | string   | `"ok"` / `"low"` / `"high"` / `"not_detected"` / `"unknown"` |
+| `runoff_risk`          | string   | `"low"` / `"medium"` / `"high"` / `"unknown"` |
+| `alerts`               | string[] | Backend-generated alert strings|
 
 ---
 
@@ -87,6 +94,30 @@ query(collection(db, 'readings'), orderBy('timestamp', 'desc'), limit(100))
 ```
 
 **Pruning:** No automatic pruning implemented yet. Add a Cloud Function or scheduled deletion if this grows large.
+
+---
+
+### `readingsRollups/{auto-id}`
+
+Pre-aggregated summaries written by `rollups.js`, bucketed by UTC hour and UTC
+day. The frontend reads these (instead of raw `readings`) to draw trend charts
+cheaply. Each doc is shaped like a reading snapshot (`greenhouse_id`, `timestamp`,
+`zones[]`, `environment`, `external_weather`, `summary`, `system`) with
+`mode = "rollup"`, plus the rollup-specific fields below.
+
+| Field                      | Type    | Description                                  |
+|----------------------------|---------|----------------------------------------------|
+| `period`                   | string  | `"hourly"` or `"daily"`                       |
+| `bucket_start`             | string  | ISO-8601 start of the bucket (UTC)           |
+| `bucket_end`               | string  | ISO-8601 end of the bucket (UTC)             |
+| `timestamp`                | string  | Equals `bucket_start` (used for range queries)|
+| `sample_count`             | number  | Readings aggregated into the bucket          |
+| `avg_moisture`             | number? | Average soil moisture %                      |
+| `avg_soil_temp`            | number? | Average soil temperature °C                  |
+| `min_moisture`             | number? | Minimum soil moisture % in the bucket        |
+| `max_moisture`             | number? | Maximum soil moisture % in the bucket        |
+| `watering_count`           | number? | Watering events (daily only; `null` hourly)  |
+| `zones_needing_attention`  | number  | Zones with alerts in the bucket              |
 
 ---
 
@@ -112,7 +143,7 @@ One document per physical zone.  Document ID = `{greenhouseId}__{visualLabel}`.
 | Field           | Type    | Description                               |
 |-----------------|---------|-------------------------------------------|
 | `greenhouseId`  | string  | Parent greenhouse                         |
-| `visualLabel`   | string  | Stable physical ID (e.g. `SYD-GH-LEFT-01`)|
+| `visualLabel`   | string  | Stable physical ID (e.g. `SYD-INSIDE-LEFT-01`)|
 | `displayLabel`  | string? | Human label shown in UI                   |
 | `rowLabel`      | string  | Row grouping (e.g. `"A"`, `"Left"`)       |
 | `nodeId`        | string? | Assigned ESP node                         |
@@ -156,8 +187,8 @@ Example:
 ```json
 {
   "assignments": {
-    "SYD-GH-LEFT-05": "tomato",
-    "SYD-GH-MID-01": "cucumber"
+    "SYD-INSIDE-LEFT-05": "tomato",
+    "SYD-INSIDE-CENTER-01": "cucumber"
   }
 }
 ```
@@ -233,20 +264,23 @@ Human-readable activity feed (mirrors localStorage `greenmirror-activity-log`).
 
 ## Indexes required
 
-Firestore will prompt for composite index creation when queries first run.
-Expected indexes:
+Composite indexes are defined in [`firestore.indexes.json`](../firestore.indexes.json)
+(repo root) and deployed via `firebase.json`:
 
-| Collection    | Fields                                  | Order |
-|---------------|-----------------------------------------|-------|
-| `readings`    | `timestamp` DESC                        | DESC  |
-| `readings`    | `greenhouse_id` ASC, `timestamp` DESC   | —     |
-| `wateringEvents` | `greenhouseId` ASC, `timestamp` DESC | —     |
-| `activityLogs` | `greenhouseId` ASC, `timestamp` DESC  | —     |
-| `alerts`      | `greenhouseId` ASC, `resolved` ASC, `createdAt` DESC | — |
+| Collection        | Fields                                              |
+|-------------------|-----------------------------------------------------|
+| `activityLogs`    | `greenhouseId` ASC, `timestamp` DESC                |
+| `wateringEvents`  | `greenhouseId` ASC, `timestamp` DESC                |
+| `readings`        | `greenhouse_id` ASC, `timestamp` DESC               |
+| `readingsRollups` | `greenhouse_id` ASC, `period` ASC, `timestamp` DESC |
 
 ---
 
 ## Security rules (starter — tighten before production)
+
+The live rules are in [`firestore.rules`](../firestore.rules) (repo root) and
+deployed via `firebase.json`. They are currently the permissive starter below —
+replace with auth-based rules before any public deployment.
 
 ```javascript
 rules_version = '2';
@@ -266,17 +300,32 @@ service cloud.firestore {
 
 ```
 ESP firmware  →  POST /api/readings  →  server.js
-                                          ├── in-memory (existing)
+                                          ├── in-memory snapshot
                                           └── Firestore:
-                                               ├── readings/{auto}        (history)
-                                               └── latestReadings/{ghId}  (real-time)
+                                               ├── latestReadings/{ghId}    (real-time)
+                                               ├── readings/{auto}          (history)
+                                               └── readingsRollups/{auto}   (hourly/daily trends)
 
-Simulator     →  onSystemState()    →  server.js
-                                          └── same Firestore writes
+Simulator     →  onSystemState()      →  server.js  →  same Firestore writes
 
-Frontend      →  GET /api/latest    →  polling every 8 s (existing)
-              →  Firestore listener →  latestReadings/{ghId} (supplemental)
+Frontend      →  GET /api/latest          →  live readings (local/LAN dev, polled every 8 s)
+              →  Firestore listeners       →  latestReadings/{ghId} (real-time, when Firebase configured)
+              →  Firestore readingsRollups →  trend charts
 ```
 
-The frontend uses API polling as the primary data source.  
-Firestore listeners are supplemental and can coexist or replace polling in a future phase.
+Live data is served from the Raspberry Pi Backend API during local/LAN
+development; in production the Vercel Frontend reads from Firestore. Firestore
+writes are throttled in `firestore.js` to protect free-tier quota.
+
+---
+
+**Last updated:** June 2026
+
+**Current architecture:**
+✓ ESP32 WiFiManager provisioning ·
+✓ Raspberry Pi Backend ·
+✓ PM2 deployment ·
+✓ Firebase Firestore ·
+✓ Vercel Frontend
+
+Part of [GreenMirror](../README.md).

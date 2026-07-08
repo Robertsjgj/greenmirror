@@ -19,6 +19,7 @@ import type { TimeRange } from './hooks/useReadingsHistory';
 import type { LatestReading, VisualZone, ZoneReading } from './zoneLayout';
 import type { PlantProfile } from './plantProfiles';
 import type { ActivityEntry } from './activityLog';
+import { getZoneArea, getZoneDisplayName } from './zoneRegistry';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -40,22 +41,24 @@ const MOCK_PLANTS: PlantProfile[] = [
   { id: 'carrot',  name: 'Carrot',  icon: '🥕', moistureMin: 35, moistureMax: 60, soilTempMin: 8,  soilTempMax: 24, isDefault: true },
 ];
 
-interface ZoneDef { id: string; label: string; plant: string | null; }
+interface ZoneDef { id: string; plant: string | null; }
 
+// Canonical zone IDs (see zoneRegistry). Display names come from the registry.
 const MOCK_ZONE_DEFS: ZoneDef[] = [
-  { id: 'GH-LEFT-01',  label: 'GH Left 01',  plant: 'tomato'  },
-  { id: 'GH-LEFT-02',  label: 'GH Left 02',  plant: 'tomato'  },
-  { id: 'GH-LEFT-03',  label: 'GH Left 03',  plant: 'lettuce' },
-  { id: 'GH-MID-01',   label: 'GH Mid 01',   plant: 'pepper'  },
-  { id: 'GH-MID-02',   label: 'GH Mid 02',   plant: 'pepper'  },
-  { id: 'GH-MID-03',   label: 'GH Mid 03',   plant: 'lettuce' },
-  { id: 'GH-RIGHT-01', label: 'GH Right 01', plant: 'carrot'  },
-  { id: 'GH-RIGHT-02', label: 'GH Right 02', plant: 'carrot'  },
-  { id: 'OUTDOOR-01',  label: 'Outdoor 01',  plant: 'tomato'  },
-  { id: 'OUTDOOR-02',  label: 'Outdoor 02',  plant: null      },
+  { id: 'SYD-INSIDE-LEFT-01',   plant: 'tomato'  },
+  { id: 'SYD-INSIDE-LEFT-02',   plant: 'tomato'  },
+  { id: 'SYD-INSIDE-LEFT-03',   plant: 'lettuce' },
+  { id: 'SYD-INSIDE-CENTER-01', plant: 'pepper'  },
+  { id: 'SYD-INSIDE-CENTER-02', plant: 'pepper'  },
+  { id: 'SYD-INSIDE-CENTER-03', plant: 'lettuce' },
+  { id: 'SYD-INSIDE-RIGHT-01',  plant: 'carrot'  },
+  { id: 'SYD-INSIDE-RIGHT-02',  plant: 'carrot'  },
+  { id: 'SYD-OUTSIDE-01',       plant: 'tomato'  },
+  { id: 'SYD-OUTSIDE-02',       plant: null      },
 ];
 
-const isOutdoor = (id: string) => id.startsWith('OUTDOOR');
+const zoneLabel = (id: string) => getZoneDisplayName(id);
+const isOutdoor = (id: string) => getZoneArea(id) === 'outside';
 
 // Per-zone physics parameters, derived deterministically from the index so the
 // dataset is stable across re-renders and across ranges.
@@ -131,8 +134,8 @@ export function genMockDataset(range: TimeRange, greenhouseId = 'sample-greenhou
     return {
       id: z.id,
       visualLabel: z.id,
-      displayLabel: z.label,
-      rowLabel: z.label.split(' ').slice(0, 2).join(' '),
+      displayLabel: zoneLabel(z.id),
+      rowLabel: isOutdoor(z.id) ? 'Outdoor' : 'Greenhouse',
       rowIndex: i,
       section: i,
       backendZoneId: z.id,
@@ -158,7 +161,7 @@ export function genMockDataset(range: TimeRange, greenhouseId = 'sample-greenhou
     const t = now - (N - 1 - s) * step;
     const zoneReadings: ZoneReading[] = MOCK_ZONE_DEFS.map((z, i) => ({
       zone_id: z.id,
-      zone_name: z.label,
+      zone_name: zoneLabel(z.id),
       location_type: isOutdoor(z.id) ? 'outside' : 'inside',
       soil_moisture_pct: moistureAt(t, i, params[i]),
       soil_temp_c: soilTempAt(t, i, isOutdoor(z.id)),
@@ -194,7 +197,7 @@ export function genMockDataset(range: TimeRange, greenhouseId = 'sample-greenhou
         backendZoneId: z.id,
         plantName: plant?.name,
         amountMl: 200 + (k % 3) * 80,
-        message: `Watered ${z.label}${plant ? ` (${plant.name})` : ''}`,
+        message: `Watered ${zoneLabel(z.id)}${plant ? ` (${plant.name})` : ''}`,
         timestamp: new Date(wt).toISOString(),
         source: k % 4 === 0 ? 'manual' : 'system',
       });

@@ -1,6 +1,31 @@
 # GreenMirror Mobile App
 
-React/Vite frontend for the GreenMirror greenhouse dashboard. Mobile-first, responsive on desktop, installable as a PWA.
+React/Vite frontend for the GreenMirror greenhouse dashboard. Mobile-first,
+responsive on desktop, and installable as a PWA. Part of the
+[GreenMirror project](../README.md).
+
+## Backend connection (automatic)
+
+The app derives the backend URL at runtime from the host that served it, always
+targeting port `5000`:
+
+| Opened from | Backend used |
+|---|---|
+| `http://localhost:5174` | `http://localhost:5000` |
+| `http://10.9.1.96:5174` | `http://10.9.1.96:5000` |
+| `http://192.168.1.42:5174` | `http://192.168.1.42:5000` |
+
+This works on any network with no configuration. There is **no manual override**:
+`VITE_API_BASE_URL` is consulted only as a non-browser (SSR/build) fallback and is
+**ignored in the browser**, so runtime detection always wins. This prevents
+stale-IP bugs after a network change.
+
+**Where data comes from:**
+
+- **Local/LAN development** — live readings are polled from the backend API
+  (`GET /api/latest`, every 8 s) on the same host.
+- **Production (Vercel)** — the backend is not on the same host, so the app reads
+  live state, history, and trends from **Firestore** (configure Firebase below).
 
 ## Local development
 
@@ -9,49 +34,29 @@ npm install
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-**No IP configuration needed.** The app detects the backend automatically at runtime using `window.location.hostname` — it always targets port `5000` on the same host that served the frontend.
+Open the printed local or LAN URL. To test on a phone, open the LAN URL on a
+device on the same Wi-Fi. Start the backend too — see
+[raspberry-pi/README.md](../raspberry-pi/README.md).
 
-| Opened from | Backend used |
-|---|---|
-| `http://localhost:5174` | `http://localhost:5000` |
-| `http://10.9.1.96:5174` | `http://10.9.1.96:5000` |
-| `http://192.168.1.42:5174` | `http://192.168.1.42:5000` |
+## Firebase configuration (optional)
 
-This works on any network without editing any files.
+Firestore sync is optional. Without it the app works via API polling alone. To
+enable real-time Firestore sync (and data in production), copy `.env.example` to
+`.env.local` and fill in your Firebase web-app credentials:
 
-## Phone testing on local Wi-Fi
-
-1. Start the backend (prints its LAN IP at startup):
-   ```bash
-   USE_SIMULATION=true node server.js
-   ```
-2. Start the frontend exposed on the network:
-   ```bash
-   npm run dev -- --host 0.0.0.0 --port 5174
-   ```
-3. Open the LAN URL from Vite's output on your phone, for example:
-   ```
-   http://10.9.1.96:5174
-   ```
-
-The app will automatically connect to the backend at `http://10.9.1.96:5000`. Phone and computer must be on the same Wi-Fi.
-
-## Manual override
-
-Only needed if the backend runs on a **different machine** than the frontend:
-
-```bash
-# bash / macOS / Linux
-VITE_API_BASE_URL=http://192.168.1.10:5000 npm run dev
+```ini
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+VITE_FIREBASE_MEASUREMENT_ID=   # optional
 ```
 
-```powershell
-# Windows PowerShell
-$env:VITE_API_BASE_URL="http://192.168.1.10:5000"
-npm run dev -- --host 0.0.0.0 --port 5174
-```
-
-`VITE_API_BASE_URL` is a build-time Vite variable. When set, it takes priority over the automatic detection.
+Find these in Firebase Console → Project settings → Your apps → Web app.
+`.env.local` is git-ignored and never committed. The data model is documented in
+[docs/firestore-schema.md](../docs/firestore-schema.md).
 
 ## Production build
 
@@ -59,11 +64,38 @@ npm run dev -- --host 0.0.0.0 --port 5174
 npm run build
 ```
 
-For a production build targeting a fixed backend address, set `VITE_API_BASE_URL` before building. Otherwise the auto-detection logic will be included and will work as long as both frontend and backend are served from the same hostname.
+Output goes to `dist/` and includes the PWA manifest, theme/meta tags, a simple
+shell-caching service worker, and safe-area viewport support.
 
-The production app includes:
+## Vercel deployment
 
-- `manifest.json` for install metadata
-- theme color and mobile web app meta tags
-- a simple service worker for shell caching
-- safe-area viewport support for mobile devices
+The frontend is hosted on Vercel (connect the repo; deploys run on push).
+
+- **Build command:** `npm run build`
+- **Output directory:** `dist`
+- **Environment variables:** set the `VITE_FIREBASE_*` variables (above) in the
+  Vercel project settings so the production app can read from Firestore.
+
+For the backend deployment, see
+[deployment/raspberry-pi/README.md](../deployment/raspberry-pi/README.md).
+
+## Troubleshooting
+
+| Problem | Check |
+|---------|-------|
+| Frontend shows stale or no data | **Local/LAN dev:** the Raspberry Pi Backend is running and reachable on the same host at port `5000`. **Production:** the `VITE_FIREBASE_*` variables are set in Vercel and Firestore `latestReadings` is updating |
+| Console warns `VITE_API_BASE_URL is ... IGNORED` | Expected — runtime detection is used in the browser by design |
+| No real-time updates in production | Firebase not configured — set the `VITE_FIREBASE_*` variables (above) in Vercel |
+
+---
+
+**Last updated:** June 2026
+
+**Current architecture:**
+✓ ESP32 WiFiManager provisioning ·
+✓ Raspberry Pi Backend ·
+✓ PM2 deployment ·
+✓ Firebase Firestore ·
+✓ Vercel Frontend
+
+Part of [GreenMirror](../README.md).

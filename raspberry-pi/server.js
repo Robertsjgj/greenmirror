@@ -1,5 +1,8 @@
-// Load .env FIRST — must happen before any other require() reads process.env
-require('dotenv').config();
+// Load .env defensively — the bootstrap (index.js) loads it first, but server.js
+// also reads process.env at import time, so loading it here too means requiring
+// this module directly still works. Resolved from this file's own directory (not
+// process.cwd()) so the same raspberry-pi/.env is used regardless of cwd.
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 const express = require("express");
 const cors    = require("cors");
@@ -9,6 +12,8 @@ const { createSimulator, UPDATE_INTERVAL_MS } = require("./simulator");
 const { saveReading, firestoreEnabled }        = require("./firestore");
 const { buildGreenhouseReadingSnapshot }        = require("./snapshot");
 const { getWeatherCached }                      = require("./weather");
+const { recordNodeReading, NODE_STALE_TIMEOUT_MS } = require("./aggregator");
+const { getEnvironmentCached }                  = require("./services/environment");
 
 function getLanIp() {
   for (const nets of Object.values(os.networkInterfaces())) {
@@ -36,11 +41,22 @@ let readingsHistory  = [];
 
 function analyzeZone(zone) {
   const alerts = [];
-  if (typeof zone.soil_moisture_pct === 'number') {
+
+  // Sensor-status alerts take priority — a disconnected sensor must NOT produce
+  // dry/wet/watering alerts (its reading isn't real).
+  const moistureDisconnected =
+    zone.soil_moisture_status === 'not_connected' || zone.soil_moisture_status === 'invalid';
+  const tempDisconnected =
+    zone.soil_temp_status === 'not_detected' || zone.soil_temp_status === 'not_connected';
+
+  if (moistureDisconnected) alerts.push('moisture sensor not connected');
+  if (tempDisconnected)     alerts.push('temperature sensor not connected');
+
+  if (!moistureDisconnected && typeof zone.soil_moisture_pct === 'number') {
     if (zone.soil_moisture_pct < 30) alerts.push("too dry");
     if (zone.soil_moisture_pct > 80) alerts.push("too wet");
   }
-  if (typeof zone.soil_temp_c === 'number' && zone.soil_temp_c < 10) {
+  if (!tempDisconnected && typeof zone.soil_temp_c === 'number' && zone.soil_temp_c < 10) {
     alerts.push("too cold");
   }
   return alerts;
@@ -61,9 +77,19 @@ async function buildSnapshot(rawReading, mode) {
     alerts: analyzeZone(z),
   }));
 
-  // RPi environment sensor (live mode: from request body; sim mode: from simulator)
-  // In live mode, if no environment fields arrive, source becomes 'unavailable'.
-  const rawEnv = rawReading.environment || null;
+  // RPi environment sensor.
+  // Live mode: prefer an ESP-provided environment; otherwise fall back to the
+  // Raspberry Pi's own DHT sensor (cached, read in the background — never blocks
+  // this POST). We only adopt a cached reading that actually carries a value, so
+  // a disabled/stale sensor cleanly falls back to source 'unavailable' (unchanged
+  // behavior). Sim mode: environment is generated below.
+  let rawEnv = rawReading.environment || null;
+  if (!rawEnv && mode !== 'simulation') {
+    const cachedEnv = getEnvironmentCached();
+    if (cachedEnv && (cachedEnv.air_temp_c !== null || cachedEnv.humidity_pct !== null)) {
+      rawEnv = cachedEnv;
+    }
+  }
   let environment = null;
   if (rawEnv) {
     environment = {
@@ -95,8 +121,11 @@ async function buildSnapshot(rawReading, mode) {
   const externalWeather = await getWeatherCached(GREENHOUSE_ID);
 
   // System status
-  const nodeIds    = new Set((rawZones).map(z => z.node_id).filter(Boolean));
-  const nodeCount  = rawReading.node_count || nodeIds.size;
+  // Prefer per-zone node_id (firmware sends it on every zone). Fall back to a
+  // top-level node_id so older/simpler payloads still count as one node online.
+  const nodeIds = new Set(rawZones.map(z => z.node_id).filter(Boolean));
+  if (nodeIds.size === 0 && rawReading.node_id) nodeIds.add(rawReading.node_id);
+  const nodeCount = rawReading.node_count || nodeIds.size;
   const system     = {
     rpi_online:         true,
     esp_nodes_online:   nodeCount,
@@ -123,17 +152,62 @@ app.get("/", (req, res) => {
   res.send("GreenMirror Pi API running");
 });
 
-// Receive ESP sensor data
+// Receive ESP sensor data.
+//
+// Multiple ESP nodes POST independently, each with its own 1–2 zones. Rather than
+// overwrite latestReadings with the last node to post, we merge the latest zones
+// from every ACTIVE node into one snapshot per greenhouse (see aggregator.js), so
+// the dashboard shows all beds. The POST payload format is unchanged.
 app.post("/api/readings", async (req, res) => {
-  console.log("📡 Received data from ESP:", JSON.stringify(req.body, null, 2));
   try {
+    const body         = req.body || {};
+    const greenhouseId = body.greenhouse_id || GREENHOUSE_ID;
+    const rawZones     = Array.isArray(body.zones) ? body.zones : [];
+    const nodeId       = body.node_id
+      || (rawZones.find(z => z && z.node_id) || {}).node_id
+      || "unknown-node";
+
+    console.log(`📡 Received from node: ${nodeId} · ${rawZones.length} zone(s) · greenhouse ${greenhouseId}`);
+
+    // Merge this node's zones with all other currently-active nodes.
+    const agg = recordNodeReading({
+      greenhouseId,
+      nodeId,
+      zones: rawZones,
+      environment: body.environment || null,
+    });
+
+    // Warn on zone_id collisions between active nodes (their beds would overlap).
+    for (const dup of agg.duplicateZoneIds) {
+      console.warn(
+        `[aggregator] ⚠️  duplicate zone_id "${dup.zone_id}" reported by nodes [${dup.nodes.join(', ')}] — ` +
+        `these beds collide on the dashboard. Give each ESP unique zone IDs.`,
+      );
+    }
+
+    // Build the combined snapshot from ALL active nodes' zones.
     latestReading = await buildSnapshot(
-      { ...req.body, timestamp: new Date().toISOString() },
+      {
+        greenhouse_id: greenhouseId,
+        zones:         agg.combinedZones,
+        environment:   agg.environment,
+        node_count:    agg.activeNodeCount,
+        timestamp:     new Date().toISOString(),
+      },
       "live",
     );
     readingsHistory.push(latestReading);
     if (firestoreEnabled) saveReading(latestReading);
+
+    console.log(
+      `[aggregator] active nodes=${agg.activeNodeCount} [${agg.activeNodeIds.join(', ')}] · ` +
+      `combined zones=${agg.combinedZones.length}` +
+      (agg.staleRemoved.length
+        ? ` · stale removed=${agg.staleRemoved.length} [${agg.staleRemoved.join(', ')}]`
+        : ''),
+    );
     console.log('[server] latestReadings write:', latestReading.greenhouse_id, '·', latestReading.zones.length, 'zones');
+
     res.status(200).json({ status: "ok" });
   } catch (err) {
     console.error('[server] Failed to build reading snapshot:', err.message);
@@ -179,10 +253,18 @@ if (USE_SIMULATION) {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, "0.0.0.0", () => {
-  const lan = getLanIp();
-  console.log(`🚀 GreenMirror API ready`);
-  console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
-  console.log(`   Local:      http://localhost:${PORT}`);
-  console.log(`   Network:    http://${lan}:${PORT}`);
-});
+// Start the API server. Called by the app bootstrap (index.js) — this module no
+// longer listens on require, so startup orchestration (backend + provisioning +
+// future services) lives in one place without changing any API logic above.
+function start() {
+  return app.listen(PORT, "0.0.0.0", () => {
+    const lan = getLanIp();
+    console.log(`🚀 GreenMirror API ready`);
+    console.log(`   Greenhouse: ${GREENHOUSE_ID}`);
+    console.log(`   Local:      http://localhost:${PORT}`);
+    console.log(`   Network:    http://${lan}:${PORT}`);
+    console.log(`   Multi-node: merging active ESP nodes; stale after ${NODE_STALE_TIMEOUT_MS / 1000}s`);
+  });
+}
+
+module.exports = { app, start };

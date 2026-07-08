@@ -48,7 +48,9 @@ export interface ChartSeries {
   unit?: string;
   data: ChartPoint[];
 }
-export interface ChartPoint { value: number; t: number; }
+// value may be null when a reading is missing (e.g. sensor/ESP not connected).
+// The chart then leaves a gap instead of dropping the line to 0.
+export interface ChartPoint { value: number | null; t: number; }
 export interface AxisTick { t: number; label: string; }
 export interface Band { from: number; to: number; color: string; }
 
@@ -124,13 +126,17 @@ export function LineChart({
         })}
         {series.map((s) => {
           const yf = s.axis === 'R' ? yR : yL;
-          const pts = s.data.map((d) => ({ x: xAt(d.t), y: yf(d.value) }));
+          // Skip missing points (null) but keep ONE continuous line — connect
+          // the last available reading straight to the next available one.
+          const pts = s.data
+            .filter((d) => d.value != null && isFinite(d.value))
+            .map((d) => ({ x: xAt(d.t), y: yf(d.value as number) }));
           return <path key={s.key} d={smoothPath(pts)} fill="none" stroke={s.color} strokeWidth={s.width || 2.4}
             strokeLinecap="round" strokeLinejoin="round" strokeDasharray={s.dashed ? '5 4' : undefined} opacity={s.faint ? 0.4 : 1} />;
         })}
         {dots && series.map((s) => s.faint ? null : (
           <g key={'d' + s.key}>
-            {s.data.map((d, i) => (
+            {s.data.map((d, i) => (d.value == null || !isFinite(d.value)) ? null : (
               <circle key={i} cx={xAt(d.t)} cy={(s.axis === 'R' ? yR : yL)(d.value)} r="2.6" fill="#fff" stroke={s.color} strokeWidth="1.8" />
             ))}
           </g>
@@ -141,24 +147,30 @@ export function LineChart({
             {series.map((s) => {
               const yf = s.axis === 'R' ? yR : yL;
               const pt = s.data[hover];
-              if (!pt) return null;
+              if (!pt || pt.value == null || !isFinite(pt.value)) return null;
               return <circle key={'h' + s.key} cx={xAt(pt.t)} cy={yf(pt.value)} r="3.2" fill="#fff" stroke={s.color} strokeWidth="2" />;
             })}
           </g>
         )}
       </svg>
       {hover != null && ref[hover] && (
-        <div style={{ position: 'absolute', top: 0, left: `${(xAt(ref[hover].t) / W) * 100}%`, transform: `translateX(${hover > n / 2 ? '-105%' : '5%'})`,
+        /* Card shows on the OPPOSITE side of the tapped point: tap right → card
+           left, tap left → card right (based on the point's x position). */
+        <div style={{ position: 'absolute', top: 0, left: `${(xAt(ref[hover].t) / W) * 100}%`, transform: `translateX(${xAt(ref[hover].t) > W / 2 ? '-105%' : '5%'})`,
           background: '#fff', border: '1.5px solid var(--line)', borderRadius: 10, padding: '6px 9px', boxShadow: '0 6px 16px rgba(0,0,0,.1)',
           fontSize: 10.5, fontWeight: 800, pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 5 }}>
           {tipLabel && <div style={{ color: 'var(--ink-3)', fontSize: 9, marginBottom: 3 }}>{tipLabel(ref[hover].t)}</div>}
-          {series.map((s) => s.data[hover] ? (
-            <div key={'tt' + s.key} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block' }} />
-              <span style={{ color: 'var(--ink-2)' }}>{s.name}</span>
-              <span style={{ color: s.color, marginLeft: 'auto' }}>{s.data[hover].value}{s.unit ?? (s.axis === 'R' ? '°' : '%')}</span>
-            </div>
-          ) : null)}
+          {series.map((s) => {
+            const pt = s.data[hover];
+            if (!pt || pt.value == null) return null;
+            return (
+              <div key={'tt' + s.key} style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: s.color, display: 'inline-block' }} />
+                <span style={{ color: 'var(--ink-2)' }}>{s.name}</span>
+                <span style={{ color: s.color, marginLeft: 'auto' }}>{pt.value}{s.unit ?? (s.axis === 'R' ? '°' : '%')}</span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -247,7 +259,9 @@ export function BarsChart({ data, valueKey, color = '#0ea5e9', unit = 'ml', heig
         })}
       </svg>
       {hover != null && data[hover] && (
-        <div style={{ position: 'absolute', top: 2, left: `${((padL + step * hover + step / 2) / W) * 100}%`, transform: 'translateX(-50%)',
+        /* Card shows on the OPPOSITE side of the tapped bar (right → left, left → right). */
+        <div style={{ position: 'absolute', top: 2, left: `${((padL + step * hover + step / 2) / W) * 100}%`,
+          transform: `translateX(${(padL + step * hover + step / 2) > W / 2 ? '-100%' : '0%'})`,
           background: '#fff', border: '1.5px solid var(--line)', borderRadius: 9, padding: '4px 8px', fontSize: 10, fontWeight: 800,
           boxShadow: '0 4px 12px rgba(0,0,0,.1)', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
           <span style={{ color: 'var(--ink-3)' }}>{lbl(data[hover])} · </span>
@@ -272,6 +286,22 @@ export function RangePicker({ value, onChange }: { value: string; onChange: (v: 
         }}>{lbl}</button>
       ))}
     </div>
+  );
+}
+
+// Consistent big, legible "← Back" pill used across Trends / Zones / Plants.
+export function BackButton({ label = 'Back', onClick }: { label?: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} aria-label={label} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 8,
+      alignSelf: 'flex-start',   // don't stretch to full width inside flex columns
+      padding: '10px 18px 10px 14px', borderRadius: 999,
+      background: 'var(--primary-soft)', border: '1.5px solid var(--primary)',
+      color: 'var(--primary)', fontWeight: 800, fontSize: 15.5, fontFamily: 'inherit',
+      cursor: 'pointer', boxShadow: 'var(--shadow-sm)',
+    }}>
+      <span style={{ fontSize: 19, lineHeight: 1 }}>←</span> {label}
+    </button>
   );
 }
 
