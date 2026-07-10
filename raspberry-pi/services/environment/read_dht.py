@@ -31,7 +31,7 @@ def read_circuitpython(gpio, sensor):
     import adafruit_dht
 
     pin = getattr(board, "D%d" % gpio)
-    device = adafruit_dht.DHT22(pin) if sensor == "dht22" else adafruit_dht.DHT11(pin)
+    device = (adafruit_dht.DHT22(pin, use_pulseio=False) if sensor == "dht22" else adafruit_dht.DHT11(pin, use_pulseio=False))
     try:
         last_err = None
         # DHT sensors routinely fail a read with a transient RuntimeError; retry.
