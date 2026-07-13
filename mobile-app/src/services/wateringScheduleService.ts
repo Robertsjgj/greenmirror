@@ -12,6 +12,10 @@ import {
 } from "firebase/firestore";
 import { getDb } from "./firebase";
 import type { LatestReading, VisualZone } from "../zoneLayout";
+import type { WateringVerificationStatus } from "./wateringVerificationCore";
+
+// Re-export so existing importers can get the status type from this service.
+export type { WateringVerificationStatus } from "./wateringVerificationCore";
 
 const WATERING_TIME_ZONE = "America/Halifax";
 const DEFAULT_HOSE_FLOW_RATE_LPM = 8;
@@ -54,6 +58,13 @@ export interface WateringRound {
   completedAt?: string | null;
   completedBy?: string | null;
   completedByName?: string | null;
+
+  // ── Sensor-verification (Phase 1) ────────────────────────────────────────
+  // Explicit lifecycle state. Optional so legacy rounds (completed boolean only)
+  // keep working; when absent, treat via normalizeRoundVerificationStatus().
+  status?: WateringVerificationStatus;
+  // When the user tapped "Watered" (ISO). Distinct from completedAt for clarity.
+  markedWateredAt?: string | null;
 }
 
 export interface WateringBedTask {
@@ -744,10 +755,14 @@ export async function markWateringRoundComplete(
     round.id === roundId
       ? {
           ...round,
+          // `completed` retained for backward compatibility with existing UI/docs.
           completed: true,
           completedAt: now,
           completedBy: user.uid,
           completedByName: user.displayName,
+          // New verification lifecycle: a tap means "pending", NOT "verified".
+          status: "pending_verification" as WateringVerificationStatus,
+          markedWateredAt: now,
         }
       : round,
   );

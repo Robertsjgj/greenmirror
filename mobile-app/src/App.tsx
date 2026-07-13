@@ -55,6 +55,10 @@ import {
 } from "./plantProfiles";
 import { mapZonesToSydneyLayout } from "./sydneyLayout";
 import { resolveZoneId } from "./zoneRegistry";
+import { useReadingsHistory } from "./hooks/useReadingsHistory";
+import { buildAllZoneInsights, summarizeGreenhouse } from "./services/aiInsights";
+import { AIHomeCard } from "./components/AIHomeCard";
+import { AIInsightsView } from "./components/AIInsightsView";
 import {
   LatestReading,
   LayoutSettings,
@@ -315,6 +319,8 @@ export function App() {
   // nav). Kept separate from `activeTab` so closing it returns to the previous
   // screen (the tab that was showing when the bell was tapped).
   const [alertsOpen, setAlertsOpen] = useState(false);
+  // Full "GreenMirror AI" insights page — standalone (own header + back).
+  const [aiInsightsOpen, setAiInsightsOpen] = useState(false);
   // `seen` drives the unread-only bell badge (local, per greenhouse).
   const [seenAlertIds, setSeenAlertIds] = useState<Set<string>>(new Set());
   // Notification history (active + auto-resolved) — Firestore, with a
@@ -350,6 +356,7 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     alertsOpen,
+    aiInsightsOpen,
     changePasswordOpen,
     wateringScheduleOpen,
     activityHistoryOpen,
@@ -362,6 +369,7 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     alertsOpen,
+    aiInsightsOpen,
     changePasswordOpen,
     wateringScheduleOpen,
     activityHistoryOpen,
@@ -379,6 +387,7 @@ export function App() {
       else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
       else if (s.alertsOpen) setAlertsOpen(false);
+      else if (s.aiInsightsOpen) setAiInsightsOpen(false);
       else if (s.changePasswordOpen) setChangePasswordOpen(false);
       else if (s.wateringScheduleOpen) setWateringScheduleOpen(false);
       else if (s.activityHistoryOpen) setActivityHistoryOpen(false);
@@ -784,6 +793,40 @@ export function App() {
       profilesById,
     ).rows.flatMap((r) => r.zones);
   }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
+
+  // ── GreenMirror AI (pilot) ──────────────────────────────────────────────────
+  // Recent history feeds per-zone moisture trends. Simulation uses its own
+  // history; live mode reads the 24h window the Trends screen already uses.
+  const { readings: aiHistoryLive } = useReadingsHistory(
+    isSimulating ? null : ghId,
+    "24h",
+  );
+  const aiHistory: LatestReading[] = useMemo(
+    () => (isSimulating ? (simHistory ?? []) : aiHistoryLive),
+    [isSimulating, simHistory, aiHistoryLive],
+  );
+
+  const aiInsights = useMemo(
+    () =>
+      buildAllZoneInsights({
+        greenhouseId: ghId ?? "",
+        zones: resolvedZones,
+        historyReadings: aiHistory,
+        activities: firestoreActivity.length ? firestoreActivity : activityLog,
+        weatherCondition: latestReading?.external_weather?.condition ?? null,
+      }),
+    [ghId, resolvedZones, aiHistory, firestoreActivity, activityLog, latestReading],
+  );
+
+  const aiSummary = useMemo(() => summarizeGreenhouse(aiInsights), [aiInsights]);
+
+  const aiZonesByCanonicalId = useMemo(() => {
+    const map = new Map<string, VisualZone>();
+    resolvedZones.forEach((z) => {
+      if (z.hasReading) map.set(resolveZoneId(z.backendZoneId ?? z.visualLabel), z);
+    });
+    return map;
+  }, [resolvedZones]);
 
   // Derive the open sheet's zone from the LIVE zone array (recomputed each time
   // readings update, ~5s) by matching the canonical ID — so it never shows a
@@ -1391,7 +1434,48 @@ export function App() {
 
   return (
     <div className="gm-app">
-      {trendsOpen ? (
+      {aiInsightsOpen ? (
+        /* ── GREENMIRROR AI — full insights page (back button, no bottom nav). ── */
+        <>
+          <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
+            <button
+              onClick={() => setAiInsightsOpen(false)}
+              aria-label="Back"
+              style={{
+                width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+                background: 'var(--primary-soft)', border: '1.5px solid var(--primary)',
+                color: 'var(--primary)', fontSize: 20, fontWeight: 800,
+                display: 'grid', placeItems: 'center', cursor: 'pointer',
+              }}
+            >
+              ←
+            </button>
+            <div className="gm-brand">
+              <h1>
+                AI Insights <span style={{ fontSize: 20, lineHeight: 1 }}>🌿</span>
+              </h1>
+              <small>{ghName}</small>
+            </div>
+            <div className="gm-header-actions">{avatarButton}</div>
+          </header>
+          <div
+            className="gm-scroll"
+            ref={scrollRef}
+            onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
+          >
+            <AIInsightsView
+              insights={aiInsights}
+              summary={aiSummary}
+              greenhouseId={ghId ?? ''}
+              userId={firebaseUser?.uid}
+              zonesByCanonicalId={aiZonesByCanonicalId}
+              onViewZone={(z) => { setAiInsightsOpen(false); openZone(z); }}
+              onViewTrends={() => { setAiInsightsOpen(false); setTrendsOpen(true); }}
+              onOpenWatering={() => { setAiInsightsOpen(false); setWateringScheduleOpen(true); }}
+            />
+          </div>
+        </>
+      ) : trendsOpen ? (
         /* ── TRENDS & ANALYSIS — standard app bar + scroll body + bottom nav,
               matching every other main page. ──────────────────────────────── */
         <>
@@ -1403,6 +1487,19 @@ export function App() {
               <small>{ghName}</small>
             </div>
             <div className="gm-header-actions">
+              <button
+                type="button"
+                onClick={() => setAiInsightsOpen(true)}
+                aria-label="Open AI insights"
+                title="GreenMirror AI insights"
+                style={{
+                  border: '1.5px solid var(--primary)', background: 'var(--primary-soft)',
+                  color: 'var(--primary)', borderRadius: 999, padding: '6px 12px',
+                  fontSize: 12, fontWeight: 800, cursor: 'pointer', flexShrink: 0,
+                }}
+              >
+                🌿 AI
+              </button>
               {bellButton}
               {avatarButton}
             </div>
@@ -1512,6 +1609,12 @@ export function App() {
             ref={scrollRef}
             onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
           >
+            {activeTab === 'plants' && (
+              <AIHomeCard
+                summary={aiSummary}
+                onOpenInsights={() => setAiInsightsOpen(true)}
+              />
+            )}
             {activeTab === 'plants' && (
               <PlantCare
                 zones={resolvedZones}
