@@ -9,6 +9,14 @@
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "preview": "npx vite preview"
   },
+  "engines": {
+    "node": "22.x"
+  },
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "4.15.9"
+    }
+  },
   "dependencies": {
     "@emotion/react": "^11.13.3",
     "firebase": "^12.13.0",
