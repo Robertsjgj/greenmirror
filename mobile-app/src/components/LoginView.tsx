@@ -105,7 +105,7 @@ export function LoginView({ greenhouse, onBack }: LoginViewProps) {
                       onChange={(e) => setUsername(e.target.value)}
                       autoCapitalize="none"
                       autoCorrect="off"
-                      placeholder="e.g. p16 or admin-sydney"
+                      placeholder="e.g. john-doe or jane-smith"
                       className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 text-base font-semibold text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                     />
                   </div>

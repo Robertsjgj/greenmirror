@@ -136,7 +136,7 @@ export function AddUserSheet({
                   onChange={(e) => setUsername(e.target.value)}
                   autoCapitalize="none"
                   autoCorrect="off"
-                  placeholder="e.g. p16 or sydney-admin-2"
+                  placeholder="e.g. john-doe or jane-smith"
                   className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
                 />
               </div>
@@ -154,7 +154,7 @@ export function AddUserSheet({
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="e.g. P16, Sydney Coordinator, Volunteer 1"
+                placeholder="e.g. John Doe"
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
               />
             </div>

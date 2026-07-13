@@ -91,7 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!isValidUsername(username)) {
       return res.status(400).json({
         error:
-          "Username must be 3–40 characters and use only lowercase letters, numbers, dots, underscores, or hyphens.",
+          "Username must be 3-40 characters and use only lowercase letters, numbers, dots, underscores, or hyphens.",
       });
     }
 
