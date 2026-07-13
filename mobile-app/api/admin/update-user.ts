@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { adminAuth, adminDb, FieldValue } from "../_firebaseAdmin";
+import { adminAuth, adminDb, FieldValue } from "../_firebaseAdmin.js";
 
 type UserRole = "admin" | "user";
 
