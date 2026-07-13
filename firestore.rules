@@ -51,7 +51,15 @@ service cloud.firestore {
         && resource.data.greenhouseId == currentUserGreenhouseId()
         && (
           currentUserIsAdmin()
+
+          // Legacy support: old schedule structure had one assigned user.
           || resource.data.assignedUserId == request.auth.uid
+
+          // New support: morning/evening users are stored in assignedUserIds.
+          || (
+            resource.data.assignedUserIds is list
+            && request.auth.uid in resource.data.assignedUserIds
+          )
         );
 
       allow create: if currentUserIsAdmin()
@@ -61,7 +69,19 @@ service cloud.firestore {
         && resource.data.greenhouseId == currentUserGreenhouseId()
         && request.resource.data.greenhouseId == resource.data.greenhouseId
         && (
+          // Admin can edit the full schedule.
           currentUserIsAdmin()
+
+          // New support: assigned users can update their schedule document,
+          // for example marking their own watering round complete,
+          // but they cannot change who is assigned.
+          || (
+            resource.data.assignedUserIds is list
+            && request.auth.uid in resource.data.assignedUserIds
+            && request.resource.data.assignedUserIds == resource.data.assignedUserIds
+          )
+
+          // Legacy support for old one-person schedules.
           || (
             resource.data.assignedUserId == request.auth.uid
             && request.resource.data.assignedUserId == request.auth.uid

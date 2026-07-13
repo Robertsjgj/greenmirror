@@ -26,6 +26,9 @@ export function WateringSettingsSheet({
   onClose,
   onSaved,
 }: WateringSettingsSheetProps) {
+  const [defaultRoundsPerDay, setDefaultRoundsPerDay] = useState<1 | 2>(
+    settings.defaultRoundsPerDay ?? 2,
+  );
   const [hoseFlowRateLpm, setHoseFlowRateLpm] = useState(
     String(settings.hoseFlowRateLpm),
   );
@@ -43,6 +46,7 @@ export function WateringSettingsSheet({
   useEffect(() => {
     if (!open) return;
 
+    setDefaultRoundsPerDay(settings.defaultRoundsPerDay ?? 2);
     setHoseFlowRateLpm(String(settings.hoseFlowRateLpm));
     setHotDayThresholdC(String(settings.hotDayThresholdC));
     setNormalWateringTime(settings.normalWateringTime);
@@ -64,7 +68,7 @@ export function WateringSettingsSheet({
     }
 
     if (!Number.isFinite(nextThreshold)) {
-      setError("Hot-day threshold must be a valid temperature.");
+      setError("Hot-day alert threshold must be a valid temperature.");
       return;
     }
 
@@ -73,6 +77,7 @@ export function WateringSettingsSheet({
 
     const nextSettings: WateringSettings = {
       ...settings,
+      defaultRoundsPerDay,
       hoseFlowRateLpm: nextFlowRate,
       hotDayThresholdC: nextThreshold,
       normalWateringTime,
@@ -97,12 +102,12 @@ export function WateringSettingsSheet({
 
       <div
         className={`gm-sheet${open ? " open" : ""}`}
-        style={{ maxHeight: "86%" }}
+        style={{ maxHeight: "88%" }}
       >
         <div className="gm-grab" />
 
         <div className="gm-sheet-body">
-          <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="mb-5 flex items-start justify-between gap-3">
             <div>
               <div className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">
                 Watering setup
@@ -114,17 +119,25 @@ export function WateringSettingsSheet({
 
               <p className="mt-1 text-sm font-semibold leading-5 text-slate-500">
                 These defaults are used when the system generates watering
-                schedules.
+                schedules. Admins can still override each day.
               </p>
             </div>
 
-            <button
+            {/* <button
               type="button"
-              className="gm-icon-btn"
+              onClick={onClose}
+              aria-label="Close watering settings"
+              className="h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50"
+            >
+              <X className="h-5 w-5" />
+            </button> */}
+
+            <button
+              className="gm-icon-btn shrink-0"
               onClick={onClose}
               aria-label="Close watering settings"
             >
-              <X className="h-5 w-5" />
+              <span style={{ fontSize: 18 }}>✕</span>
             </button>
           </div>
 
@@ -138,6 +151,50 @@ export function WateringSettingsSheet({
           )}
 
           <form onSubmit={onSubmit} className="space-y-4">
+            <div>
+              <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
+                Default waterings per day
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDefaultRoundsPerDay(1)}
+                  className={`rounded-3xl border p-4 text-left transition ${
+                    defaultRoundsPerDay === 1
+                      ? "border-emerald-500 bg-emerald-50 ring-4 ring-emerald-100"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="font-['Baloo_2'] text-lg font-black text-slate-950">
+                    Once
+                  </div>
+
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    One watering time by default.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDefaultRoundsPerDay(2)}
+                  className={`rounded-3xl border p-4 text-left transition ${
+                    defaultRoundsPerDay === 2
+                      ? "border-emerald-500 bg-emerald-50 ring-4 ring-emerald-100"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="font-['Baloo_2'] text-lg font-black text-slate-950">
+                    Twice
+                  </div>
+
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Morning and evening by default.
+                  </p>
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
                 Hose flow rate
@@ -157,14 +214,13 @@ export function WateringSettingsSheet({
               </div>
 
               <p className="mt-1.5 text-xs font-semibold text-slate-500">
-                Default is 8 litres per minute. Adjust this once you know how
-                fast the hose fills a bucket.
+                Default is 8 litres per minute.
               </p>
             </div>
 
             <div>
               <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                Hot-day threshold
+                Hot-day alert threshold
               </label>
 
               <div className="relative">
@@ -180,15 +236,14 @@ export function WateringSettingsSheet({
               </div>
 
               <p className="mt-1.5 text-xs font-semibold text-slate-500">
-                When the temperature reaches this value, the schedule switches
-                to two waterings.
+                Used to label hot days and warn growers.
               </p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div>
                 <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                  Normal day time
+                  Single watering time
                 </label>
 
                 <input
@@ -201,7 +256,7 @@ export function WateringSettingsSheet({
 
               <div>
                 <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                  Hot morning
+                  Morning watering time
                 </label>
 
                 <input
@@ -214,7 +269,7 @@ export function WateringSettingsSheet({
 
               <div>
                 <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                  Hot evening
+                  Evening watering time
                 </label>
 
                 <input

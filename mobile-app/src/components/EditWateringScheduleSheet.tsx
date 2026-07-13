@@ -7,6 +7,7 @@ import {
   Droplets,
   Loader2,
   Save,
+  UserRound,
   X,
 } from "lucide-react";
 import { Button } from "./ui/Button";
@@ -27,10 +28,43 @@ interface EditWateringScheduleSheetProps {
   onSaved: (schedule: WateringSchedule) => void;
 }
 
+function roundNumber(value: number, digits = 1): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function getFallbackUser(
+  users: AdminUserRecord[],
+  preferredUid?: string,
+): AdminUserRecord | null {
+  return users.find((user) => user.uid === preferredUid) ?? users[0] ?? null;
+}
+
+function getDifferentFallbackUser(
+  users: AdminUserRecord[],
+  firstUid?: string,
+  preferredUid?: string,
+): AdminUserRecord | null {
+  const preferred = users.find((user) => user.uid === preferredUid);
+  if (preferred) return preferred;
+
+  return users.find((user) => user.uid !== firstUid) ?? users[0] ?? null;
+}
+
+function makeRoundUser(user: AdminUserRecord) {
+  return {
+    assignedUserId: user.uid,
+    assignedUserName: user.displayName,
+    assignedUsername: user.username,
+  };
+}
+
 function makeRounds(
   roundCount: 1 | 2,
   morningTime: string,
   eveningTime: string,
+  morningUser: AdminUserRecord,
+  eveningUser: AdminUserRecord,
   existingRounds: WateringRound[],
 ): WateringRound[] {
   const existingById = new Map(
@@ -38,10 +72,12 @@ function makeRounds(
   );
 
   const morningExisting = existingById.get("morning");
+
   const morning: WateringRound = {
     id: "morning",
     label: roundCount === 2 ? "Morning watering" : "Daily watering",
     time: morningTime,
+    ...makeRoundUser(morningUser),
     completed: morningExisting?.completed ?? false,
     completedAt: morningExisting?.completedAt ?? null,
     completedBy: morningExisting?.completedBy ?? null,
@@ -58,17 +94,13 @@ function makeRounds(
       id: "evening",
       label: "Evening watering",
       time: eveningTime,
+      ...makeRoundUser(eveningUser),
       completed: eveningExisting?.completed ?? false,
       completedAt: eveningExisting?.completedAt ?? null,
       completedBy: eveningExisting?.completedBy ?? null,
       completedByName: eveningExisting?.completedByName ?? null,
     },
   ];
-}
-
-function roundNumber(value: number, digits = 1): number {
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
 }
 
 export function EditWateringScheduleSheet({
@@ -86,9 +118,10 @@ export function EditWateringScheduleSheet({
     [users],
   );
 
-  const [assignedUserId, setAssignedUserId] = useState("");
-  const [roundsPerDay, setRoundsPerDay] = useState<1 | 2>(1);
-  const [morningTime, setMorningTime] = useState("09:00");
+  const [roundsPerDay, setRoundsPerDay] = useState<1 | 2>(2);
+  const [morningAssignedUserId, setMorningAssignedUserId] = useState("");
+  const [eveningAssignedUserId, setEveningAssignedUserId] = useState("");
+  const [morningTime, setMorningTime] = useState("08:00");
   const [eveningTime, setEveningTime] = useState("18:00");
   const [hoseFlowRateLpm, setHoseFlowRateLpm] = useState("8");
   const [notes, setNotes] = useState("");
@@ -100,19 +133,33 @@ export function EditWateringScheduleSheet({
   useEffect(() => {
     if (!open || !schedule) return;
 
-    setAssignedUserId(schedule.assignedUserId);
-    setRoundsPerDay(schedule.roundsPerDay);
-    setMorningTime(schedule.rounds[0]?.time ?? "09:00");
-    setEveningTime(
-      schedule.rounds.find((round) => round.id === "evening")?.time ?? "18:00",
+    const morningRound = schedule.rounds.find(
+      (round) => round.id === "morning",
     );
+    const eveningRound = schedule.rounds.find(
+      (round) => round.id === "evening",
+    );
+
+    setRoundsPerDay(schedule.roundsPerDay);
+    setMorningAssignedUserId(
+      morningRound?.assignedUserId ?? schedule.assignedUserId,
+    );
+    setEveningAssignedUserId(
+      eveningRound?.assignedUserId ??
+        activeUsers.find((user) => user.uid !== morningRound?.assignedUserId)
+          ?.uid ??
+        morningRound?.assignedUserId ??
+        schedule.assignedUserId,
+    );
+    setMorningTime(morningRound?.time ?? schedule.rounds[0]?.time ?? "08:00");
+    setEveningTime(eveningRound?.time ?? "18:00");
     setHoseFlowRateLpm(String(schedule.hoseFlowRateLpm));
     setNotes(schedule.notes ?? "");
     setBeds(schedule.beds.map((bed) => ({ ...bed })));
     setBedsExpanded(false);
     setSubmitting(false);
     setError(null);
-  }, [open, schedule]);
+  }, [open, schedule, activeUsers]);
 
   const preview = useMemo(() => {
     const flowRate = Number(hoseFlowRateLpm);
@@ -170,12 +217,20 @@ export function EditWateringScheduleSheet({
 
     if (!schedule) return;
 
-    const selectedUser = activeUsers.find(
-      (user) => user.uid === assignedUserId,
+    const morningUser = getFallbackUser(activeUsers, morningAssignedUserId);
+    const eveningUser = getDifferentFallbackUser(
+      activeUsers,
+      morningUser?.uid,
+      eveningAssignedUserId,
     );
 
-    if (!selectedUser) {
-      setError("Choose an active user for this schedule.");
+    if (!morningUser) {
+      setError("Choose an active user for the morning watering.");
+      return;
+    }
+
+    if (roundsPerDay === 2 && !eveningUser) {
+      setError("Choose an active user for the evening watering.");
       return;
     }
 
@@ -202,15 +257,14 @@ export function EditWateringScheduleSheet({
       roundsPerDay,
       morningTime,
       eveningTime,
+      morningUser,
+      eveningUser ?? morningUser,
       schedule.rounds,
     );
 
     const updated = recalculateWateringSchedule(
       {
         ...schedule,
-        assignedUserId: selectedUser.uid,
-        assignedUserName: selectedUser.displayName,
-        assignedUsername: selectedUser.username,
         hoseFlowRateLpm: nextFlowRate,
         roundsPerDay,
         rounds: nextRounds,
@@ -258,7 +312,7 @@ export function EditWateringScheduleSheet({
               </h2>
 
               <p className="mt-1 text-sm font-semibold leading-5 text-slate-500">
-                Change the assigned person, watering times, hose settings, and
+                Change morning and evening waterers, timing, hose settings, and
                 litres per bed.
               </p>
             </div>
@@ -315,24 +369,6 @@ export function EditWateringScheduleSheet({
 
             <div>
               <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                Assigned waterer
-              </label>
-
-              <select
-                value={assignedUserId}
-                onChange={(e) => setAssignedUserId(e.target.value)}
-                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
-              >
-                {activeUsers.map((user) => (
-                  <option key={user.uid} value={user.uid}>
-                    {user.displayName} ({user.role})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
                 Waterings today
               </label>
 
@@ -350,7 +386,7 @@ export function EditWateringScheduleSheet({
                     Once
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Normal daily watering.
+                    One watering round.
                   </p>
                 </button>
 
@@ -367,16 +403,67 @@ export function EditWateringScheduleSheet({
                     Twice
                   </div>
                   <p className="mt-1 text-xs font-semibold text-slate-500">
-                    Morning and evening watering.
+                    Morning and evening.
                   </p>
                 </button>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <UserRound className="h-5 w-5 text-emerald-600" />
+                <div className="font-['Baloo_2'] text-xl font-black text-slate-950">
+                  Watering assignments
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
+                    {roundsPerDay === 1
+                      ? "Assigned waterer"
+                      : "Morning waterer"}
+                  </label>
+
+                  <select
+                    value={morningAssignedUserId}
+                    onChange={(e) => setMorningAssignedUserId(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                  >
+                    {activeUsers.map((user) => (
+                      <option key={user.uid} value={user.uid}>
+                        {user.displayName} ({user.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {roundsPerDay === 2 && (
+                  <div>
+                    <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
+                      Evening waterer
+                    </label>
+
+                    <select
+                      value={eveningAssignedUserId}
+                      onChange={(e) => setEveningAssignedUserId(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                    >
+                      {activeUsers.map((user) => (
+                        <option key={user.uid} value={user.uid}>
+                          {user.displayName} ({user.role})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">
-                  Morning time
+                  {roundsPerDay === 1 ? "Watering time" : "Morning time"}
                 </label>
 
                 <div className="relative">
@@ -505,7 +592,7 @@ export function EditWateringScheduleSheet({
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Optional note for the waterer"
+                placeholder="Optional note for the waterers"
                 rows={3}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base font-bold text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
               />

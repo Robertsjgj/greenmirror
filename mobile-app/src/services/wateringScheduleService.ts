@@ -16,6 +16,7 @@ import type { LatestReading, VisualZone } from "../zoneLayout";
 const WATERING_TIME_ZONE = "America/Halifax";
 const DEFAULT_HOSE_FLOW_RATE_LPM = 8;
 const DEFAULT_HOT_DAY_THRESHOLD_C = 28;
+const DEFAULT_ROUNDS_PER_DAY: 1 | 2 = 2;
 const DEFAULT_NORMAL_TIME = "09:00";
 const DEFAULT_HOT_MORNING_TIME = "08:00";
 const DEFAULT_HOT_EVENING_TIME = "18:00";
@@ -31,6 +32,7 @@ export interface WateringScheduleUser {
 
 export interface WateringSettings {
   greenhouseId: string;
+  defaultRoundsPerDay: 1 | 2;
   hoseFlowRateLpm: number;
   hotDayThresholdC: number;
   normalWateringTime: string;
@@ -43,6 +45,11 @@ export interface WateringRound {
   id: "morning" | "evening";
   label: string;
   time: string;
+
+  assignedUserId: string;
+  assignedUserName: string;
+  assignedUsername: string;
+
   completed: boolean;
   completedAt?: string | null;
   completedBy?: string | null;
@@ -67,6 +74,7 @@ export interface WateringSchedule {
   assignedUserId: string;
   assignedUserName: string;
   assignedUsername: string;
+  assignedUserIds: string[];
 
   hotDay: boolean;
   temperatureC: number | null;
@@ -112,6 +120,7 @@ export function defaultWateringSettings(
 ): WateringSettings {
   return {
     greenhouseId,
+    defaultRoundsPerDay: DEFAULT_ROUNDS_PER_DAY,
     hoseFlowRateLpm: DEFAULT_HOSE_FLOW_RATE_LPM,
     hotDayThresholdC: DEFAULT_HOT_DAY_THRESHOLD_C,
     normalWateringTime: DEFAULT_NORMAL_TIME,
@@ -164,7 +173,6 @@ function removeUndefinedDeep<T>(value: T): T {
   if (value && typeof value === "object") {
     const proto = Object.getPrototypeOf(value);
 
-    // Preserve Firestore Timestamp / FieldValue / Date-like objects.
     if (proto !== Object.prototype && proto !== null) {
       return value;
     }
@@ -267,8 +275,40 @@ function estimateLitresForZone(zone: VisualZone): number {
   return Math.max(2, roundToHalf(litres));
 }
 
+function asRoundUser(user: WateringScheduleUser) {
+  return {
+    assignedUserId: user.uid,
+    assignedUserName: user.displayName,
+    assignedUsername: user.username,
+  };
+}
+
+function findActiveUser(
+  activeUsers: WateringScheduleUser[],
+  uid?: string | null,
+): WateringScheduleUser | null {
+  if (!uid) return null;
+  return activeUsers.find((user) => user.uid === uid) ?? null;
+}
+
+function defaultMorningUser(
+  activeUsers: WateringScheduleUser[],
+  date: string,
+): WateringScheduleUser {
+  return activeUsers[dayIndex(date) % activeUsers.length];
+}
+
+function defaultEveningUser(
+  activeUsers: WateringScheduleUser[],
+  date: string,
+): WateringScheduleUser {
+  if (activeUsers.length === 1) return activeUsers[0];
+  return activeUsers[(dayIndex(date) + 1) % activeUsers.length];
+}
+
 function buildRounds(
-  hotDay: boolean,
+  date: string,
+  activeUsers: WateringScheduleUser[],
   settings: WateringSettings,
   existing?: WateringSchedule | null,
 ): WateringRound[] {
@@ -276,43 +316,54 @@ function buildRounds(
     existing?.rounds.map((round) => [round.id, round]) ?? [],
   );
 
-  if (hotDay) {
-    const morningExisting = existingById.get("morning");
-    const eveningExisting = existingById.get("evening");
+  const legacyAssignee = findActiveUser(activeUsers, existing?.assignedUserId);
 
-    return [
-      {
-        id: "morning",
-        label: "Morning watering",
-        time: morningExisting?.time ?? settings.hotMorningTime,
-        completed: morningExisting?.completed ?? false,
-        completedAt: morningExisting?.completedAt ?? null,
-        completedBy: morningExisting?.completedBy ?? null,
-        completedByName: morningExisting?.completedByName ?? null,
-      },
-      {
-        id: "evening",
-        label: "Evening watering",
-        time: eveningExisting?.time ?? settings.hotEveningTime,
-        completed: eveningExisting?.completed ?? false,
-        completedAt: eveningExisting?.completedAt ?? null,
-        completedBy: eveningExisting?.completedBy ?? null,
-        completedByName: eveningExisting?.completedByName ?? null,
-      },
-    ];
-  }
+  const morningExisting = existingById.get("morning");
+  const eveningExisting = existingById.get("evening");
 
-  const existingMorning = existingById.get("morning");
+  const morningUser =
+    findActiveUser(activeUsers, morningExisting?.assignedUserId) ??
+    legacyAssignee ??
+    defaultMorningUser(activeUsers, date);
+
+  const eveningUser =
+    findActiveUser(activeUsers, eveningExisting?.assignedUserId) ??
+    (activeUsers.length > 1
+      ? activeUsers.find((user) => user.uid !== morningUser.uid)
+      : null) ??
+    defaultEveningUser(activeUsers, date);
+
+  const roundCount: 1 | 2 =
+    existing?.roundsPerDay ?? settings.defaultRoundsPerDay ?? 2;
+
+  const morning: WateringRound = {
+    id: "morning",
+    label: roundCount === 2 ? "Morning watering" : "Daily watering",
+    time:
+      morningExisting?.time ??
+      (roundCount === 2
+        ? settings.hotMorningTime
+        : settings.normalWateringTime),
+    ...asRoundUser(morningUser),
+    completed: morningExisting?.completed ?? false,
+    completedAt: morningExisting?.completedAt ?? null,
+    completedBy: morningExisting?.completedBy ?? null,
+    completedByName: morningExisting?.completedByName ?? null,
+  };
+
+  if (roundCount === 1) return [morning];
 
   return [
+    morning,
     {
-      id: "morning",
-      label: "Daily watering",
-      time: existingMorning?.time ?? settings.normalWateringTime,
-      completed: existingMorning?.completed ?? false,
-      completedAt: existingMorning?.completedAt ?? null,
-      completedBy: existingMorning?.completedBy ?? null,
-      completedByName: existingMorning?.completedByName ?? null,
+      id: "evening",
+      label: "Evening watering",
+      time: eveningExisting?.time ?? settings.hotEveningTime,
+      ...asRoundUser(eveningUser),
+      completed: eveningExisting?.completed ?? false,
+      completedAt: eveningExisting?.completedAt ?? null,
+      completedBy: eveningExisting?.completedBy ?? null,
+      completedByName: eveningExisting?.completedByName ?? null,
     },
   ];
 }
@@ -333,13 +384,28 @@ export function recalculateWateringSchedule(
     beds.reduce((sum, bed) => sum + bed.litres, 0),
     1,
   );
+
   const totalHoseMinutesPerRound = roundNumber(
     totalLitresPerRound / safeFlow,
     1,
   );
 
+  const firstRound = rounds[0];
+
+  const assignedUserIds = Array.from(
+    new Set(
+      rounds
+        .map((round) => round.assignedUserId)
+        .filter((uid): uid is string => Boolean(uid)),
+    ),
+  );
+
   return {
     ...schedule,
+    assignedUserId: firstRound?.assignedUserId ?? schedule.assignedUserId,
+    assignedUserName: firstRound?.assignedUserName ?? schedule.assignedUserName,
+    assignedUsername: firstRound?.assignedUsername ?? schedule.assignedUsername,
+    assignedUserIds,
     hoseFlowRateLpm: safeFlow,
     rounds,
     roundsPerDay: rounds.length === 2 ? 2 : 1,
@@ -377,13 +443,6 @@ export function buildWateringSchedule({
     throw new Error("No active users found for this greenhouse.");
   }
 
-  const previousAssignee = activeUsers.find(
-    (user) => user.uid === existing?.assignedUserId,
-  );
-
-  const assignedUser =
-    previousAssignee ?? activeUsers[dayIndex(date) % activeUsers.length];
-
   const temperatureC = displayTemp(latestReading);
   const hotDay =
     typeof temperatureC === "number" &&
@@ -405,16 +464,19 @@ export function buildWateringSchedule({
       };
     });
 
-  const rounds = buildRounds(hotDay, settings, existing);
+  const rounds = buildRounds(date, activeUsers, settings, existing);
+  const firstRound = rounds[0];
+
   const baseSchedule: WateringSchedule = {
     id: wateringScheduleId(greenhouseId, date),
     greenhouseId,
     greenhouseName,
     date,
 
-    assignedUserId: assignedUser.uid,
-    assignedUserName: assignedUser.displayName,
-    assignedUsername: assignedUser.username,
+    assignedUserId: firstRound.assignedUserId,
+    assignedUserName: firstRound.assignedUserName,
+    assignedUsername: firstRound.assignedUsername,
+    assignedUserIds: [],
 
     hotDay,
     temperatureC,
@@ -548,7 +610,7 @@ export function subscribeUserWateringSchedules(
   const schedulesQuery = query(
     collection(db, "wateringSchedules"),
     where("greenhouseId", "==", greenhouseId),
-    where("assignedUserId", "==", userId),
+    where("assignedUserIds", "array-contains", userId),
   );
 
   return onSnapshot(
@@ -690,9 +752,22 @@ export async function markWateringRoundComplete(
       : round,
   );
 
-  await updateDoc(doc(db, "wateringSchedules", schedule.id), {
+  const recalculated = recalculateWateringSchedule(
+    {
+      ...schedule,
+      rounds,
+    },
+    schedule.hoseFlowRateLpm,
     rounds,
-    completed: rounds.every((round) => round.completed),
+  );
+
+  await updateDoc(doc(db, "wateringSchedules", schedule.id), {
+    rounds: recalculated.rounds,
+    assignedUserId: recalculated.assignedUserId,
+    assignedUserName: recalculated.assignedUserName,
+    assignedUsername: recalculated.assignedUsername,
+    assignedUserIds: recalculated.assignedUserIds,
+    completed: recalculated.completed,
     updatedAt: serverTimestamp(),
   });
 }

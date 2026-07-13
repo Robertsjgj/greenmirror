@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -29,7 +29,6 @@ import type { LatestReading, VisualZone } from "../zoneLayout";
 import {
   buildWateringSchedule,
   defaultWateringSettings,
-  ensureUpcomingWateringSchedules,
   getWateringDateKey,
   markWateringRoundComplete,
   regenerateWateringSchedule,
@@ -37,6 +36,7 @@ import {
   subscribeAdminWateringSchedules,
   subscribeUserWateringSchedules,
   subscribeWateringSettings,
+  type WateringRound,
   type WateringSchedule,
   type WateringSettings,
 } from "../services/wateringScheduleService";
@@ -70,6 +70,7 @@ function formatMinutes(minutes: number): string {
 
   const hours = Math.floor(minutes / 60);
   const mins = Math.round(minutes % 60);
+
   return `${hours}h ${mins}m`;
 }
 
@@ -77,10 +78,43 @@ function isToday(dateKey: string): boolean {
   return dateKey === getWateringDateKey();
 }
 
-function scheduleStatus(schedule: WateringSchedule) {
+function scheduleStatus(schedule: WateringSchedule): string {
   if (schedule.completed) return "Completed";
   if (schedule.hotDay) return "Hot day";
   return "Scheduled";
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms = 12000,
+  message = "Firestore is taking too long. Please try again in a moment.",
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function roundNames(rounds: WateringRound[]): string {
+  const names = Array.from(
+    new Set(rounds.map((round) => round.assignedUserName).filter(Boolean)),
+  );
+
+  if (names.length === 0) return "—";
+  if (names.length === 1) return names[0];
+
+  return names.join(" + ");
 }
 
 export function WateringScheduleView({
@@ -111,7 +145,6 @@ export function WateringScheduleView({
   const [regeneratingDate, setRegeneratingDate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const ensuredKeyRef = useRef<string | null>(null);
   const [expandedBedInstructions, setExpandedBedInstructions] = useState<
     Record<string, boolean>
   >({});
@@ -130,10 +163,20 @@ export function WateringScheduleView({
 
   const visibleSchedules = useMemo(() => {
     if (isAdmin) return schedules;
-    return schedules.filter(
-      (schedule) => schedule.assignedUserId === currentUserId,
+
+    return schedules.filter((schedule) =>
+      schedule.rounds.some((round) => round.assignedUserId === currentUserId),
     );
   }, [isAdmin, schedules, currentUserId]);
+
+  const todayVisibleRounds = useMemo(() => {
+    if (!todaySchedule) return [];
+    if (isAdmin) return todaySchedule.rounds;
+
+    return todaySchedule.rounds.filter(
+      (round) => round.assignedUserId === currentUserId,
+    );
+  }, [isAdmin, todaySchedule, currentUserId]);
 
   useEffect(() => {
     setSettings(defaultWateringSettings(greenhouseId));
@@ -205,79 +248,41 @@ export function WateringScheduleView({
     return () => unsub?.();
   }, [isAdmin, currentUserId, greenhouseId]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    if (loadingUsers) return;
-    if (activeUsers.length === 0) return;
-    if (zones.length === 0) return;
-
-    const ensureKey = [
-      greenhouseId,
-      activeUsers.map((user) => user.uid).join(","),
-      zones.map((zone) => zone.visualLabel).join(","),
-      settings.hoseFlowRateLpm,
-      settings.hotDayThresholdC,
-      settings.normalWateringTime,
-      settings.hotMorningTime,
-      settings.hotEveningTime,
-    ].join("|");
-
-    if (ensuredKeyRef.current === ensureKey) return;
-
-    ensuredKeyRef.current = ensureKey;
-    setCreatingSchedules(true);
-    setError(null);
-
-    ensureUpcomingWateringSchedules({
-      greenhouseId,
-      greenhouseName,
-      users: activeUsers,
-      zones,
-      latestReading,
-      settings,
-      days: 7,
-    })
-      .catch((err) => {
-        setError(
-          err instanceof Error ? err.message : "Could not create schedules.",
-        );
-      })
-      .finally(() => {
-        setCreatingSchedules(false);
-      });
-  }, [
-    isAdmin,
-    loadingUsers,
-    activeUsers,
-    zones,
-    greenhouseId,
-    greenhouseName,
-    latestReading,
-    settings,
-  ]);
-
   function showSuccess(message: string) {
     setSuccessMessage(message);
     onToast?.(message);
+
     window.setTimeout(() => setSuccessMessage(null), 3000);
   }
 
   async function handleRegenerate(scheduleDate: string) {
     if (!isAdmin) return;
 
+    if (activeUsers.length === 0) {
+      setError("No active users found for this greenhouse.");
+      return;
+    }
+
+    if (zones.length === 0) {
+      setError("No greenhouse beds found yet. Wait for the map data to load.");
+      return;
+    }
+
     setRegeneratingDate(scheduleDate);
     setError(null);
 
     try {
-      const schedule = await regenerateWateringSchedule({
-        greenhouseId,
-        greenhouseName,
-        date: scheduleDate,
-        users: activeUsers,
-        zones,
-        latestReading,
-        settings,
-      });
+      const schedule = await withTimeout(
+        regenerateWateringSchedule({
+          greenhouseId,
+          greenhouseName,
+          date: scheduleDate,
+          users: activeUsers,
+          zones,
+          latestReading,
+          settings,
+        }),
+      );
 
       showSuccess(
         `Regenerated schedule for ${formatDateLabel(schedule.date)}.`,
@@ -294,10 +299,37 @@ export function WateringScheduleView({
   async function handleCreateTodayForAdmin() {
     if (!isAdmin) return;
 
+    if (activeUsers.length === 0) {
+      setError("No active users found for this greenhouse.");
+      return;
+    }
+
+    if (zones.length === 0) {
+      setError("No greenhouse beds found yet. Wait for the map data to load.");
+      return;
+    }
+
     setCreatingSchedules(true);
     setError(null);
 
     try {
+      if (todaySchedule) {
+        await withTimeout(
+          regenerateWateringSchedule({
+            greenhouseId,
+            greenhouseName,
+            date: todayKey,
+            users: activeUsers,
+            zones,
+            latestReading,
+            settings,
+          }),
+        );
+
+        showSuccess("Updated today’s watering schedule.");
+        return;
+      }
+
       const schedule = buildWateringSchedule({
         greenhouseId,
         greenhouseName,
@@ -308,7 +340,8 @@ export function WateringScheduleView({
         settings,
       });
 
-      await saveWateringSchedule(schedule);
+      await withTimeout(saveWateringSchedule(schedule));
+
       showSuccess("Created today’s watering schedule.");
     } catch (err) {
       setError(
@@ -323,20 +356,26 @@ export function WateringScheduleView({
     schedule: WateringSchedule,
     roundId: "morning" | "evening",
   ) {
+    const round = schedule.rounds.find((item) => item.id === roundId);
+
+    if (!round) return;
+
     setUpdatingRound(`${schedule.id}-${roundId}`);
     setError(null);
 
     try {
-      await markWateringRoundComplete(schedule, roundId, {
-        uid: currentUserId,
-        displayName: currentUserName,
-      });
+      await withTimeout(
+        markWateringRoundComplete(schedule, roundId, {
+          uid: currentUserId,
+          displayName: currentUserName,
+        }),
+      );
 
       await writeActivityEvent({
         type: "watering",
         greenhouseId,
         amountMl: Math.round(schedule.totalLitresPerRound * 1000),
-        message: `${currentUserName} completed ${schedule.rounds.find((round) => round.id === roundId)?.label ?? "watering"} for ${greenhouseName}.`,
+        message: `${currentUserName} completed ${round.label} for ${greenhouseName}.`,
         source: "manual",
         actorUserId: currentUserId,
         actorName: currentUserName,
@@ -367,8 +406,21 @@ export function WateringScheduleView({
     }));
   }
 
+  function visibleRoundsForSchedule(schedule: WateringSchedule) {
+    if (isAdmin) return schedule.rounds;
+
+    return schedule.rounds.filter(
+      (round) => round.assignedUserId === currentUserId,
+    );
+  }
+
   function renderScheduleCard(schedule: WateringSchedule) {
-    const canComplete = isAdmin || schedule.assignedUserId === currentUserId;
+    const displayedRounds = visibleRoundsForSchedule(schedule);
+    const displayedRoundCount = displayedRounds.length;
+    const displayedDailyLitres =
+      schedule.totalLitresPerRound * displayedRoundCount;
+    const displayedDailyMinutes =
+      schedule.totalHoseMinutesPerRound * displayedRoundCount;
 
     return (
       <article
@@ -404,12 +456,12 @@ export function WateringScheduleView({
             <div className="mt-2 flex flex-wrap gap-3 text-sm font-bold text-slate-600">
               <span className="inline-flex items-center gap-1.5">
                 <UserRound className="h-4 w-4 text-emerald-600" />
-                {schedule.assignedUserName}
+                {roundNames(displayedRounds)}
               </span>
 
               <span className="inline-flex items-center gap-1.5">
                 <Droplets className="h-4 w-4 text-sky-600" />
-                {schedule.roundsPerDay}x today
+                {displayedRoundCount}x shown
               </span>
 
               <span className="inline-flex items-center gap-1.5">
@@ -466,9 +518,11 @@ export function WateringScheduleView({
             <div className="text-xs font-black uppercase tracking-wide text-sky-700">
               Per watering
             </div>
+
             <div className="mt-1 font-['Baloo_2'] text-3xl font-black text-slate-950">
               {schedule.totalLitresPerRound}L
             </div>
+
             <p className="text-xs font-bold text-slate-500">
               About {formatMinutes(schedule.totalHoseMinutesPerRound)} with hose
             </p>
@@ -476,13 +530,15 @@ export function WateringScheduleView({
 
           <div className="rounded-3xl bg-emerald-50 p-4">
             <div className="text-xs font-black uppercase tracking-wide text-emerald-700">
-              Total today
+              {isAdmin ? "Total today" : "Your total"}
             </div>
+
             <div className="mt-1 font-['Baloo_2'] text-3xl font-black text-slate-950">
-              {schedule.totalDailyLitres}L
+              {displayedDailyLitres}L
             </div>
+
             <p className="text-xs font-bold text-slate-500">
-              {formatMinutes(schedule.totalDailyHoseMinutes)} total hose time
+              {formatMinutes(displayedDailyMinutes)} total hose time
             </p>
           </div>
 
@@ -490,9 +546,11 @@ export function WateringScheduleView({
             <div className="text-xs font-black uppercase tracking-wide text-amber-700">
               Hose rate
             </div>
+
             <div className="mt-1 font-['Baloo_2'] text-3xl font-black text-slate-950">
               {schedule.hoseFlowRateLpm}L/min
             </div>
+
             <p className="text-xs font-bold text-slate-500">
               Admin can adjust this setting.
             </p>
@@ -502,14 +560,17 @@ export function WateringScheduleView({
         <div className="mt-4 rounded-3xl border border-slate-200 bg-slate-50 p-4">
           <div className="mb-3 flex items-center gap-2">
             <Waves className="h-5 w-5 text-sky-600" />
+
             <div className="font-['Baloo_2'] text-xl font-black text-slate-950">
               Watering rounds
             </div>
           </div>
 
           <div className="grid gap-3">
-            {schedule.rounds.map((round) => {
+            {displayedRounds.map((round) => {
               const isUpdating = updatingRound === `${schedule.id}-${round.id}`;
+              const canComplete =
+                isAdmin || round.assignedUserId === currentUserId;
 
               return (
                 <div
@@ -525,6 +586,11 @@ export function WateringScheduleView({
                       <span className="inline-flex items-center gap-1.5">
                         <Clock className="h-4 w-4" />
                         {round.time}
+                      </span>
+
+                      <span className="inline-flex items-center gap-1.5">
+                        <UserRound className="h-4 w-4" />
+                        {round.assignedUserName}
                       </span>
 
                       {round.completed && (
@@ -678,7 +744,7 @@ export function WateringScheduleView({
                 </h2>
 
                 <p className="mt-2 max-w-xl text-sm font-semibold leading-6 text-slate-600">
-                  Today's assignment, timing, and hose guidance.
+                  Today&apos;s assignment, timing, and hose guidance.
                 </p>
               </div>
 
@@ -704,10 +770,14 @@ export function WateringScheduleView({
                         <RefreshCw className="h-4 w-4" />
                       )
                     }
-                    disabled={creatingSchedules || activeUsers.length === 0}
+                    disabled={
+                      creatingSchedules ||
+                      activeUsers.length === 0 ||
+                      zones.length === 0
+                    }
                     onClick={handleCreateTodayForAdmin}
                   >
-                    Create today
+                    {todaySchedule ? "Update today" : "Create today"}
                   </Button>
                 </div>
               )}
@@ -718,9 +788,11 @@ export function WateringScheduleView({
                 <div className="mb-3 grid h-11 w-11 place-items-center rounded-2xl bg-sky-100 text-sky-700">
                   <Droplets className="h-5 w-5" />
                 </div>
+
                 <div className="font-['Baloo_2'] text-3xl font-black leading-none text-slate-950">
-                  {todaySchedule?.roundsPerDay ?? "—"}x
+                  {todayVisibleRounds.length || "—"}x
                 </div>
+
                 <p className="mt-1 text-xs font-black uppercase tracking-wide text-slate-500">
                   Today’s waterings
                 </p>
@@ -730,9 +802,13 @@ export function WateringScheduleView({
                 <div className="mb-3 grid h-11 w-11 place-items-center rounded-2xl bg-emerald-100 text-emerald-700">
                   <UserRound className="h-5 w-5" />
                 </div>
+
                 <div className="truncate font-['Baloo_2'] text-3xl font-black leading-none text-slate-950">
-                  {todaySchedule?.assignedUserName ?? "—"}
+                  {todayVisibleRounds.length
+                    ? roundNames(todayVisibleRounds)
+                    : "—"}
                 </div>
+
                 <p className="mt-1 text-xs font-black uppercase tracking-wide text-slate-500">
                   Assigned today
                 </p>
@@ -742,14 +818,16 @@ export function WateringScheduleView({
                 <div className="mb-3 grid h-11 w-11 place-items-center rounded-2xl bg-amber-100 text-amber-700">
                   <ThermometerSun className="h-5 w-5" />
                 </div>
+
                 <div className="font-['Baloo_2'] text-3xl font-black leading-none text-slate-950">
                   {todaySchedule?.temperatureC === null ||
                   todaySchedule?.temperatureC === undefined
                     ? "—"
                     : `${todaySchedule.temperatureC}°`}
                 </div>
+
                 <p className="mt-1 text-xs font-black uppercase tracking-wide text-slate-500">
-                  Hot at {settings.hotDayThresholdC}°C
+                  Hot-day alert at {settings.hotDayThresholdC}°C
                 </p>
               </div>
             </div>
@@ -758,6 +836,7 @@ export function WateringScheduleView({
           {error && (
             <div className="mb-4 flex items-start gap-3 rounded-3xl border border-red-100 bg-red-50 p-4">
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+
               <p className="text-sm font-bold leading-5 text-red-700">
                 {error}
               </p>
@@ -767,6 +846,7 @@ export function WateringScheduleView({
           {successMessage && (
             <div className="mb-4 flex items-start gap-3 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+
               <p className="text-sm font-bold leading-5 text-emerald-700">
                 {successMessage}
               </p>
@@ -777,6 +857,7 @@ export function WateringScheduleView({
             <div className="flex min-h-[240px] items-center justify-center rounded-[2rem] border border-dashed border-slate-200 bg-white">
               <div className="text-center">
                 <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-emerald-600" />
+
                 <p className="text-sm font-black text-slate-600">
                   Loading watering schedule…
                 </p>
@@ -787,12 +868,13 @@ export function WateringScheduleView({
           {showEmptyAdmin && (
             <div className="rounded-[2rem] border border-dashed border-slate-200 bg-white p-6 text-center">
               <CalendarDays className="mx-auto mb-3 h-8 w-8 text-slate-400" />
+
               <h3 className="font-['Baloo_2'] text-2xl font-black text-slate-950">
                 No schedule yet
               </h3>
+
               <p className="mx-auto mt-1 max-w-md text-sm font-semibold text-slate-500">
-                Create today’s schedule or wait a moment while the system
-                generates upcoming watering days.
+                Create today’s schedule to assign watering for the day.
               </p>
             </div>
           )}
@@ -800,9 +882,11 @@ export function WateringScheduleView({
           {showEmptyUser && (
             <div className="rounded-[2rem] border border-slate-200 bg-white p-6 text-center">
               <CalendarDays className="mx-auto mb-3 h-8 w-8 text-slate-400" />
+
               <h3 className="font-['Baloo_2'] text-2xl font-black text-slate-950">
                 You are not assigned today
               </h3>
+
               <p className="mx-auto mt-1 max-w-md text-sm font-semibold text-slate-500">
                 When you are assigned to water, your watering instructions will
                 appear here.
