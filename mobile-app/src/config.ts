@@ -12,18 +12,19 @@ function resolveApiBaseUrl(): string {
   //   localhost:5174  →  localhost:5000
   //   192.168.7.202:5174  →  192.168.7.202:5000
   //   10.9.1.96:5174  →  10.9.1.96:5000
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     const { hostname, protocol } = window.location;
 
-    console.log('[GreenMirror] Frontend hostname:', hostname);
+    console.log("[GreenMirror] Frontend hostname:", hostname);
 
     const staleOverride = import.meta.env.VITE_API_BASE_URL;
     if (staleOverride) {
       console.warn(
-        '[GreenMirror] VITE_API_BASE_URL is set but IGNORED at runtime.',
-        '\n  Stale value:', staleOverride,
-        '\n  Runtime detection is used instead to prevent stale-IP bugs.',
-        '\n  To clear: restart Vite without VITE_API_BASE_URL in the environment.'
+        "[GreenMirror] VITE_API_BASE_URL is set but IGNORED at runtime.",
+        "\n  Stale value:",
+        staleOverride,
+        "\n  Runtime detection is used instead to prevent stale-IP bugs.",
+        "\n  To clear: restart Vite without VITE_API_BASE_URL in the environment.",
       );
     }
 
@@ -32,12 +33,12 @@ function resolveApiBaseUrl(): string {
 
   // === NON-BROWSER (SSR / build-time evaluation only) ===
   // Env var is consulted here as a last resort, then localhost.
-  const envFallback = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '');
+  const envFallback = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
   return envFallback || `http://localhost:${BACKEND_PORT}`;
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
 
-console.log('[GreenMirror] Resolved API base URL:', API_BASE_URL);
+console.log("[GreenMirror] Resolved API base URL:", API_BASE_URL);
 
 export const LATEST_READING_URL = `${API_BASE_URL}/api/latest`;
