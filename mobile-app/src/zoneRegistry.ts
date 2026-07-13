@@ -124,13 +124,49 @@ export function getZoneArea(id?: string | null): ZoneArea {
 /**
  * Rewrite the keys of a zone-keyed map (e.g. plant assignments persisted under
  * old IDs) to canonical IDs, so lookups by canonical bed ID resolve correctly.
+ *
+ * When one bed is present under both a legacy and a canonical key, the
+ * canonical entry wins regardless of iteration order — it is the one the app
+ * writes today, so it is the more recent of the two.
  */
 export function resolveAssignmentKeys(
   assignments: Record<string, string>
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(assignments)) {
-    out[resolveZoneId(key)] = value;
+    const canonical = resolveZoneId(key);
+    if (key === canonical || !(canonical in out)) {
+      out[canonical] = value;
+    }
   }
   return out;
+}
+
+/**
+ * True when `assignments` holds any key that is not already canonical — i.e.
+ * the stored document predates the zone-ID rename and needs migrating.
+ */
+export function hasLegacyAssignmentKeys(
+  assignments: Record<string, string>
+): boolean {
+  return Object.keys(assignments).some((key) => key !== resolveZoneId(key));
+}
+
+/**
+ * Every key under which a bed's assignment may be stored: its canonical ID plus
+ * any legacy IDs still present in `assignments`.
+ *
+ * Writes use the canonical ID, but a bed assigned before the rename is stored
+ * under a legacy one. Clearing has to remove all of them — deleting only the
+ * canonical key leaves the legacy key behind, and the bed keeps its plant.
+ */
+export function assignmentKeysForZone(
+  assignments: Record<string, string>,
+  zoneKey: string
+): string[] {
+  const canonical = resolveZoneId(zoneKey);
+  const stored = Object.keys(assignments).filter(
+    (key) => resolveZoneId(key) === canonical
+  );
+  return stored.length > 0 ? stored : [canonical];
 }

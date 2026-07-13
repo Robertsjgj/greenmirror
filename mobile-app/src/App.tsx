@@ -37,6 +37,7 @@ import {
   subscribeToZoneAssignments,
   writeZoneAssignment,
   clearZoneAssignment,
+  replaceZoneAssignments,
 } from "./services/zoneAssignmentsService";
 import {
   subscribeToCustomProfiles,
@@ -54,7 +55,12 @@ import {
   saveZoneAssignmentsForGh,
 } from "./plantProfiles";
 import { mapZonesToSydneyLayout } from "./sydneyLayout";
-import { resolveZoneId } from "./zoneRegistry";
+import {
+  resolveZoneId,
+  resolveAssignmentKeys,
+  hasLegacyAssignmentKeys,
+  assignmentKeysForZone,
+} from "./zoneRegistry";
 import {
   LatestReading,
   LayoutSettings,
@@ -494,11 +500,22 @@ export function App() {
           setAssignmentsFallback(false);
           return; // keep current local state; Firestore write above will trigger a second callback
         }
+        // State is keyed by canonical zone ID — the same key the map and the
+        // zone sheet write with. A document still holding legacy IDs would
+        // otherwise be readable (the layout canonicalises on lookup) but not
+        // writable: clearing a bed would delete a key that isn't there.
+        const canonical = resolveAssignmentKeys(assignments);
+        if (hasLegacyAssignmentKeys(assignments)) {
+          console.info(
+            `[GreenMirror] Migrating legacy assignment keys to canonical zone IDs for "${currentGhId}"`,
+          );
+          replaceZoneAssignments(currentGhId, canonical);
+        }
         console.info(
-          `[GreenMirror] Applying ${Object.keys(assignments).length} Firestore assignments to state for "${currentGhId}"`,
+          `[GreenMirror] Applying ${Object.keys(canonical).length} Firestore assignments to state for "${currentGhId}"`,
         );
-        setZoneAssignments(assignments);
-        saveZoneAssignmentsForGh(currentGhId, assignments);
+        setZoneAssignments(canonical);
+        saveZoneAssignmentsForGh(currentGhId, canonical);
         setAssignmentsLoaded(true);
         setAssignmentsFallback(false);
       },
@@ -1036,9 +1053,7 @@ export function App() {
         });
       }
       if (ghId) {
-        assignedZoneKeys.forEach((zoneKey) =>
-          clearZoneAssignment(ghId, zoneKey),
-        );
+        clearZoneAssignment(ghId, assignedZoneKeys);
         writeActivityEvent({
           type: "profile-update",
           greenhouseId: ghId,
@@ -1143,12 +1158,16 @@ export function App() {
 
   const onAssignPlant = useCallback(
     (zoneKey: string, plantId: string | null) => {
+      const canonicalKey = resolveZoneId(zoneKey);
       setZoneAssignments((a) => {
         const next = { ...a };
+        // Drop every key this bed is held under (canonical + any legacy), so a
+        // clear can't leave a stale legacy key behind that re-renders the plant.
+        for (const key of assignmentKeysForZone(a, canonicalKey)) {
+          delete next[key];
+        }
         if (plantId) {
-          next[zoneKey] = plantId;
-        } else {
-          delete next[zoneKey];
+          next[canonicalKey] = plantId;
         }
         return next;
       });
@@ -1158,7 +1177,7 @@ export function App() {
       if (ghId) {
         // Firestore write for cross-device sync
         if (plantId) {
-          writeZoneAssignment(ghId, zoneKey, plantId);
+          writeZoneAssignment(ghId, canonicalKey, plantId);
           logActivityForGh(ghId, {
             type: "assignment",
             visualZoneId: zoneKey,
@@ -1177,7 +1196,10 @@ export function App() {
             ...activityActor,
           });
         } else {
-          clearZoneAssignment(ghId, zoneKey);
+          clearZoneAssignment(
+            ghId,
+            assignmentKeysForZone(zoneAssignments, canonicalKey),
+          );
           logActivityForGh(ghId, {
             type: "cleared",
             visualZoneId: zoneKey,
@@ -1197,7 +1219,7 @@ export function App() {
         setActivityLog(loadActivityForGh(ghId));
       }
     },
-    [activityActor, ghId, profilesById],
+    [activityActor, ghId, profilesById, zoneAssignments],
   );
 
   // ── ALL HOOKS ABOVE THIS LINE ───────────────────────────────────────────────

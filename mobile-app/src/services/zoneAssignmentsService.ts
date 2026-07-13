@@ -107,22 +107,31 @@ export async function writeZoneAssignment(
 }
 
 /**
- * Remove a single zone assignment from Firestore.
- * Uses updateDoc with deleteField() to surgically remove one key.
+ * Remove zone assignments from Firestore.
+ * Uses updateDoc with deleteField() to surgically remove the keys.
  * If the document doesn't exist yet the error is silently ignored.
+ *
+ * Takes every key the bed is stored under, not just its canonical ID: a bed
+ * assigned before the zone-ID rename is persisted under a legacy key (e.g.
+ * "SYD-GH-LEFT-01"), and deleting only the canonical "SYD-INSIDE-LEFT-01"
+ * would leave that legacy key — and therefore the plant — in place.
  */
 export async function clearZoneAssignment(
   greenhouseId: string,
-  zoneKey: string,
+  zoneKeys: string | string[],
 ): Promise<boolean> {
   const db = getDb();
   if (!db) return false;
+
+  const keys = (Array.isArray(zoneKeys) ? zoneKeys : [zoneKeys]).filter(Boolean);
+  if (keys.length === 0) return true;
+
   try {
     await updateDoc(
       doc(db, 'zoneAssignments', greenhouseId),
-      { [`assignments.${zoneKey}`]: deleteField() },
+      Object.fromEntries(keys.map((k) => [`assignments.${k}`, deleteField()])),
     );
-    console.info(`[GreenMirror] Firestore write success: cleared assignment ${greenhouseId}/${zoneKey}`);
+    console.info(`[GreenMirror] Firestore write success: cleared assignment ${greenhouseId}/${keys.join(', ')}`);
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -132,5 +141,31 @@ export async function clearZoneAssignment(
       return false;
     }
     return true;
+  }
+}
+
+/**
+ * Overwrite the whole assignments map in one write.
+ *
+ * `updateDoc` replaces the `assignments` field wholesale (unlike setDoc+merge,
+ * which unions the keys), so this is what lets a rewrite actually drop keys.
+ * Used to migrate a document off legacy zone IDs.
+ */
+export async function replaceZoneAssignments(
+  greenhouseId: string,
+  assignments: ZoneAssignments,
+): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  try {
+    await updateDoc(doc(db, 'zoneAssignments', greenhouseId), { assignments });
+    console.info(
+      `[GreenMirror] Firestore write success: replaced assignments for ${greenhouseId}`,
+      JSON.stringify(assignments),
+    );
+    return true;
+  } catch (err) {
+    console.warn('[GreenMirror] Firestore write failure: replace assignments', err);
+    return false;
   }
 }
