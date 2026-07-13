@@ -5,7 +5,7 @@ import {
   Loader2,
   Settings,
   ThermometerSun,
-  X,
+  // X,
 } from "lucide-react";
 import { Button } from "./ui/Button";
 import {
