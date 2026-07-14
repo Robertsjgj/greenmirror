@@ -41,6 +41,10 @@ import {
   type WateringSettings,
 } from "../services/wateringScheduleService";
 
+const EXCLUDED_WATERING_USER_IDS = new Set([
+  "Cnrhbi6t2yfMclKva4EeISmjgK92", // admin-sydney account
+]);
+
 interface WateringScheduleViewProps {
   onBack: () => void;
   greenhouseId: string;
@@ -82,6 +86,10 @@ function scheduleStatus(schedule: WateringSchedule): string {
   if (schedule.completed) return "Completed";
   if (schedule.hotDay) return "Hot day";
   return "Scheduled";
+}
+
+function isWateringEligibleUser(user: AdminUserRecord): boolean {
+  return user.active && !EXCLUDED_WATERING_USER_IDS.has(user.uid);
 }
 
 function withTimeout<T>(
@@ -152,7 +160,7 @@ export function WateringScheduleView({
   const todayKey = getWateringDateKey();
 
   const activeUsers = useMemo(
-    () => users.filter((user) => user.active),
+    () => users.filter(isWateringEligibleUser),
     [users],
   );
 
@@ -259,7 +267,7 @@ export function WateringScheduleView({
     if (!isAdmin) return;
 
     if (activeUsers.length === 0) {
-      setError("No active users found for this greenhouse.");
+      setError("No active watering users found for this greenhouse.");
       return;
     }
 
@@ -300,7 +308,7 @@ export function WateringScheduleView({
     if (!isAdmin) return;
 
     if (activeUsers.length === 0) {
-      setError("No active users found for this greenhouse.");
+      setError("No active watering users found for this greenhouse.");
       return;
     }
 
