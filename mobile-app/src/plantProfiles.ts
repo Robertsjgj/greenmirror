@@ -1,4 +1,13 @@
 import type { VisualZone } from './zoneLayout';
+import { findPlantIconByName } from './plantIconRegistry';
+import {
+  classifyMoistureAgainstTarget,
+  findPlantRequirementByName,
+  findProvisionalPlantRequirement,
+  requirementRangesMatch,
+  type PlantProfileSource,
+  type PlantRequirementProfile,
+} from './plantRequirements';
 
 export interface PlantProfile {
   id: string;
@@ -12,6 +21,20 @@ export interface PlantProfile {
   careNotes?: string;
   isDefault?: boolean;
   isCustom?: boolean;
+  profileSource?: PlantProfileSource;
+  sourcePlantName?: string;
+  requiresUserReview?: boolean;
+  requirementNotes?: string[];
+  preferredSoilTempMin?: number;
+  preferredSoilTempMax?: number;
+  toleratedSoilTempMin?: number;
+  toleratedSoilTempMax?: number;
+  sandySoilVwcMin?: number;
+  sandySoilVwcMax?: number;
+  loamSoilVwcMin?: number;
+  loamSoilVwcMax?: number;
+  claySoilVwcMin?: number;
+  claySoilVwcMax?: number;
 }
 
 export type ZoneAssignments = Record<string, string>;
@@ -39,96 +62,72 @@ export interface ZonePlantEvaluation {
 export const PLANT_PROFILES_STORAGE_KEY = 'greenmirror-plant-profiles';
 export const ZONE_ASSIGNMENTS_STORAGE_KEY = 'greenmirror-zone-assignments';
 
+function profileFromRequirement(id: string, name: string): PlantProfile {
+  const requirement = findPlantRequirementByName(name) ?? findProvisionalPlantRequirement(name);
+  if (!requirement) throw new Error(`Missing configured GreenMirror plant requirement for ${name}`);
+  return applyRequirementToPlantProfile({ id, name, icon: findPlantIconByName(name)?.icon }, requirement, true);
+}
+
 export const DEFAULT_PLANT_PROFILES: PlantProfile[] = [
-  {
-    id: 'tomato',
-    name: 'Tomato',
-    icon: '🍅',
-    moistureMin: 55,
-    moistureMax: 75,
-    soilTempMin: 18,
-    soilTempMax: 29,
-    notes: 'Keep soil consistently moist and warm.',
-    isDefault: true
-  },
-  {
-    id: 'pepper',
-    name: 'Pepper',
-    icon: '🌶️',
-    moistureMin: 50,
-    moistureMax: 70,
-    soilTempMin: 20,
-    soilTempMax: 30,
-    notes: 'Prefers warm soil and moderate moisture.',
-    isDefault: true
-  },
-  {
-    id: 'carrot',
-    name: 'Carrot',
-    icon: '🥕',
-    moistureMin: 45,
-    moistureMax: 65,
-    soilTempMin: 10,
-    soilTempMax: 24,
-    notes: 'Even moisture helps roots size cleanly.',
-    isDefault: true
-  },
-  {
-    id: 'lettuce',
-    name: 'Lettuce',
-    icon: '🥬',
-    moistureMin: 60,
-    moistureMax: 80,
-    soilTempMin: 7,
-    soilTempMax: 22,
-    notes: 'Likes cooler soil and steady water.',
-    isDefault: true
-  },
-  {
-    id: 'kale',
-    name: 'Kale',
-    icon: '🌿',
-    moistureMin: 50,
-    moistureMax: 75,
-    soilTempMin: 7,
-    soilTempMax: 24,
-    notes: 'Tolerates cool soil but dislikes drying out.',
-    isDefault: true
-  },
-  {
-    id: 'spinach',
-    name: 'Spinach',
-    icon: '🌱',
-    moistureMin: 55,
-    moistureMax: 80,
-    soilTempMin: 5,
-    soilTempMax: 20,
-    notes: 'Best in cool, moist conditions.',
-    isDefault: true
-  },
-  {
-    id: 'cucumber',
-    name: 'Cucumber',
-    icon: '🥒',
-    moistureMin: 60,
-    moistureMax: 80,
-    soilTempMin: 18,
-    soilTempMax: 30,
-    notes: 'Needs warm soil and generous moisture.',
-    isDefault: true
-  },
-  {
-    id: 'onion',
-    name: 'Onion',
-    icon: '🧅',
-    moistureMin: 40,
-    moistureMax: 60,
-    soilTempMin: 10,
-    soilTempMax: 24,
-    notes: 'Prefers moderate moisture with good drainage.',
-    isDefault: true
-  }
+  profileFromRequirement('tomato', 'Tomatoes'),
+  profileFromRequirement('pepper', 'Bell peppers'),
+  profileFromRequirement('carrot', 'Carrots'),
+  profileFromRequirement('lettuce', 'Lettuce'),
+  profileFromRequirement('kale', 'Kale'),
+  profileFromRequirement('spinach', 'Spinach'),
+  profileFromRequirement('cucumber', 'Cucumbers'),
+  profileFromRequirement('onion', 'Onions'),
 ];
+
+export function applyRequirementToPlantProfile(
+  profile: Partial<PlantProfile>,
+  requirement: PlantRequirementProfile,
+  isDefault = false,
+): PlantProfile {
+  const name = requirement.profileSource === 'provisional_estimate'
+    ? (profile.name?.trim() || requirement.canonicalName)
+    : requirement.canonicalName;
+  const normalized: PlantProfile = {
+    ...profile,
+    id: profile.id?.trim() || requirement.id,
+    name,
+    icon: profile.icon ?? findPlantIconByName(name)?.icon,
+    moistureMin: requirement.moistureMin,
+    moistureMax: requirement.moistureMax,
+    soilTempMin: requirement.soilTempMin,
+    soilTempMax: requirement.soilTempMax,
+    profileSource: requirement.profileSource,
+    sourcePlantName: requirement.sourcePlantName,
+    requiresUserReview: requirement.requiresUserReview,
+    requirementNotes: requirement.notes,
+    preferredSoilTempMin: requirement.preferredSoilTempMin,
+    preferredSoilTempMax: requirement.preferredSoilTempMax,
+    toleratedSoilTempMin: requirement.toleratedSoilTempMin,
+    toleratedSoilTempMax: requirement.toleratedSoilTempMax,
+    sandySoilVwcMin: requirement.sandySoilVwcMin,
+    sandySoilVwcMax: requirement.sandySoilVwcMax,
+    loamSoilVwcMin: requirement.loamSoilVwcMin,
+    loamSoilVwcMax: requirement.loamSoilVwcMax,
+    claySoilVwcMin: requirement.claySoilVwcMin,
+    claySoilVwcMax: requirement.claySoilVwcMax,
+    isDefault,
+    isCustom: !isDefault,
+  };
+  return normalized;
+}
+
+/** Preserves existing values; fills only missing ranges and labels matching defaults safely. */
+export function normalizeExistingProfileWithRequirements(profile: Partial<PlantProfile>): Partial<PlantProfile> {
+  const requirement = findPlantRequirementByName(profile.name ?? '');
+  if (!requirement) return { ...profile, profileSource: profile.profileSource ?? 'custom' };
+  const rangeKeys = ['moistureMin', 'moistureMax', 'soilTempMin', 'soilTempMax'] as const;
+  const hasMissing = rangeKeys.some((key) => typeof profile[key] !== 'number' || !Number.isFinite(profile[key]));
+  if (hasMissing) return applyRequirementToPlantProfile(profile, requirement, Boolean(profile.isDefault));
+  if (requirementRangesMatch(profile, requirement)) {
+    return { ...profile, profileSource: profile.profileSource ?? 'greenmirror_spreadsheet', sourcePlantName: requirement.sourcePlantName, requiresUserReview: false };
+  }
+  return { ...profile, profileSource: 'custom', sourcePlantName: requirement.sourcePlantName, requiresUserReview: false };
+}
 
 const DEFAULT_PROFILE_IDS = new Set(DEFAULT_PLANT_PROFILES.map((profile) => profile.id));
 
@@ -143,24 +142,41 @@ export function normalizePlantProfile(profile: Partial<PlantProfile>): PlantProf
   const id = profile.id?.trim() || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   if (!id) return null;
 
-  const moistureMin = normalizeRangeValue(profile.moistureMin, 0, 100);
-  const moistureMax = normalizeRangeValue(profile.moistureMax, 0, 100);
-  const soilTempMin = normalizeRangeValue(profile.soilTempMin, -10, 45);
-  const soilTempMax = normalizeRangeValue(profile.soilTempMax, -10, 45);
+  const prepared = normalizeExistingProfileWithRequirements({ ...profile, id, name });
 
-  return {
+  const moistureMin = normalizeRangeValue(prepared.moistureMin, 0, 100);
+  const moistureMax = normalizeRangeValue(prepared.moistureMax, 0, 100);
+  const soilTempMin = normalizeRangeValue(prepared.soilTempMin, -10, 45);
+  const soilTempMax = normalizeRangeValue(prepared.soilTempMax, -10, 45);
+
+  const normalized: PlantProfile = {
     id,
     name,
-    icon: profile.icon?.trim() || undefined,
+    icon: prepared.icon?.trim() || undefined,
     moistureMin: Math.min(moistureMin, moistureMax),
     moistureMax: Math.max(moistureMin, moistureMax),
     soilTempMin: Math.min(soilTempMin, soilTempMax),
     soilTempMax: Math.max(soilTempMin, soilTempMax),
-    notes: profile.notes?.trim() || profile.careNotes?.trim() || undefined,
-    careNotes: profile.careNotes?.trim() || profile.notes?.trim() || undefined,
+    notes: prepared.notes?.trim() || prepared.careNotes?.trim() || undefined,
+    careNotes: prepared.careNotes?.trim() || prepared.notes?.trim() || undefined,
     isDefault: DEFAULT_PROFILE_IDS.has(id),
-    isCustom: !DEFAULT_PROFILE_IDS.has(id)
+    isCustom: !DEFAULT_PROFILE_IDS.has(id),
+    profileSource: prepared.profileSource,
+    sourcePlantName: prepared.sourcePlantName,
+    requiresUserReview: prepared.requiresUserReview ?? false,
+    requirementNotes: Array.isArray(prepared.requirementNotes) ? prepared.requirementNotes.filter((note): note is string => typeof note === 'string') : undefined,
+    preferredSoilTempMin: prepared.preferredSoilTempMin,
+    preferredSoilTempMax: prepared.preferredSoilTempMax,
+    toleratedSoilTempMin: prepared.toleratedSoilTempMin,
+    toleratedSoilTempMax: prepared.toleratedSoilTempMax,
+    sandySoilVwcMin: prepared.sandySoilVwcMin,
+    sandySoilVwcMax: prepared.sandySoilVwcMax,
+    loamSoilVwcMin: prepared.loamSoilVwcMin,
+    loamSoilVwcMax: prepared.loamSoilVwcMax,
+    claySoilVwcMin: prepared.claySoilVwcMin,
+    claySoilVwcMax: prepared.claySoilVwcMax,
   };
+  return normalizeExistingProfileWithRequirements(normalized) as PlantProfile;
 }
 
 export function loadPlantProfiles(): PlantProfile[] {
@@ -171,14 +187,15 @@ export function loadPlantProfiles(): PlantProfile[] {
   try {
     const raw = window.localStorage.getItem(PLANT_PROFILES_STORAGE_KEY);
     const stored = raw ? JSON.parse(raw) : [];
-    const customProfiles = Array.isArray(stored)
+    const storedProfiles = Array.isArray(stored)
       ? stored
           .map((profile) => normalizePlantProfile(profile))
           .filter((profile): profile is PlantProfile => Boolean(profile))
-          .filter((profile) => !defaultsById.has(profile.id))
       : [];
-
-    return [...DEFAULT_PLANT_PROFILES.map((profile) => ({ ...profile, isDefault: true })), ...dedupeProfiles(customProfiles)];
+    const storedById = new Map(storedProfiles.map((profile) => [profile.id, profile]));
+    const defaults = DEFAULT_PLANT_PROFILES.map((profile) => storedById.get(profile.id) ?? { ...profile, isDefault: true });
+    const customProfiles = storedProfiles.filter((profile) => !defaultsById.has(profile.id));
+    return [...defaults, ...dedupeProfiles(customProfiles)];
   } catch {
     return DEFAULT_PLANT_PROFILES;
   }
@@ -342,9 +359,12 @@ export function evaluateZoneAgainstPlant(zone: VisualZone, profile: PlantProfile
     if (zone.soilMoisturePct < profile.moistureMin) {
       moistureStatus = 'needs-water';
       messages.push(`${profile.name} needs water in ${zone.displayLabel ?? zone.visualLabel}.`);
-    } else if (zone.soilMoisturePct > profile.moistureMax) {
+    } else if (classifyMoistureAgainstTarget(zone.soilMoisturePct, profile.moistureMin, profile.moistureMax) === 'above_target_tolerated') {
       moistureStatus = 'too-wet';
-      messages.push(`${profile.name} may be too wet in ${zone.displayLabel ?? zone.visualLabel}.`);
+      messages.push(`${profile.name} is wetter than the preferred range in ${zone.displayLabel ?? zone.visualLabel} — monitor.`);
+    } else if (classifyMoistureAgainstTarget(zone.soilMoisturePct, profile.moistureMin, profile.moistureMax) === 'too_wet') {
+      moistureStatus = 'too-wet';
+      messages.push(`Soil appears substantially wetter than the preferred range for ${profile.name}.`);
     } else {
       moistureStatus = 'good';
       // Good moisture — no actionable message needed

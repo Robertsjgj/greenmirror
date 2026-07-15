@@ -9,6 +9,7 @@ import {
   ResponsiveContainer,
   Tooltip } from
 'recharts';
+import { moistureChartCeiling } from '../plantRequirements';
 interface PlantData {
   id: string;
   emoji: string;
@@ -374,13 +375,12 @@ export function PlantDetail({ plant, onBack }: PlantDetailProps) {
                 axisLine={false} />
               
               <YAxis
-                domain={[0, 100]}
+                domain={[0, moistureChartCeiling(moistureTrend.map((point) => point.value))]}
                 stroke="#a8a29e"
                 fontSize={11}
                 fontWeight={600}
                 tickLine={false}
                 axisLine={false}
-                ticks={[0, 25, 50, 75, 100]}
                 tickFormatter={(v) => `${v}%`}
                 width={40} />
               
