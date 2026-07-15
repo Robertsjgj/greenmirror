@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { subscribeToReadingsHistory, type Unsubscribe } from '../services/readingsService';
 import { subscribeToRollups, type RollupPeriod } from '../services/rollupsService';
 import type { LatestReading } from '../zoneLayout';
+import { MAX_PLAUSIBLE_SENSOR_PCT } from '../plantRequirements';
 
 export type TimeRange = '24h' | '7d' | '30d' | '3m' | '1y';
 
@@ -190,7 +191,7 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       b.envTempSum += et; b.envTempCount++;
     }
     const eh = reading.environment?.humidity_pct ?? reading.env_humidity_pct;
-    if (typeof eh === 'number' && isFinite(eh) && eh >= 0 && eh <= 100) {
+    if (typeof eh === 'number' && isFinite(eh) && eh >= 0 && eh <= MAX_PLAUSIBLE_SENSOR_PCT) {
       b.envHumSum += eh; b.envHumCount++;
     }
 
@@ -200,7 +201,7 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       b.extTempSum += xt; b.extTempCount++;
     }
     const xh = reading.external_weather?.humidity_pct;
-    if (typeof xh === 'number' && isFinite(xh) && xh >= 0 && xh <= 100) {
+    if (typeof xh === 'number' && isFinite(xh) && xh >= 0 && xh <= MAX_PLAUSIBLE_SENSOR_PCT) {
       b.extHumSum += xh; b.extHumCount++;
     }
 
@@ -215,7 +216,7 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
       const inside  = isInsideZone(zone.zone_id);
       const outside = isOutsideZone(zone.zone_id);
 
-      if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) {
+      if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= MAX_PLAUSIBLE_SENSOR_PCT) {
         b.moistureSum += m; b.moistureCount++;
         if (inside)  { b.moistureInSum  += m; b.moistureInCount++;  classifiedMoistureIn  = true; }
         if (outside) { b.moistureOutSum += m; b.moistureOutCount++; classifiedMoistureOut = true; }
@@ -233,13 +234,13 @@ export function buildTrendData(readings: LatestReading[], range: TimeRange): Tre
     const sm = reading.summary;
     if (!classifiedMoistureIn) {
       const v = sm?.avg_inside_soil_moisture_pct ?? sm?.avg_all_soil_moisture_pct;
-      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= 100) {
+      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= MAX_PLAUSIBLE_SENSOR_PCT) {
         b.moistureInSum += v; b.moistureInCount++;
       }
     }
     if (!classifiedMoistureOut) {
       const v = sm?.avg_outside_soil_moisture_pct;
-      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= 100) {
+      if (typeof v === 'number' && isFinite(v) && v >= 0 && v <= MAX_PLAUSIBLE_SENSOR_PCT) {
         b.moistureOutSum += v; b.moistureOutCount++;
       }
     }

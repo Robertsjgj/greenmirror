@@ -14,6 +14,7 @@
 
 import { resolveZoneId } from '../zoneRegistry';
 import type { LatestReading, VisualZone } from '../zoneLayout';
+import { FIELD_CAPACITY_UPPER_TOLERANCE_PCT, MAX_PLAUSIBLE_SENSOR_PCT, classifyMoistureAgainstTarget } from '../plantRequirements';
 
 // ─── Public model ────────────────────────────────────────────────────────────
 
@@ -70,16 +71,25 @@ export interface ZoneTrendInfo {
 // ─── Tunables (deterministic thresholds) ─────────────────────────────────────
 
 export const INSIGHT_VERSION = 'greenmirror-ai-v1' as const;
-const STALE_MS = 20 * 60 * 1000; // reading older than this → sensor guidance
-const CRITICAL_OFFSET = 15; // pts below min → urgent
-const NEAR_BOUNDARY = 8; // within this above min → "close to lower limit"
-const BORDERLINE = 4; // within this of a limit → lower confidence
-const TREND_EPS = 3; // pts over the window to call a direction
-const TREND_WINDOW_HOURS = 6;
-// Generic (no plant assigned) thresholds — intentionally conservative.
-const GENERIC_DRY = 20;
-const GENERIC_LOWISH = 35;
-const GENERIC_WET = 90;
+/** Initial two-week pilot calibration values; review after the study. */
+export const AI_INSIGHT_PILOT_CONFIG = Object.freeze({
+  staleMs: 20 * 60 * 1000,
+  criticalMoistureOffset: 15,
+  nearBoundary: 8,
+  confidenceBorderline: 4,
+  trendEpsilon: 3,
+  trendWindowHours: 6,
+  genericMoisture: Object.freeze({ dry: 20, lowish: 35, wet: 90 }),
+});
+const STALE_MS = AI_INSIGHT_PILOT_CONFIG.staleMs;
+const CRITICAL_OFFSET = AI_INSIGHT_PILOT_CONFIG.criticalMoistureOffset;
+const NEAR_BOUNDARY = AI_INSIGHT_PILOT_CONFIG.nearBoundary;
+const BORDERLINE = AI_INSIGHT_PILOT_CONFIG.confidenceBorderline;
+const TREND_EPS = AI_INSIGHT_PILOT_CONFIG.trendEpsilon;
+const TREND_WINDOW_HOURS = AI_INSIGHT_PILOT_CONFIG.trendWindowHours;
+const GENERIC_DRY = AI_INSIGHT_PILOT_CONFIG.genericMoisture.dry;
+const GENERIC_LOWISH = AI_INSIGHT_PILOT_CONFIG.genericMoisture.lowish;
+const GENERIC_WET = AI_INSIGHT_PILOT_CONFIG.genericMoisture.wet;
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
@@ -105,7 +115,7 @@ function relativeTime(fromMs: number, now: number): string {
 function isUsableMoisturePct(pct: number | null | undefined, status?: string | null): boolean {
   const s = (status ?? '').toLowerCase();
   if (s === 'not_connected' || s === 'invalid') return false;
-  return typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= 100;
+  return typeof pct === 'number' && Number.isFinite(pct) && pct >= 0 && pct <= MAX_PLAUSIBLE_SENSOR_PCT;
 }
 
 // ─── Trend + watering derivation (pure, from existing data) ──────────────────
@@ -129,8 +139,9 @@ export function computeZoneTrends(
     for (const zone of reading.zones ?? []) {
       if (!isUsableMoisturePct(zone.soil_moisture_pct, zone.soil_moisture_status)) continue;
       const key = resolveZoneId(zone.zone_id);
-      if (!byZone.has(key)) byZone.set(key, []);
-      byZone.get(key)!.push({ ts, pct: zone.soil_moisture_pct as number });
+      const samples = byZone.get(key) ?? [];
+      samples.push({ ts, pct: zone.soil_moisture_pct as number });
+      byZone.set(key, samples);
     }
   }
 
@@ -267,6 +278,7 @@ export function buildZoneInsight(input: ZoneInsightInput): ZoneAIInsight {
   const buildEvidence = (moistureStatus: AIEvidenceItem['status']) => {
     evidence.length = 0;
     evidence.push({ label: 'Current moisture', value: pctText(moisture), status: moistureStatus });
+    evidence.push({ label: 'Latest sensor reading', value: 'fresh', status: 'positive' });
     if (plant) {
       evidence.push({
         label: 'Preferred range',
@@ -296,6 +308,10 @@ export function buildZoneInsight(input: ZoneInsightInput): ZoneAIInsight {
   if (!hasTrend) limitations.push('Trend information is unavailable (not enough recent history).');
   if (!plant) limitations.push('No plant is assigned — assigning one would improve this guidance.');
 
+  if (plant?.profileSource === 'provisional_estimate' || plant?.requiresUserReview) {
+    limitations.push('This plant range is an AI-estimated starting point and has not yet been confirmed by the user.');
+  }
+
   const wateringLimit = 'Water delivered by the hose is not measured.';
 
   let action: AIInsightAction;
@@ -311,6 +327,7 @@ export function buildZoneInsight(input: ZoneInsightInput): ZoneAIInsight {
 
   if (plant) {
     const { moistureMin: lo, moistureMax: hi } = plant;
+    const targetStatus = classifyMoistureAgainstTarget(moisture, lo, hi);
     reasons.push(`Current moisture: ${pctText(moisture)}`);
     reasons.push(`Preferred range: ${roundInt(lo)}–${roundInt(hi)}%`);
     reasons.push(`${trend.windowHours}-hour trend: ${trendStr}`);
@@ -346,24 +363,26 @@ export function buildZoneInsight(input: ZoneInsightInput): ZoneAIInsight {
       explanation =
         `${zoneLabel} is at ${pctText(moisture)}, close to the lower limit of ${roundInt(lo)}% and drying steadily.`;
       limitations.push(wateringLimit);
-    } else if (moisture > hi + CRITICAL_OFFSET + 10 && !falling) {
+    } else if (targetStatus === 'too_wet') {
       action = 'review_plant';
       severity = 'attention';
-      title = 'Review plant';
+      title = 'Too wet — monitor';
       buildEvidence('warning');
-      summary = `${zoneLabel} stays much wetter than ${plantName ?? 'the assigned plant'} prefers.`;
+      evidence.push({ label: 'Field-capacity tolerance', value: `Above ${FIELD_CAPACITY_UPPER_TOLERANCE_PCT}%`, status: 'warning' });
+      summary = `Soil appears substantially wetter than the preferred range in ${zoneLabel}.`;
       explanation =
-        `${zoneLabel} is at ${pctText(moisture)}, well above the ${roundInt(lo)}–${roundInt(hi)}% range ` +
-        `and not drying. The assigned plant may not closely match the conditions recorded here.`;
-    } else if (moisture > hi) {
+        `${zoneLabel} is at ${pctText(moisture)}, above the ${roundInt(lo)}–${roundInt(hi)}% preferred range and above the ` +
+        `${FIELD_CAPACITY_UPPER_TOLERANCE_PCT}% wet-side tolerance. Do not water again now; check whether the reading begins to decrease.`;
+    } else if (targetStatus === 'above_target_tolerated') {
       action = 'monitor';
       severity = 'attention';
       title = 'Monitor';
       buildEvidence('warning');
-      summary = `${zoneLabel} is above the preferred range — hold off watering.`;
+      if (moisture > 100) evidence.push({ label: 'Above field capacity', value: `${roundInt(moisture - 100)} percentage points`, status: 'warning' });
+      summary = `${zoneLabel} is wetter than the preferred range — monitor.`;
       explanation =
-        `${zoneLabel} is at ${pctText(moisture)}, above the target range of ${roundInt(lo)}–${roundInt(hi)}%. ` +
-        `No watering is needed; keep an eye on drainage.`;
+        `${zoneLabel} is at ${pctText(moisture)}, above the preferred range of ${roundInt(lo)}–${roundInt(hi)}% but at or below the ` +
+        `${FIELD_CAPACITY_UPPER_TOLERANCE_PCT}% wet-side tolerance. This may be temporary after watering, but continued high readings should be monitored.`;
     } else if (falling) {
       action = 'monitor';
       severity = 'monitor';

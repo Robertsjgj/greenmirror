@@ -140,10 +140,5 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // GreenMirror AI pilot feedback (greenhouse-scoped). Matches the permissive
-    // dev-mode posture of the other pilot collections; tighten before production.
-    match /aiFeedback/{id} {
-      allow read, write: if true;
-    }
   }
 }

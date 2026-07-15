@@ -19,6 +19,7 @@
  */
 
 import { resolveZoneId } from '../zoneRegistry';
+import { MAX_PLAUSIBLE_SENSOR_PCT } from '../plantRequirements';
 import type { LatestReading, ZoneReading } from '../zoneLayout';
 
 // ─── Verification status vocabulary ─────────────────────────────────────────
@@ -117,12 +118,17 @@ export function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-/** A moisture reading counts only if the sensor is connected and value is in range. */
+/**
+ * A moisture reading counts only if the sensor is connected and the value is
+ * plausible. 100% is field capacity, not the ceiling — soil can read above it
+ * shortly after watering, which is exactly when a baseline matters most, so the
+ * bound is the shared plausibility limit rather than 100.
+ */
 function isUsableMoisture(zone: ZoneReading): boolean {
   const status = zone.soil_moisture_status;
   if (status === 'not_connected' || status === 'invalid') return false;
   const m = zone.soil_moisture_pct;
-  return typeof m === 'number' && Number.isFinite(m) && m >= 0 && m <= 100;
+  return typeof m === 'number' && Number.isFinite(m) && m >= 0 && m <= MAX_PLAUSIBLE_SENSOR_PCT;
 }
 
 /** Find this reading's entry for the canonical zone (reconciles legacy ids). */

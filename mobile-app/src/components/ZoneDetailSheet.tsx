@@ -467,7 +467,7 @@ export function ZoneDetailSheet({
                 💧 Water 200ml
               </button>
               <button className="gm-btn soft" onClick={() => setShowPicker(true)}>
-                🌱 Assign plant
+                🌱 {profile ? 'Change plant' : 'Assign plant'}
               </button>
             </div>
 

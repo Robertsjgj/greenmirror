@@ -9,7 +9,6 @@ import {
   type ZoneAIInsight,
   type ZoneTrendInfo,
 } from './aiInsights';
-import { aiFeedbackDocId } from './aiFeedbackService';
 
 const NOW = Date.parse('2026-07-13T12:00:00.000Z');
 const iso = (offsetMs: number) => new Date(NOW + offsetMs).toISOString();
@@ -80,6 +79,26 @@ describe('recommendation rules', () => {
   it('within range but falling recommends monitor', () => {
     const i = build(zone({ soilMoisturePct: 45 }), TREND({ direction: 'falling', deltaPct: -4 }));
     expect(i.action).toBe('monitor');
+  });
+
+  it('distinguishes the preferred range from field-capacity wet tolerance', () => {
+    const profile = plant({ moistureMin: 66, moistureMax: 100, profileSource: 'greenmirror_spreadsheet' });
+    expect(build(zone({ soilMoisturePct: 100, assignedPlantProfile: profile }), TREND()).action).toBe('no_watering_needed');
+
+    const tolerated = build(zone({ soilMoisturePct: 106, assignedPlantProfile: profile }), TREND({ direction: 'rising', deltaPct: 6 }));
+    expect(tolerated.action).toBe('monitor');
+    expect(tolerated.summary).toMatch(/wetter than the preferred range/i);
+    expect(tolerated.evidence.some((item) => /field capacity/i.test(item.label))).toBe(true);
+
+    const tooWet = build(zone({ soilMoisturePct: 111, assignedPlantProfile: profile }), TREND());
+    expect(tooWet.title).toMatch(/too wet/i);
+    expect(tooWet.explanation).toContain('110% wet-side tolerance');
+  });
+
+  it('adds an explicit limitation for provisional plant ranges', () => {
+    const provisional = plant({ profileSource: 'provisional_estimate', requiresUserReview: true });
+    const result = build(zone({ assignedPlantProfile: provisional }), TREND());
+    expect(result.limitations.join(' ')).toMatch(/AI-estimated starting point/i);
   });
 
   // 3. Falling near the lower boundary → check_today
@@ -225,24 +244,6 @@ describe('history-derived trend', () => {
 });
 
 // ─── 16 + 17. Feedback scoping + dedup ────────────────────────────────────────
-describe('AI feedback identity', () => {
-  it('is greenhouse-scoped and stable (idempotent → no duplicates)', () => {
-    const a = aiFeedbackDocId({ greenhouseId: 'gh1', insightType: 'zone_recommendation', zoneId: 'SYD-INSIDE-RIGHT-01', userId: 'u1' });
-    const b = aiFeedbackDocId({ greenhouseId: 'gh1', insightType: 'zone_recommendation', zoneId: 'SYD-INSIDE-RIGHT-01', userId: 'u1' });
-    expect(a).toBe(b);
-    expect(a).toContain('gh1');
-  });
-
-  it('differs across greenhouses, zones, users, and insight types', () => {
-    const base = { insightType: 'zone_recommendation' as const, zoneId: 'z1', userId: 'u1' };
-    expect(aiFeedbackDocId({ ...base, greenhouseId: 'gh1' })).not.toBe(aiFeedbackDocId({ ...base, greenhouseId: 'gh2' }));
-    expect(aiFeedbackDocId({ greenhouseId: 'gh1', ...base })).not.toBe(aiFeedbackDocId({ greenhouseId: 'gh1', ...base, zoneId: 'z2' }));
-    expect(aiFeedbackDocId({ greenhouseId: 'gh1', ...base })).not.toBe(aiFeedbackDocId({ greenhouseId: 'gh1', ...base, userId: 'u2' }));
-    expect(aiFeedbackDocId({ greenhouseId: 'gh1', insightType: 'greenhouse_summary', userId: 'u1' }))
-      .not.toBe(aiFeedbackDocId({ greenhouseId: 'gh1', insightType: 'zone_recommendation', userId: 'u1' }));
-  });
-});
-
 // ─── 18. Shared utilities still importable (no breakage of existing modules) ──
 describe('existing module integrity', () => {
   it('reuses resolveZoneId + existing types without redefining them', () => {

@@ -52,13 +52,15 @@ import {
   savePlantProfiles,
   loadZoneAssignmentsForGh,
   saveZoneAssignmentsForGh,
+  applyRequirementToPlantProfile,
+  normalizeExistingProfileWithRequirements,
 } from "./plantProfiles";
+import { findPlantRequirementByName, findProvisionalPlantRequirement } from "./plantRequirements";
 import { mapZonesToSydneyLayout } from "./sydneyLayout";
 import { resolveZoneId } from "./zoneRegistry";
 import { useReadingsHistory } from "./hooks/useReadingsHistory";
 import { buildAllZoneInsights, summarizeGreenhouse } from "./services/aiInsights";
 import { AIHomeCard } from "./components/AIHomeCard";
-import { AIInsightsView } from "./components/AIInsightsView";
 import {
   LatestReading,
   LayoutSettings,
@@ -315,12 +317,11 @@ export function App() {
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [trendsOpen, setTrendsOpen] = useState(false);
+  const [trendsInitialSection, setTrendsInitialSection] = useState<'overview' | 'zones'>('overview');
   // Alerts opens as a full standalone page (own header + back button, no bottom
   // nav). Kept separate from `activeTab` so closing it returns to the previous
   // screen (the tab that was showing when the bell was tapped).
   const [alertsOpen, setAlertsOpen] = useState(false);
-  // Full "GreenMirror AI" insights page — standalone (own header + back).
-  const [aiInsightsOpen, setAiInsightsOpen] = useState(false);
   // `seen` drives the unread-only bell badge (local, per greenhouse).
   const [seenAlertIds, setSeenAlertIds] = useState<Set<string>>(new Set());
   // Notification history (active + auto-resolved) — Firestore, with a
@@ -356,7 +357,6 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     alertsOpen,
-    aiInsightsOpen,
     changePasswordOpen,
     wateringScheduleOpen,
     activityHistoryOpen,
@@ -369,7 +369,6 @@ export function App() {
     selectedZoneId,
     siteSheetOpen,
     alertsOpen,
-    aiInsightsOpen,
     changePasswordOpen,
     wateringScheduleOpen,
     activityHistoryOpen,
@@ -387,7 +386,6 @@ export function App() {
       else if (s.selectedZoneId !== null) setSelectedZoneId(null);
       else if (s.siteSheetOpen) setSiteSheetOpen(false);
       else if (s.alertsOpen) setAlertsOpen(false);
-      else if (s.aiInsightsOpen) setAiInsightsOpen(false);
       else if (s.changePasswordOpen) setChangePasswordOpen(false);
       else if (s.wateringScheduleOpen) setWateringScheduleOpen(false);
       else if (s.activityHistoryOpen) setActivityHistoryOpen(false);
@@ -569,7 +567,7 @@ export function App() {
           const merged: PlantProfile[] = DEFAULT_PLANT_PROFILES.map((def) => {
             const override = firestoreById.get(def.id);
             return override
-              ? { ...override, isDefault: true }
+              ? { ...normalizeExistingProfileWithRequirements(override), isDefault: true } as PlantProfile
               : { ...def, isDefault: true };
           });
           firestoreProfiles
@@ -820,14 +818,6 @@ export function App() {
 
   const aiSummary = useMemo(() => summarizeGreenhouse(aiInsights), [aiInsights]);
 
-  const aiZonesByCanonicalId = useMemo(() => {
-    const map = new Map<string, VisualZone>();
-    resolvedZones.forEach((z) => {
-      if (z.hasReading) map.set(resolveZoneId(z.backendZoneId ?? z.visualLabel), z);
-    });
-    return map;
-  }, [resolvedZones]);
-
   // Derive the open sheet's zone from the LIVE zone array (recomputed each time
   // readings update, ~5s) by matching the canonical ID — so it never shows a
   // stale snapshot. Beds are always present in the layout, so this resolves even
@@ -992,15 +982,10 @@ export function App() {
   // Plant profile CRUD
   const onAddProfile = useCallback((prefill?: string) => {
     if (prefill) {
-      setEditorProfile({
-        id: "",
-        name: prefill,
-        icon: "🌱",
-        moistureMin: 50,
-        moistureMax: 70,
-        soilTempMin: 15,
-        soilTempMax: 25,
-      });
+      const requirement = findPlantRequirementByName(prefill) ?? findProvisionalPlantRequirement(prefill);
+      setEditorProfile(requirement
+        ? applyRequirementToPlantProfile({ id: '', name: prefill }, requirement)
+        : ({ id: '', name: prefill, icon: '🪴' } as PlantProfile));
     } else {
       setEditorProfile("new");
     }
@@ -1420,7 +1405,7 @@ export function App() {
             key={item.id}
             className={`gm-tab${active ? ' active' : ''}`}
             onClick={() => {
-              if (item.id === 'trends') setTrendsOpen(true);
+              if (item.id === 'trends') { setTrendsInitialSection('overview'); setTrendsOpen(true); }
               else { setTrendsOpen(false); setActiveTab(item.id as Tab); }
             }}
           >
@@ -1434,48 +1419,7 @@ export function App() {
 
   return (
     <div className="gm-app">
-      {aiInsightsOpen ? (
-        /* ── GREENMIRROR AI — full insights page (back button, no bottom nav). ── */
-        <>
-          <header className={`gm-header${scrolled ? ' scrolled' : ''}`}>
-            <button
-              onClick={() => setAiInsightsOpen(false)}
-              aria-label="Back"
-              style={{
-                width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
-                background: 'var(--primary-soft)', border: '1.5px solid var(--primary)',
-                color: 'var(--primary)', fontSize: 20, fontWeight: 800,
-                display: 'grid', placeItems: 'center', cursor: 'pointer',
-              }}
-            >
-              ←
-            </button>
-            <div className="gm-brand">
-              <h1>
-                AI Insights <span style={{ fontSize: 20, lineHeight: 1 }}>🌿</span>
-              </h1>
-              <small>{ghName}</small>
-            </div>
-            <div className="gm-header-actions">{avatarButton}</div>
-          </header>
-          <div
-            className="gm-scroll"
-            ref={scrollRef}
-            onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
-          >
-            <AIInsightsView
-              insights={aiInsights}
-              summary={aiSummary}
-              greenhouseId={ghId ?? ''}
-              userId={firebaseUser?.uid}
-              zonesByCanonicalId={aiZonesByCanonicalId}
-              onViewZone={(z) => { setAiInsightsOpen(false); openZone(z); }}
-              onViewTrends={() => { setAiInsightsOpen(false); setTrendsOpen(true); }}
-              onOpenWatering={() => { setAiInsightsOpen(false); setWateringScheduleOpen(true); }}
-            />
-          </div>
-        </>
-      ) : trendsOpen ? (
+      {trendsOpen ? (
         /* ── TRENDS & ANALYSIS — standard app bar + scroll body + bottom nav,
               matching every other main page. ──────────────────────────────── */
         <>
@@ -1486,23 +1430,7 @@ export function App() {
               </h1>
               <small>{ghName}</small>
             </div>
-            <div className="gm-header-actions">
-              <button
-                type="button"
-                onClick={() => setAiInsightsOpen(true)}
-                aria-label="Open AI insights"
-                title="GreenMirror AI insights"
-                style={{
-                  border: '1.5px solid var(--primary)', background: 'var(--primary-soft)',
-                  color: 'var(--primary)', borderRadius: 999, padding: '6px 12px',
-                  fontSize: 12, fontWeight: 800, cursor: 'pointer', flexShrink: 0,
-                }}
-              >
-                🌿 AI
-              </button>
-              {bellButton}
-              {avatarButton}
-            </div>
+            <div className="gm-header-actions">{bellButton}{avatarButton}</div>
           </header>
           <div
             className="gm-scroll"
@@ -1517,6 +1445,9 @@ export function App() {
               profilesById={profilesById}
               plantProfiles={plantProfiles}
               simHistory={isSimulating ? simHistory : undefined}
+              shared24hReadings={aiHistory}
+              aiInsights={aiInsights}
+              initialSection={trendsInitialSection}
               activityLog={activityLog}
               firestoreActivity={firestoreActivity}
               onClose={() => setTrendsOpen(false)}
@@ -1612,7 +1543,7 @@ export function App() {
             {activeTab === 'plants' && (
               <AIHomeCard
                 summary={aiSummary}
-                onOpenInsights={() => setAiInsightsOpen(true)}
+                onOpenTrends={() => { setTrendsInitialSection('zones'); setTrendsOpen(true); }}
               />
             )}
             {activeTab === 'plants' && (

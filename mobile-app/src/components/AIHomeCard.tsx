@@ -3,7 +3,7 @@ import { ACTION_LABEL, SEVERITY_META } from "../services/aiInsightLabels";
 
 interface AIHomeCardProps {
   summary: GreenhouseAISummary;
-  onOpenInsights: () => void;
+  onOpenTrends: () => void;
 }
 
 interface CountChipProps {
@@ -35,7 +35,7 @@ function CountChip({ n, label, fg, bg }: CountChipProps) {
 }
 
 /** Concise "GreenMirror AI" summary card for the Home page. */
-export function AIHomeCard({ summary, onOpenInsights }: AIHomeCardProps) {
+export function AIHomeCard({ summary, onOpenTrends }: AIHomeCardProps) {
   const { counts, headline, top } = summary;
   const needAttention = counts.urgent + counts.attention;
 
@@ -118,7 +118,7 @@ export function AIHomeCard({ summary, onOpenInsights }: AIHomeCardProps) {
 
       <button
         type="button"
-        onClick={onOpenInsights}
+        onClick={onOpenTrends}
         style={{
           width: "100%",
           border: "none",
@@ -131,7 +131,7 @@ export function AIHomeCard({ summary, onOpenInsights }: AIHomeCardProps) {
           cursor: "pointer",
         }}
       >
-        View all AI insights
+        View in Trends &amp; Analysis
       </button>
     </section>
   );

@@ -1,7 +1,7 @@
 /* ──────────────────────────────────────────────────────────────────────────
    TrendsViews.tsx — the four Trends tabs, built to match the attached design.
    Overview (greenhouse report card) · Zones (list → detail) ·
-   Plants (list → detail) · Watering (did watering help?).
+   Plants (list → detail) · Watering (sensor context around recorded actions).
    Designed for non-technical users: 1 card · 1 chart · 1 sentence per concept.
    ────────────────────────────────────────────────────────────────────────── */
 
@@ -16,9 +16,70 @@ import type {
   GreenhouseModel, ZoneLite, SimpleStatus, Trend, HealthCounts,
 } from './trendsModel';
 import type { TimeRange } from '../../hooks/useReadingsHistory';
+import type { VisualZone } from '../../zoneLayout';
+import type { PlantProfile } from '../../plantProfiles';
+import type { ZoneAIInsight } from '../../services/aiInsights';
+import type { ZoneVerificationState } from '../../services/wateringVerification';
+import { resolveZoneId } from '../../zoneRegistry';
+import {
+  buildPlantContextualInsight, buildWateringContextualInsight, buildZoneContextualInsight,
+  type ContextualInsight,
+} from '../../services/trendAIInsights';
+import { AIInsightChip, ContextualAIInsightSheet } from './ContextualAIInsightSheet';
+import { moistureChartBands, moistureChartCeiling } from '../../plantRequirements';
 
 interface TabProps { gm: GreenhouseModel; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; }
 type ListTabProps = TabProps & { selected: string | null; onSelect: (id: string) => void; onBack: () => void };
+
+/** Everything the contextual AI chips need, threaded through the Trends tabs. */
+export interface AIContext {
+  insights: ZoneAIInsight[];
+  zones: VisualZone[];
+  profilesById: Map<string, PlantProfile>;
+  verification: Map<string, ZoneVerificationState>;
+}
+
+const EMPTY_AI: AIContext = { insights: [], zones: [], profilesById: new Map(), verification: new Map() };
+
+const zoneKeyOf = (zone: VisualZone) => resolveZoneId(zone.backendZoneId ?? zone.visualLabel);
+
+/** Zone insight for a Trends zone row — real data for that exact bed, or null. */
+function zoneInsightFor(ai: AIContext, gm: GreenhouseModel, zone: ZoneLite): ContextualInsight | null {
+  const key = resolveZoneId(zone.backendId);
+  const base = ai.insights.find((i) => i.zoneId === key);
+  if (!base) return null;
+  return buildZoneContextualInsight(base, {
+    readingCount: gm.zoneDetailStats(zone, '24h').readingCount,
+    profile: zone.plantId ? ai.profilesById.get(zone.plantId) ?? null : null,
+  });
+}
+
+function wateringInsightFor(ai: AIContext, gm: GreenhouseModel, zone: ZoneLite): ContextualInsight | null {
+  const key = resolveZoneId(zone.backendId);
+  const visual = ai.zones.find((z) => zoneKeyOf(z) === key);
+  if (!visual) return null;
+  return buildWateringContextualInsight({
+    zone: visual,
+    zoneId: key,
+    insight: ai.insights.find((i) => i.zoneId === key),
+    verification: ai.verification.get(key),
+    readingCount: gm.zoneDetailStats(zone, '24h').readingCount,
+    profile: zone.plantId ? ai.profilesById.get(zone.plantId) ?? null : null,
+  });
+}
+
+function plantInsightFor(ai: AIContext, plantId: string): ContextualInsight | null {
+  const profile = ai.profilesById.get(plantId);
+  if (!profile) return null;
+  const zones = ai.zones.filter((z) => z.assignedPlant === plantId);
+  if (zones.length === 0) return null;
+  return buildPlantContextualInsight({
+    profile,
+    zones,
+    insightByZone: new Map(ai.insights.map((i) => [i.zoneId, i])),
+    zoneKey: zoneKeyOf,
+  });
+}
 
 const RANGE_WORD: Record<TimeRange, string> = {
   '24h': 'last 24 hours', '7d': 'last week', '30d': 'last month', '3m': 'last 3 months', '1y': 'last year',
@@ -241,18 +302,21 @@ export function OverviewView({ gm, range, setRange, loading }: TabProps) {
 }
 
 // ══ ZONES · list → detail ════════════════════════════════════════════════════
-export function ZonesView({ gm, range, setRange, loading, selected, onSelect, onBack }: ListTabProps) {
+export function ZonesView({ gm, range, setRange, loading, selected, onSelect, onBack, ai = EMPTY_AI }: ListTabProps & { ai?: AIContext }) {
   const items = gm.zoneList();
   const sel = selected ? items.find((it) => it.zone.backendId === selected) : null;
 
-  if (sel) return <ZoneDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} />;
+  if (sel) return <ZoneDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} ai={ai} />;
 
-  return <ZoneList items={items} onPick={(z) => onSelect(z.backendId)} />;
+  return <ZoneList gm={gm} items={items} ai={ai} onPick={(z) => onSelect(z.backendId)} />;
 }
 
-function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneList']>; onPick: (z: ZoneLite) => void }) {
+function ZoneList({ gm, items, ai, onPick }: {
+  gm: GreenhouseModel; items: ReturnType<GreenhouseModel['zoneList']>; ai: AIContext; onPick: (z: ZoneLite) => void;
+}) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'need' | 'wet' | 'healthy'>('all');
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
 
   const list = items.filter((it) => {
     const q = search.trim().toLowerCase();
@@ -285,25 +349,31 @@ function ZoneList({ items, onPick }: { items: ReturnType<GreenhouseModel['zoneLi
       <div style={{ padding: '12px 16px 36px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {list.length === 0 ? (
           <EmptyHint icon="🗺️" title="No zones found" sub="Try a different search or filter." />
-        ) : list.map(({ zone, cur, status, trend }) => (
-          <div key={zone.backendId} onClick={() => onPick(zone)} className="gm-card"
-            style={{ padding: '14px 14px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
-            <div style={{ width: 42, height: 42, borderRadius: 12, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 21, flexShrink: 0 }}>
-              {cur.plant?.icon ?? '🌱'}
+        ) : list.map(({ zone, cur, status, trend }) => {
+          const insight = zoneInsightFor(ai, gm, zone);
+          return (
+            <div key={zone.backendId} onClick={() => onPick(zone)} className="gm-card"
+              style={{ padding: '14px 14px', display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+              <div style={{ width: 42, height: 42, borderRadius: 12, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 21, flexShrink: 0 }}>
+                {cur.plant?.icon ?? '🌱'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14.5, fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{zone.label}</div>
+                <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cur.plant?.name ?? 'Empty'}</div>
+                <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 96 }}>
+                <div style={{ fontSize: 19, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{cur.moisture}%</div>
+                <StatusPill status={status} />
+                <TrendText trend={trend} />
+                {insight && <AIInsightChip label="Why?" title={`Explain ${zone.label}`} onClick={() => setSheet(insight)} />}
+              </div>
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{zone.label}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, lineHeight: 1.35, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cur.plant?.name ?? 'Empty'}</div>
-              <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
-            </div>
-            <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, minWidth: 96 }}>
-              <div style={{ fontSize: 19, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{cur.moisture}%</div>
-              <StatusPill status={status} />
-              <TrendText trend={trend} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      <ContextualAIInsightSheet insight={sheet} onClose={() => setSheet(null)} />
     </>
   );
 }
@@ -327,14 +397,16 @@ function StatRow({ icon, label, value, color, last }: { icon: string; label: str
   );
 }
 
-function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
-  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['zoneList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
+function ZoneDetail({ gm, item, range, setRange, loading, onBack, ai }: {
+  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['zoneList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void; ai: AIContext;
 }) {
   const { zone, cur, status, trend } = item;
   const [metric, setMetric] = useState<Metric>('moist');
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
   const s = useMemo(() => gm.genZoneSeries(zone, range), [gm, zone, range]);
   const stats = gm.zoneDetailStats(zone, range);
   const plant = cur.plant;
+  const zoneInsight = zoneInsightFor(ai, gm, zone);
 
   const isTemp = metric === 'temp';
   const tempData = s.filter((d) => d.temp != null).map((d) => ({ value: d.temp as number, t: d.t }));
@@ -344,8 +416,12 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
   const series: ChartSeries[] = isTemp
     ? [{ key: 't', name: 'Soil temp', color: '#f59e0b', axis: 'L', unit: '°', data: s.map((d) => ({ value: d.temp, t: d.t })) }]
     : [{ key: 'm', name: 'Soil moisture', color: '#0ea5e9', axis: 'L', data: s.map((d) => ({ value: d.moisture, t: d.t })) }];
-  const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, 100];
-  const bands = !isTemp && plant ? [{ from: plant.moistureMin, to: plant.moistureMax, color: '#16a34a' }] : [];
+  const leftDom: [number, number] = isTemp ? tempDomain([s]) : [0, moistureChartCeiling(s.map((point) => point.moisture))];
+  const bandRanges = plant ? moistureChartBands(plant) : null;
+  const bands = !isTemp && bandRanges ? [
+    { ...bandRanges.target, color: '#16a34a' },
+    { ...bandRanges.tolerance, color: '#f59e0b' },
+  ] : [];
 
   const insight = trend.dir === 'down' ? `This bed has been drying over the ${RANGE_WORD[range]}.`
     : trend.dir === 'up' ? `This bed has been getting wetter over the ${RANGE_WORD[range]}.`
@@ -358,7 +434,8 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
     <Page>
       <BackButton onClick={onBack} />
 
-      {/* Header + key stats */}
+      {/* Header + key stats — the AI chip sits beside the status badge and
+          explains this exact bed. */}
       <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
           <div style={{ width: 46, height: 46, borderRadius: 13, background: status.color + '18', display: 'grid', placeItems: 'center', fontSize: 23, flexShrink: 0 }}>{plant?.icon ?? '🌱'}</div>
@@ -366,7 +443,10 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
             <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 19, color: 'var(--ink)', lineHeight: 1.1 }}>{zone.label}</div>
             <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{plant?.name ?? 'No plant assigned'}</div>
           </div>
-          <StatusPill status={status} big />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+            <StatusPill status={status} big />
+            {zoneInsight && <AIInsightChip title={`Explain ${zone.label}`} onClick={() => setSheet(zoneInsight)} />}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <Tile label="Current moisture" value={`${cur.moisture}%`} color={status.color} />
@@ -394,7 +474,8 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
               ) : (
                 <>
                   <LegendDot color="#0ea5e9" label="Soil moisture (%)" />
-                  {plant && <LegendDot color="#16a34a" label={`Target range (${plant.moistureMin}–${plant.moistureMax}%)`} dashed />}
+                   {plant && <LegendDot color="#16a34a" label={`Target range (${plant.moistureMin}–${plant.moistureMax}%)`} dashed />}
+                  {plant && <LegendDot color="#f59e0b" label="Above target — monitor" dashed />}
                 </>
               )}
             </div>
@@ -412,6 +493,11 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
       {hasChart && (
         <>
           <Insight icon="🌿">{insight}</Insight>
+          {zoneInsight && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: -4 }}>
+              <AIInsightChip label="Explain this" title={`Explain the trend for ${zone.label}`} onClick={() => setSheet(zoneInsight)} />
+            </div>
+          )}
           <div className="gm-card" style={{ padding: '4px 14px' }}>
             <StatRow icon="📈" label={`Trend (${RANGE_SHORT[range]})`} value={`${stats.trendPct > 0 ? '↑ ' : stats.trendPct < 0 ? '↓ ' : ''}${Math.abs(stats.trendPct)}%`} color={stats.trendPct < 0 ? '#ef4444' : stats.trendPct > 0 ? '#0ea5e9' : 'var(--ink)'} />
             {rate != null && <StatRow icon="💧" label={rateLabel} value={`${Math.abs(rate)}% per hour`} />}
@@ -420,39 +506,50 @@ function ZoneDetail({ gm, item, range, setRange, loading, onBack }: {
           </div>
         </>
       )}
+
+      <ContextualAIInsightSheet insight={sheet} onClose={() => setSheet(null)} />
     </Page>
   );
 }
 
 // ══ PLANTS · list → detail ═══════════════════════════════════════════════════
-export function PlantsView({ gm, range, setRange, loading, selected, onSelect, onBack }: ListTabProps) {
+export function PlantsView({ gm, range, setRange, loading, selected, onSelect, onBack, ai = EMPTY_AI }: ListTabProps & {
+  ai?: AIContext;
+}) {
   const items = gm.plantList();
   const sel = selected ? items.find((it) => it.plant.id === selected) : null;
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
 
   if (items.length === 0) {
-    return <Page><EmptyHint icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones in the Map tab." /></Page>;
+    return <Page><EmptyHint icon="🌿" title="No plants assigned" sub="Assign plant profiles to zones from the Map." /></Page>;
   }
-  if (sel) return <PlantDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} />;
+  if (sel) return <PlantDetail gm={gm} item={sel} range={range} setRange={setRange} loading={loading} onBack={onBack} ai={ai} />;
 
   return (
     <Page>
       <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 18, color: 'var(--ink)', padding: '0 2px' }}>Plant Groups</div>
-      {items.map(({ plant, agg, status, trend }) => (
-        <div key={plant.id} onClick={() => onSelect(plant.id)} className="gm-card"
-          style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
-          <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>{plant.icon}</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink)', fontFamily: "'Baloo 2', system-ui" }}>{plant.name}</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{agg.count} zone{agg.count !== 1 ? 's' : ''}</div>
-            <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
+      {items.map(({ plant, agg, status, trend }) => {
+        const insight = plantInsightFor(ai, plant.id);
+        return (
+          <div key={plant.id} onClick={() => onSelect(plant.id)} className="gm-card"
+            style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: 'var(--primary-soft)', display: 'grid', placeItems: 'center', fontSize: 22, flexShrink: 0 }}>{plant.icon}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--ink)', fontFamily: "'Baloo 2', system-ui" }}>{plant.name}</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{agg.count} zone{agg.count !== 1 ? 's' : ''}</div>
+              <div style={{ fontSize: 11, color: 'var(--primary)', fontWeight: 800, marginTop: 4 }}>Tap for more information ›</div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{agg.moisture}%</div>
+              <StatusPill status={status} />
+              <TrendText trend={trend} suffix={trend.dir === 'flat' ? ' this week' : ''} />
+              {insight && <AIInsightChip label="Plant Insight" title={`Explain ${plant.name}`} onClick={() => setSheet(insight)} />}
+            </div>
           </div>
-          <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{agg.moisture}%</div>
-            <StatusPill status={status} />
-            <TrendText trend={trend} suffix={trend.dir === 'flat' ? ' this week' : ''} />
-          </div>
-        </div>
-      ))}
+        );
+      })}
+
+      <ContextualAIInsightSheet insight={sheet} onClose={() => setSheet(null)} />
     </Page>
   );
 }
@@ -465,11 +562,13 @@ function plantInsight(name: string, status: SimpleStatus, trend: Trend): string 
   return `${name} are mostly stable this week. Keep up the good watering routine!`;
 }
 
-function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
-  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['plantList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void;
+function PlantDetail({ gm, item, range, setRange, loading, onBack, ai }: {
+  gm: GreenhouseModel; item: ReturnType<GreenhouseModel['plantList']>[number]; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; onBack: () => void; ai: AIContext;
 }) {
   const { plant, agg, status, trend } = item;
   const [metric, setMetric] = useState<Metric>('moist');
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
+  const plantAI = plantInsightFor(ai, plant.id);
   const s = useMemo(() => gm.genPlantSeries(plant.id, range), [gm, plant.id, range]);
   const isTemp = metric === 'temp';
   const tempData = s.filter((d) => d.temp != null).map((d) => ({ value: d.temp as number, t: d.t }));
@@ -494,9 +593,10 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
             </div>
             <div style={{ marginTop: 4 }}><TrendText trend={trend} suffix={trend.dir === 'flat' ? ' this week' : ''} /></div>
           </div>
-          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
             <div style={{ fontSize: 25, fontWeight: 800, color: status.color, fontFamily: "'Baloo 2', system-ui", lineHeight: 1 }}>{agg.moisture}%</div>
-            <div style={{ marginTop: 4 }}><StatusPill status={status} /></div>
+            <StatusPill status={status} />
+            {plantAI && <AIInsightChip label="Ask GreenMirror" title={`Explain ${plant.name}`} onClick={() => setSheet(plantAI)} />}
           </div>
         </div>
       </div>
@@ -525,15 +625,33 @@ function PlantDetail({ gm, item, range, setRange, loading, onBack }: {
       </div>
 
       {hasChart && <Insight icon="🌿">{plantInsight(plant.name, status, trend)}</Insight>}
+
+      <ContextualAIInsightSheet insight={sheet} onClose={() => setSheet(null)} />
     </Page>
   );
 }
 
 // ══ WATERING · did watering help? ════════════════════════════════════════════
-export function WateringView({ gm }: { gm: GreenhouseModel }) {
+// Layout is unchanged from the original design. The only addition is the small
+// "Why?" chip on each before/after row, which opens that zone's watering insight.
+export function WateringView({ gm, ai = EMPTY_AI }: { gm: GreenhouseModel; ai?: AIContext }) {
   const week = gm.waterThisWeek();
   const results = gm.waterResults(6);
   const weekly = useMemo(() => gm.buildWeekly(8), [gm]);
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
+
+  // Zone → its watering insight. Watering records reference a zone by its
+  // visual label, so both that and the backend id are indexed.
+  const wateringByZoneId = new Map<string, ContextualInsight | null>();
+  for (const { zone } of gm.zoneList()) {
+    const insight = wateringInsightFor(ai, gm, zone);
+    wateringByZoneId.set(resolveZoneId(zone.backendId), insight);
+    wateringByZoneId.set(resolveZoneId(zone.visualLabel), insight);
+  }
+
+  // The most recently watered zone — the bed "Did watering help?" is about.
+  const latest = gm.WATERING.length ? gm.WATERING[gm.WATERING.length - 1] : null;
+  const latestInsight = latest ? wateringByZoneId.get(resolveZoneId(latest.zoneId)) ?? null : null;
 
   if (gm.WATERING.length === 0) {
     return <Page><EmptyHint icon="💧" title="No watering yet" sub="Water zones from Today's Tasks or the Map tab to build your watering history." /></Page>;
@@ -569,8 +687,15 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
         </>
       )}
 
-      {/* Did watering help? — after the weekly trends */}
-      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', padding: '4px 2px 0' }}>Did watering help?</div>
+      {/* Did watering help? — after the weekly trends. The chip explains the most
+          recently watered zone, so AI is reachable before any before/after row
+          exists (they only appear once sensors read around a watering time). */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 2px 0' }}>
+        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>Did watering help?</div>
+        {latestInsight && (
+          <AIInsightChip title={`Explain watering status for ${latestInsight.title}`} onClick={() => setSheet(latestInsight)} />
+        )}
+      </div>
       {results.length === 0 ? (
         <div className="gm-card" style={{ padding: '14px 16px', display: 'flex', gap: 11, alignItems: 'flex-start' }}>
           <span style={{ fontSize: 15 }}>📡</span>
@@ -578,28 +703,34 @@ export function WateringView({ gm }: { gm: GreenhouseModel }) {
             Before/after results will appear here once sensors record moisture around your watering times.
           </div>
         </div>
-      ) : results.map((r) => (
-        <div key={r.id} className="gm-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 11, background: '#e0f2fe', display: 'grid', placeItems: 'center', fontSize: 17, flexShrink: 0 }}>💧</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>
-              {r.zoneLabel}{r.plantName && <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {r.plantName}</span>}
+      ) : results.map((r) => {
+        const insight = wateringByZoneId.get(resolveZoneId(r.zoneId)) ?? null;
+        return (
+          <div key={r.id} className="gm-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 38, height: 38, borderRadius: 11, background: '#e0f2fe', display: 'grid', placeItems: 'center', fontSize: 17, flexShrink: 0 }}>💧</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)' }}>
+                {r.zoneLabel}{r.plantName && <span style={{ color: 'var(--ink-3)', fontWeight: 600 }}> · {r.plantName}</span>}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{relTime(r.t, gm.NOW)}</div>
+              <div style={{ fontSize: 13, fontWeight: 800, marginTop: 4 }}>
+                <span style={{ color: 'var(--ink-3)' }}>{r.before}%</span>
+                <span style={{ color: 'var(--ink-3)', margin: '0 5px' }}>→</span>
+                <span style={{ color: r.result.color }}>{r.after}%</span>
+              </div>
             </div>
-            <div style={{ fontSize: 10, color: 'var(--ink-3)', fontWeight: 600, marginTop: 1 }}>{relTime(r.t, gm.NOW)}</div>
-            <div style={{ fontSize: 13, fontWeight: 800, marginTop: 4 }}>
-              <span style={{ color: 'var(--ink-3)' }}>{r.before}%</span>
-              <span style={{ color: 'var(--ink-3)', margin: '0 5px' }}>→</span>
-              <span style={{ color: r.result.color }}>{r.after}%</span>
+            <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
+              {r.amountMl > 0 && <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0ea5e9' }}>{(r.amountMl / 1000).toFixed(1)} L</div>}
+              <span style={{ fontSize: 9.5, fontWeight: 800, padding: '2px 8px', borderRadius: 8, background: r.result.color + '20', color: r.result.color, whiteSpace: 'nowrap' }}>{r.result.label}</span>
+              {insight && <AIInsightChip label="Why?" title={`Explain watering status for ${r.zoneLabel}`} onClick={() => setSheet(insight)} />}
             </div>
           </div>
-          <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
-            {r.amountMl > 0 && <div style={{ fontSize: 12.5, fontWeight: 800, color: '#0ea5e9' }}>{(r.amountMl / 1000).toFixed(1)} L</div>}
-            <span style={{ fontSize: 9.5, fontWeight: 800, padding: '2px 8px', borderRadius: 8, background: r.result.color + '20', color: r.result.color, whiteSpace: 'nowrap' }}>{r.result.label}</span>
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       <Insight icon="🌿">Consistent watering keeps your plants happy and healthy! 🌿</Insight>
+
+      <ContextualAIInsightSheet insight={sheet} onClose={() => setSheet(null)} />
     </Page>
   );
 }
