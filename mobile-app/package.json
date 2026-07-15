@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@emotion/react": "^11.13.3",
+    "@google/genai": "^2.11.0",
     "firebase": "^12.13.0",
     "firebase-admin": "^14.1.0",
     "framer-motion": "^11.5.4",
