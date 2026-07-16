@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
-import { PlantProfile } from '../plantProfiles';
-
-const PROFILE_ICONS = [
-  '🌱','🍅','🌶️','🥕','🥬','🌿','🥒','🧅','🍓','🥦','🥔','🌽',
-  '🫑','🍆','🧄','🫛','🌾','🪴','🌸','🌻','🫐','🍎','🍋','🌳',
-  '🍉','🎃','🥗','🍠','🥜','🍄','🍇','🍈','🍊','🍐','🍑','🍒',
-  '🥭','🍍','🥥','🥑','🫒','🫘','🌰','🌵','☘️','🍀','🌼','🌷',
-];
+import { PlantProfile, applyRequirementToPlantProfile } from '../plantProfiles';
+import { CUSTOM_PLANT_ICON, PLANT_ICON_REGISTRY } from '../plantIconRegistry';
+import { autofillPlantIcon, autofillPlantName, type PlantProfileDraft } from '../plantProfileAutofill';
+import { findPlantRequirementByName, findProvisionalPlantRequirement, requirementRangesMatch } from '../plantRequirements';
+import { estimatePlantProfile } from '../services/plantProfileAI';
+import type { AiProfileSource } from '../plantAiProfile';
 
 interface PlantEditorSheetProps {
   open: boolean;
@@ -21,7 +19,7 @@ interface PlantEditorSheetProps {
 function NumberField({
   label, value, onChange, min, max, unit
 }: {
-  label: string; value: number; onChange: (v: number) => void;
+  label: string; value?: number; onChange: (v: number | undefined) => void;
   min: number; max: number; unit: string;
 }) {
   return (
@@ -33,10 +31,10 @@ function NumberField({
         <input
           type="number"
           inputMode="numeric"
-          value={value}
+          value={value ?? ''}
           min={min}
           max={max}
-          onChange={(e) => onChange(Math.max(min, Math.min(max, Number(e.target.value) || 0)))}
+          onChange={(e) => onChange(e.target.value === '' ? undefined : Math.max(min, Math.min(max, Number(e.target.value))))}
           style={{
             width: '100%', border: 'none', background: 'transparent', outline: 'none',
             fontFamily: "'Baloo 2', system-ui", fontSize: 24,
@@ -69,39 +67,110 @@ function RangeBar({ lo, hi, unit }: { lo: number; hi: number; unit: string }) {
   );
 }
 
-const EMPTY: Omit<PlantProfile, 'id'> = {
-  name: '', icon: '🌱', moistureMin: 50, moistureMax: 70, soilTempMin: 15, soilTempMax: 25, notes: ''
+const EMPTY: PlantProfileDraft = {
+  name: '', icon: CUSTOM_PLANT_ICON.icon, moistureMin: undefined, moistureMax: undefined,
+  soilTempMin: undefined, soilTempMax: undefined, notes: '', profileSource: 'custom', requiresUserReview: false,
 };
 
 export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, onDelete, onReset }: PlantEditorSheetProps) {
   // Treat profiles with no id (prefill from zone picker) as new, same as null.
   const isNew = !profile || !profile.id;
 
-  const [form, setForm] = useState<Omit<PlantProfile, 'id'> & { id?: string }>({ ...EMPTY });
+  const [form, setForm] = useState<PlantProfileDraft>({ ...EMPTY });
+  const [rangesEdited, setRangesEdited] = useState(false);
+  const [aiState, setAiState] = useState<'idle' | 'loading' | 'failed'>('idle');
+  const [aiSources, setAiSources] = useState<AiProfileSource[]>([]);
 
   useEffect(() => {
     if (open) {
       setForm(profile ? { ...profile } : { ...EMPTY });
+      const requirement = profile ? findPlantRequirementByName(profile.name) : null;
+      setRangesEdited(Boolean(profile && (!requirement || !requirementRangesMatch(profile, requirement))));
+      setAiState('idle');
+      setAiSources([]);
     }
   }, [open, profile]);
+
+  /**
+   * A plant the workbook doesn't have. Ask GreenMirror AI to research it and
+   * anchor it to the closest calibrated crop. Runs once the name is finished
+   * (on blur), never per keystroke — each estimate costs a web-research call.
+   * The user's own edits always win, and a failure just leaves the fields blank
+   * for manual entry rather than filling them with something unsupported.
+   */
+  async function estimateUnknownPlant(name: string) {
+    const trimmed = name.trim();
+    if (!trimmed || rangesEdited || aiState === 'loading') return;
+    if (findPlantRequirementByName(trimmed) || findProvisionalPlantRequirement(trimmed)) return;
+
+    setAiState('loading');
+    const result = await estimatePlantProfile(trimmed);
+    if (!result) {
+      setAiState('failed');
+      setAiSources([]);
+      return;
+    }
+    setAiState('idle');
+    setAiSources(result.sources);
+    setForm((current) => applyRequirementToPlantProfile(current, result.profile, false));
+  }
 
   const update = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
+  const updateName = (name: string) => {
+    setForm((current) => {
+      const first = autofillPlantName(current, name, rangesEdited);
+      if (!first.requiresConfirmation) return first.draft;
+      return window.confirm('Replace your edited ranges with the GreenMirror recommended ranges for this plant?')
+        ? autofillPlantName(current, name, rangesEdited, true).draft
+        : first.draft;
+    });
+  };
+
+  const selectIcon = (iconId: string) => {
+    setForm((current) => {
+      const first = autofillPlantIcon(current, iconId, rangesEdited);
+      if (!first.requiresConfirmation) return first.draft;
+      return window.confirm('Replace your edited ranges with the GreenMirror recommended ranges for this plant?')
+        ? autofillPlantIcon(current, iconId, rangesEdited, true).draft
+        : first.draft;
+    });
+  };
+
+  const updateRange = (key: 'moistureMin' | 'moistureMax' | 'soilTempMin' | 'soilTempMax', value: number | undefined) => {
+    setRangesEdited(true);
+    setForm((current) => ({ ...current, [key]: value, profileSource: 'custom', requiresUserReview: false }));
+  };
+
+  const currentRequirement = findPlantRequirementByName(form.name) ?? findProvisionalPlantRequirement(form.name);
+  const sourceLabel = form.profileSource === 'greenmirror_spreadsheet'
+    ? 'Auto-filled from GreenMirror profile'
+    : form.profileSource === 'provisional_estimate'
+      ? 'AI-estimated starting range — please review'
+      : 'Edited by user';
+
+  const useRecommendedRanges = () => {
+    if (!currentRequirement) return;
+    setForm((current) => applyRequirementToPlantProfile(current, currentRequirement, Boolean(current.isDefault)));
+    setRangesEdited(false);
+  };
+
   const valid =
     (form.name?.trim().length ?? 0) > 0 &&
-    (form.moistureMin ?? 0) < (form.moistureMax ?? 100) &&
-    (form.soilTempMin ?? -10) < (form.soilTempMax ?? 45);
+    typeof form.moistureMin === 'number' && typeof form.moistureMax === 'number' &&
+    typeof form.soilTempMin === 'number' && typeof form.soilTempMax === 'number' &&
+    form.moistureMin < form.moistureMax && form.soilTempMin < form.soilTempMax && !form.requiresUserReview;
 
   const handleSave = () => {
     if (!valid) return;
     const name = form.name?.trim();
     if (!name) return;
     const trimmed: PlantProfile = {
-      ...form as PlantProfile,
+      ...form,
       name,
       notes: (form.notes ?? '').trim() || undefined,
-    };
+    } as PlantProfile;
     if (isNew || !trimmed.id) {
       trimmed.id = trimmed.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `plant-${Date.now()}`;
     }
@@ -144,7 +213,8 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
               <FieldLabel>Name</FieldLabel>
               <input
                 value={form.name ?? ''}
-                onChange={(e) => update('name', e.target.value)}
+                onChange={(e) => updateName(e.target.value)}
+                onBlur={(e) => { void estimateUnknownPlant(e.target.value); }}
                 placeholder="e.g. Lettuce"
                 style={{
                   width: '100%', padding: 14, fontSize: 16,
@@ -153,6 +223,17 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
                   fontFamily: 'inherit',
                 }}
               />
+              {aiState === 'loading' && (
+                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, color: 'var(--primary)' }}>
+                  ✨ Researching {form.name?.trim()} and comparing it with GreenMirror's plants…
+                </div>
+              )}
+              {aiState === 'failed' && (
+                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+                  GreenMirror could not find enough reliable information for this plant, so it has not
+                  guessed a range. Please enter the moisture and soil-temperature ranges yourself.
+                </div>
+              )}
             </div>
 
             {/* Icon */}
@@ -162,25 +243,54 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
                 display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 6,
                 padding: 8, background: 'var(--bg-sub)', borderRadius: 12,
               }}>
-                {PROFILE_ICONS.map((emoji) => (
+                {PLANT_ICON_REGISTRY.map((definition) => (
                   <button
-                    key={emoji}
+                    key={definition.id}
                     type="button"
-                    onClick={() => update('icon', emoji)}
+                    onClick={() => selectIcon(definition.id)}
+                    aria-label={`Use ${definition.canonicalName} icon`}
                     style={{
                       aspectRatio: '1/1', fontSize: 20,
-                      background: form.icon === emoji ? 'white' : 'transparent',
-                      border: form.icon === emoji ? '2px solid var(--primary)' : '2px solid transparent',
+                      background: form.icon === definition.icon ? 'white' : 'transparent',
+                      border: form.icon === definition.icon ? '2px solid var(--primary)' : '2px solid transparent',
                       borderRadius: 10,
                       display: 'grid', placeItems: 'center',
                       cursor: 'pointer',
-                      boxShadow: form.icon === emoji ? 'var(--shadow-sm)' : 'none',
+                      boxShadow: form.icon === definition.icon ? 'var(--shadow-sm)' : 'none',
                     }}
                   >
-                    {emoji}
+                    {definition.icon}
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div style={{ padding: '10px 12px', borderRadius: 12, background: form.profileSource === 'provisional_estimate' ? '#fff7ed' : 'var(--primary-soft)', color: 'var(--ink-2)', fontSize: 12, fontWeight: 700 }}>
+              <div>{sourceLabel}</div>
+              {form.sourcePlantName && <div style={{ marginTop: 3, fontWeight: 600 }}>Source plant: {form.sourcePlantName}</div>}
+              {form.requirementNotes?.map((note) => <div key={note} style={{ marginTop: 3, fontWeight: 600 }}>{note}</div>)}
+              {aiSources.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontWeight: 700 }}>Based on</div>
+                  {aiSources.map((source) => (
+                    <div key={source.url} style={{ marginTop: 2, fontWeight: 600, overflowWrap: 'anywhere' }}>
+                      <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)' }}>
+                        {source.title}
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {currentRequirement && (rangesEdited || form.profileSource === 'custom') && (
+                <button type="button" className="gm-btn soft" style={{ marginTop: 8, width: '100%' }} onClick={useRecommendedRanges}>
+                  Use GreenMirror recommended ranges
+                </button>
+              )}
+              {form.requiresUserReview && (
+                <button type="button" className="gm-btn soft" style={{ marginTop: 8, width: '100%' }} onClick={() => setForm((current) => ({ ...current, requiresUserReview: false }))}>
+                  I reviewed these starting ranges
+                </button>
+              )}
             </div>
 
             {/* Moisture range */}
@@ -193,11 +303,11 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
               </FieldLabel>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <NumberField label="Min" unit="%" min={0} max={100}
-                             value={form.moistureMin ?? 0} onChange={(v) => update('moistureMin', v)} />
+                             value={form.moistureMin} onChange={(v) => updateRange('moistureMin', v)} />
                 <NumberField label="Max" unit="%" min={0} max={100}
-                             value={form.moistureMax ?? 100} onChange={(v) => update('moistureMax', v)} />
+                             value={form.moistureMax} onChange={(v) => updateRange('moistureMax', v)} />
               </div>
-              <RangeBar lo={Math.min(form.moistureMin ?? 0, form.moistureMax ?? 100)} hi={Math.max(form.moistureMin ?? 0, form.moistureMax ?? 100)} unit="%" />
+              {typeof form.moistureMin === 'number' && typeof form.moistureMax === 'number' && <RangeBar lo={Math.min(form.moistureMin, form.moistureMax)} hi={Math.max(form.moistureMin, form.moistureMax)} unit="%" />}
             </div>
 
             {/* Temp range */}
@@ -210,13 +320,13 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
               </FieldLabel>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <NumberField label="Min" unit="°C" min={-10} max={45}
-                             value={form.soilTempMin ?? 0} onChange={(v) => update('soilTempMin', v)} />
+                             value={form.soilTempMin} onChange={(v) => updateRange('soilTempMin', v)} />
                 <NumberField label="Max" unit="°C" min={-10} max={45}
-                             value={form.soilTempMax ?? 40} onChange={(v) => update('soilTempMax', v)} />
+                             value={form.soilTempMax} onChange={(v) => updateRange('soilTempMax', v)} />
               </div>
-              <RangeBar lo={((Math.min(form.soilTempMin ?? 0, form.soilTempMax ?? 40) + 10) / 55) * 100}
-                        hi={((Math.max(form.soilTempMin ?? 0, form.soilTempMax ?? 40) + 10) / 55) * 100}
-                        unit="°C" />
+              {typeof form.soilTempMin === 'number' && typeof form.soilTempMax === 'number' && <RangeBar lo={((Math.min(form.soilTempMin, form.soilTempMax) + 10) / 55) * 100}
+                        hi={((Math.max(form.soilTempMin, form.soilTempMax) + 10) / 55) * 100}
+                        unit="°C" />}
             </div>
 
             {/* Notes */}
@@ -236,10 +346,15 @@ export function PlantEditorSheet({ open, profile, isDefault, onClose, onSave, on
               />
             </div>
 
-            {/* Validation hint */}
+            {/* Validation hint — full-width wrapping block, not a chip. A chip
+                is nowrap, so this long line would push the modal sideways. */}
             {!valid && (form.name?.trim().length ?? 0) > 0 && (
-              <div className="gm-chip alert" style={{ alignSelf: 'flex-start' }}>
-                ⚠ Min must be lower than max
+              <div style={{
+                width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 12,
+                background: 'var(--alert-soft)', color: 'var(--alert)',
+                fontSize: 12.5, fontWeight: 700, lineHeight: 1.4, whiteSpace: 'normal', overflowWrap: 'anywhere',
+              }}>
+                ⚠ Enter valid ranges and review any estimated starting values before saving
               </div>
             )}
 

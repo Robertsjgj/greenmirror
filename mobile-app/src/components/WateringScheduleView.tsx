@@ -24,7 +24,8 @@ import {
   subscribeUsersForGreenhouse,
   type AdminUserRecord,
 } from "../services/adminUserService";
-import { writeActivityEvent } from "../services/activityService";
+import { recordScheduledRoundWatered } from "../services/wateringVerification";
+import { normalizeRoundVerificationStatus } from "../services/wateringVerificationCore";
 import type { LatestReading, VisualZone } from "../zoneLayout";
 import {
   buildWateringSchedule,
@@ -373,29 +374,31 @@ export function WateringScheduleView({
 
     try {
       await withTimeout(
-        markWateringRoundComplete(schedule, roundId, {
-          uid: currentUserId,
-          displayName: currentUserName,
-        }),
+        (async () => {
+          // 1. Persist a verification-ready watering event per bed (idempotent)
+          //    + a "verification pending" activity entry. No delivered litres.
+          await recordScheduledRoundWatered({
+            schedule,
+            roundId,
+            actor: {
+              uid: currentUserId,
+              displayName: currentUserName,
+              username: currentUsername,
+            },
+            latestReading,
+            greenhouseName,
+          });
+
+          // 2. Mark the schedule round as pending_verification so the state
+          //    persists across refresh / restart / other viewers.
+          await markWateringRoundComplete(schedule, roundId, {
+            uid: currentUserId,
+            displayName: currentUserName,
+          });
+        })(),
       );
 
-      await writeActivityEvent({
-        type: "watering",
-        greenhouseId,
-        amountMl: Math.round(schedule.totalLitresPerRound * 1000),
-        message: `${currentUserName} completed ${round.label} for ${greenhouseName}.`,
-        source: "manual",
-        actorUserId: currentUserId,
-        actorName: currentUserName,
-        actorUsername: currentUsername,
-        metadata: {
-          scheduleId: schedule.id,
-          roundId,
-          litres: schedule.totalLitresPerRound,
-        },
-      });
-
-      showSuccess("Watering marked as complete.");
+      showSuccess("Marked as watered — GreenMirror is checking the soil sensor.");
     } catch (err) {
       setError(
         err instanceof Error
@@ -579,6 +582,15 @@ export function WateringScheduleView({
               const isUpdating = updatingRound === `${schedule.id}-${round.id}`;
               const canComplete =
                 isAdmin || round.assignedUserId === currentUserId;
+              const vstate = normalizeRoundVerificationStatus(round);
+              const isPending = vstate.status === "pending_verification";
+              const isVerified = vstate.status === "verified";
+              const isNotVerified = vstate.status === "not_verified";
+              const isSensorUnavailable = vstate.status === "sensor_unavailable";
+              // not_verified / sensor_unavailable → the round is re-actionable.
+              const needsRetry = isNotVerified || isSensorUnavailable;
+              // "Completed" badge shows for a sensor-verified round or a legacy one.
+              const showCompleted = isVerified || (round.completed && !vstate.status);
 
               return (
                 <div
@@ -601,41 +613,90 @@ export function WateringScheduleView({
                         {round.assignedUserName}
                       </span>
 
-                      {round.completed && (
-                        <span className="inline-flex items-center gap-1.5 text-emerald-700">
-                          <CheckCircle2 className="h-4 w-4" />
-                          Completed
+                      {isPending ? (
+                        <span className="inline-flex items-center gap-1.5 text-amber-700">
+                          <Clock className="h-4 w-4" />
+                          Under review
                         </span>
+                      ) : needsRetry ? (
+                        <span className="inline-flex items-center gap-1.5 text-amber-700">
+                          <Clock className="h-4 w-4" />
+                          Not verified
+                        </span>
+                      ) : (
+                        showCompleted && (
+                          <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                            <CheckCircle2 className="h-4 w-4" />
+                            {isVerified ? "Verified" : "Completed"}
+                          </span>
+                        )
                       )}
                     </div>
 
-                    {round.completedByName && (
-                      <p className="mt-1 text-xs font-semibold text-slate-500">
-                        Marked complete by {round.completedByName}
+                    {isPending ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        GreenMirror is waiting for the soil sensor to detect a
+                        moisture increase.
                       </p>
+                    ) : isNotVerified ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        The soil sensor hasn't detected a moisture increase yet.
+                        You can water again.
+                      </p>
+                    ) : isSensorUnavailable ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        GreenMirror couldn't read the soil sensor to confirm
+                        this. You can try again.
+                      </p>
+                    ) : isVerified ? (
+                      <p className="mt-1 text-xs font-semibold text-emerald-700">
+                        Confirmed by the soil sensor
+                        {round.completedByName
+                          ? ` · watered by ${round.completedByName}`
+                          : ""}
+                        .
+                      </p>
+                    ) : (
+                      round.completedByName && (
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          Marked complete by {round.completedByName}
+                        </p>
+                      )
                     )}
                   </div>
 
                   <Button
                     type="button"
-                    variant={round.completed ? "secondary" : "primary"}
+                    variant={showCompleted ? "secondary" : "primary"}
                     size="sm"
-                    disabled={round.completed || !canComplete || isUpdating}
+                    disabled={
+                      showCompleted || isPending || !canComplete || isUpdating
+                    }
                     className={
-                      round.completed
-                        ? "bg-emerald-50 font-black text-emerald-700"
-                        : "bg-emerald-600 font-black text-white hover:bg-emerald-700"
+                      isPending
+                        ? "bg-amber-50 font-black text-amber-700"
+                        : showCompleted
+                          ? "bg-emerald-50 font-black text-emerald-700"
+                          : "bg-emerald-600 font-black text-white hover:bg-emerald-700"
                     }
                     icon={
                       isUpdating ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : isPending ? (
+                        <Clock className="h-4 w-4" />
                       ) : (
                         <CheckCircle2 className="h-4 w-4" />
                       )
                     }
                     onClick={() => handleRoundComplete(schedule, round.id)}
                   >
-                    {round.completed ? "Done" : "Mark done"}
+                    {isPending
+                      ? "Under review"
+                      : showCompleted
+                        ? "Done"
+                        : needsRetry
+                          ? "Water again"
+                          : "Mark done"}
                   </Button>
                 </div>
               );
