@@ -63,10 +63,12 @@ function Bullets({ items }: { items: string[] }) {
 interface SheetProps {
   insight: ContextualInsight | null;
   onClose: () => void;
+  /** Keep the sheet open with a "thinking" state while a live insight loads. */
+  loading?: boolean;
 }
 
-export function ContextualAIInsightSheet({ insight, onClose }: SheetProps) {
-  const open = insight !== null;
+export function ContextualAIInsightSheet({ insight, onClose, loading = false }: SheetProps) {
+  const open = insight !== null || loading;
 
   // Swipe-down-to-dismiss, matching ZoneDetailSheet. Only engages at scroll top
   // so the sheet body still scrolls normally.
@@ -111,6 +113,26 @@ export function ContextualAIInsightSheet({ insight, onClose }: SheetProps) {
         style={dragY > 0 ? { transform: `translateY(${dragY}px)`, transition: 'none' } : undefined}
       >
         <div className="gm-grab" />
+        {!insight && loading && (
+          <div className="gm-sheet-body" style={{ paddingBottom: 32 }}>
+            <div style={{
+              fontSize: 10, fontWeight: 900, letterSpacing: '.08em', textTransform: 'uppercase', color: '#059669',
+            }}>GreenMirror AI</div>
+            <div style={{
+              fontFamily: "'Baloo 2', system-ui", fontSize: 22, fontWeight: 800,
+              color: 'var(--ink)', lineHeight: 1.15, marginTop: 2,
+            }}>Greenhouse Health</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16, color: 'var(--ink-2)', fontSize: 13, fontWeight: 600 }}>
+              <span className="gm-spinner" aria-hidden style={{
+                width: 16, height: 16, borderRadius: '50%',
+                border: '2px solid #bbf7d0', borderTopColor: '#059669',
+                display: 'inline-block', animation: 'gm-spin 0.8s linear infinite',
+              }} />
+              Reading your beds and writing an explanation…
+            </div>
+            <style>{'@keyframes gm-spin{to{transform:rotate(360deg)}}'}</style>
+          </div>
+        )}
         {insight && (
           <div className="gm-sheet-body" ref={bodyRef} style={{ paddingBottom: 32 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>

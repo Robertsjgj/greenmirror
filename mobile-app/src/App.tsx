@@ -59,8 +59,7 @@ import { findPlantRequirementByName, findProvisionalPlantRequirement } from "./p
 import { mapZonesToSydneyLayout } from "./sydneyLayout";
 import { resolveZoneId } from "./zoneRegistry";
 import { useReadingsHistory } from "./hooks/useReadingsHistory";
-import { buildAllZoneInsights, summarizeGreenhouse } from "./services/aiInsights";
-import { AIHomeCard } from "./components/AIHomeCard";
+import { buildAllZoneInsights } from "./services/aiInsights";
 import {
   LatestReading,
   LayoutSettings,
@@ -816,8 +815,6 @@ export function App() {
     [ghId, resolvedZones, aiHistory, firestoreActivity, activityLog, latestReading],
   );
 
-  const aiSummary = useMemo(() => summarizeGreenhouse(aiInsights), [aiInsights]);
-
   // Derive the open sheet's zone from the LIVE zone array (recomputed each time
   // readings update, ~5s) by matching the canonical ID — so it never shows a
   // stale snapshot. Beds are always present in the layout, so this resolves even
@@ -1540,12 +1537,6 @@ export function App() {
             ref={scrollRef}
             onScroll={(e) => setScrolled((e.target as HTMLElement).scrollTop > 8)}
           >
-            {activeTab === 'plants' && (
-              <AIHomeCard
-                summary={aiSummary}
-                onOpenTrends={() => { setTrendsInitialSection('zones'); setTrendsOpen(true); }}
-              />
-            )}
             {activeTab === 'plants' && (
               <PlantCare
                 zones={resolvedZones}

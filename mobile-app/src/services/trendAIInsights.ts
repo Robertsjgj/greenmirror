@@ -19,7 +19,7 @@ import type { ZoneVerificationState } from './wateringVerification';
 import type { AIConfidence, AIInsightAction, ZoneAIInsight } from './aiInsights';
 import { classifyMoistureAgainstTarget } from '../plantRequirements';
 
-export type ContextualInsightKind = 'zone' | 'plant' | 'watering';
+export type ContextualInsightKind = 'zone' | 'plant' | 'watering' | 'greenhouse';
 
 export interface ContextualConfidence {
   level: AIConfidence;

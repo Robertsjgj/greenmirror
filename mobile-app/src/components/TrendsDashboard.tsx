@@ -213,7 +213,7 @@ export function TrendsDashboard({
             See how your greenhouse is doing over time — soil moisture, temperature, plant
             health and watering history. Pick a section below to explore the details.
           </div>
-          <GreenhouseHealthCard gm={gm} range={range} />
+          <GreenhouseHealthCard gm={gm} range={range} greenhouseId={greenhouseId} />
           <GreenhouseTrendCard gm={gm} range={range} setRange={setRange} loading={chartLoading} />
           <SectionNav
             go={goSection}

@@ -5,7 +5,7 @@
    Designed for non-technical users: 1 card · 1 chart · 1 sentence per concept.
    ────────────────────────────────────────────────────────────────────────── */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   LineChart, BarsChart, RangePicker, LegendDot, Insight, EmptyHint, SectionCard, ChartLoading, tempDomain, BackButton,
@@ -26,6 +26,7 @@ import {
   type ContextualInsight,
 } from '../../services/trendAIInsights';
 import { AIInsightChip, ContextualAIInsightSheet } from './ContextualAIInsightSheet';
+import { explainGreenhouseHealth } from '../../services/healthExplainAI';
 import { moistureChartBands, moistureChartCeiling } from '../../plantRequirements';
 
 interface TabProps { gm: GreenhouseModel; range: TimeRange; setRange: (r: TimeRange) => void; loading?: boolean; }
@@ -254,7 +255,7 @@ export function GreenhouseTrendCard({ gm, range, setRange, loading }: TabProps) 
 
 // Greenhouse report card (Healthy / Monitor / Needs Attention + avg moisture &
 // temp). Exported so the Home Sensor Trends preview shows the EXACT same card.
-export function GreenhouseHealthCard({ gm, range }: { gm: GreenhouseModel; range: TimeRange }) {
+export function GreenhouseHealthCard({ gm, range, greenhouseId }: { gm: GreenhouseModel; range: TimeRange; greenhouseId?: string }) {
   const counts = gm.healthCounts();
   const prev = gm.prevHealthCounts();
   const delta = gm.ghDelta(range);
@@ -262,9 +263,34 @@ export function GreenhouseHealthCard({ gm, range }: { gm: GreenhouseModel; range
   const mDeltaTxt = `${delta.moisture > 0 ? '↑ ' : delta.moisture < 0 ? '↓ ' : ''}${Math.abs(delta.moisture)}% ${TODAY_WORD[range]}`;
   const tDeltaTxt = delta.temp == null ? '' : `${delta.temp > 0 ? '↑ ' : delta.temp < 0 ? '↓ ' : ''}${Math.abs(delta.temp)}°C ${TODAY_WORD[range]}`;
 
+  // "Explain with AI" — a live, grounded Gemini explanation of these counts.
+  // The request id guards against a stale reply reopening a closed sheet.
+  const [sheet, setSheet] = useState<ContextualInsight | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reqId = useRef(0);
+  const onExplain = () => {
+    if (!greenhouseId) return;
+    const id = ++reqId.current;
+    setSheet(null);
+    setLoading(true);
+    void explainGreenhouseHealth(gm, range, greenhouseId).then((result) => {
+      if (reqId.current !== id) return; // sheet was closed or re-requested
+      setSheet(result);
+      setLoading(false);
+    });
+  };
+  const onClose = () => { reqId.current++; setSheet(null); setLoading(false); };
+
   return (
     <div className="gm-card" style={{ padding: '14px 14px 16px' }}>
-      <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}>Greenhouse Health</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <div style={{ fontFamily: "'Baloo 2', system-ui", fontWeight: 800, fontSize: 16, color: 'var(--ink)' }}>Greenhouse Health</div>
+        {greenhouseId && (
+          <div style={{ marginLeft: 'auto' }}>
+            <AIInsightChip label="Explain with AI" title="Explain the greenhouse health with AI" onClick={onExplain} />
+          </div>
+        )}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
         <HealthChip color="#16a34a" count={counts.healthy}  label="Healthy"         prev={prev?.healthy ?? null}  goodWhenUp />
         <HealthChip color="#f59e0b" count={counts.watching} label="Monitor"         prev={prev?.watching ?? null} />
@@ -288,6 +314,7 @@ export function GreenhouseHealthCard({ gm, range }: { gm: GreenhouseModel; range
           </div>
         </div>
       </div>
+      <ContextualAIInsightSheet insight={sheet} loading={loading} onClose={onClose} />
     </div>
   );
 }

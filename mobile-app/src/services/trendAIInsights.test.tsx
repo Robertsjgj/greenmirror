@@ -10,7 +10,6 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { AIHomeCard } from '../components/AIHomeCard';
 import { ContextualAIInsightSheet } from '../components/trends/ContextualAIInsightSheet';
 import { PlantsView, WateringView, ZonesView, type AIContext } from '../components/trends/TrendsViews';
 import { buildGreenhouseModel } from '../components/trends/trendsModel';
@@ -325,20 +324,11 @@ describe('watering claims stay honest', () => {
 // ── Wiring ──────────────────────────────────────────────────────────────────
 
 describe('AI wiring', () => {
-  it('keeps the compact Home card, whose button opens Trends & Analysis', () => {
-    const onOpenTrends = vi.fn();
-    const html = renderToStaticMarkup(
-      <AIHomeCard
-        summary={{ headline: 'One zone needs attention.', counts: { urgent: 1, attention: 0, monitor: 1, good: 2, sensor: 0 }, top: [] }}
-        onOpenTrends={onOpenTrends}
-      />,
-    );
-    expect(html).toContain('GreenMirror AI');
-    expect(html).toContain('View in Trends &amp; Analysis');
-
+  it('no longer shows an AI insights card on the Home page', () => {
     const app = read('../App.tsx');
-    expect(app).toContain('onOpenTrends');
-    expect(app).toContain("setTrendsInitialSection('zones')");
+    // The Home page AI card was removed; its component and its summary helper
+    // are no longer referenced from App.
+    expect(app).not.toMatch(/AIHomeCard|summarizeGreenhouse/);
   });
 
   it('has no standalone AI page, route, or AI card component left', () => {
