@@ -60,6 +60,7 @@ import { mapZonesToSydneyLayout } from "./sydneyLayout";
 import { resolveZoneId } from "./zoneRegistry";
 import { useReadingsHistory } from "./hooks/useReadingsHistory";
 import { buildAllZoneInsights } from "./services/aiInsights";
+import { evaluatePendingWateringEvents } from "./services/wateringVerification";
 import {
   LatestReading,
   LayoutSettings,
@@ -769,6 +770,19 @@ export function App() {
 
     return () => window.clearInterval(id);
   }, []);
+
+  // Sensor-verify pending waterings. Compares the soil sensor's later readings
+  // against the baseline captured when "Watered" was tapped, and completes a
+  // round ONLY once the sensor confirms a moisture increase. Runs on open and
+  // every 60s for a real greenhouse (simulation has no Firestore readings).
+  useEffect(() => {
+    if (!ghId || isSimulating) return;
+    let cancelled = false;
+    const run = () => { if (!cancelled) void evaluatePendingWateringEvents(ghId); };
+    run();
+    const id = window.setInterval(run, 60_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [ghId, isSimulating]);
 
   const profilesById = useMemo(
     () => new Map(plantProfiles.map((p) => [p.id, p])),

@@ -65,6 +65,13 @@ export interface WateringRound {
   status?: WateringVerificationStatus;
   // When the user tapped "Watered" (ISO). Distinct from completedAt for clarity.
   markedWateredAt?: string | null;
+
+  // ── Sensor-verification (Phase 2) ────────────────────────────────────────
+  // Stamped by the verification engine when the soil sensor confirms (or fails
+  // to confirm) the watering. `verifiedBySensor` distinguishes a sensor-backed
+  // completion from a legacy manual one.
+  verifiedAt?: string | null;
+  verifiedBySensor?: boolean;
 }
 
 export interface WateringBedTask {
@@ -755,14 +762,17 @@ export async function markWateringRoundComplete(
     round.id === roundId
       ? {
           ...round,
-          // `completed` retained for backward compatibility with existing UI/docs.
-          completed: true,
-          completedAt: now,
+          // A tap is now a CLAIM, not a completion. The round is not "completed"
+          // until the soil sensor confirms the watering (see the verification
+          // engine). We keep who claimed it, but hold completed=false meanwhile.
+          completed: false,
+          completedAt: null,
           completedBy: user.uid,
           completedByName: user.displayName,
-          // New verification lifecycle: a tap means "pending", NOT "verified".
           status: "pending_verification" as WateringVerificationStatus,
           markedWateredAt: now,
+          verifiedAt: null,
+          verifiedBySensor: false,
         }
       : round,
   );

@@ -576,6 +576,13 @@ export function WateringScheduleView({
                 isAdmin || round.assignedUserId === currentUserId;
               const vstate = normalizeRoundVerificationStatus(round);
               const isPending = vstate.status === "pending_verification";
+              const isVerified = vstate.status === "verified";
+              const isNotVerified = vstate.status === "not_verified";
+              const isSensorUnavailable = vstate.status === "sensor_unavailable";
+              // not_verified / sensor_unavailable → the round is re-actionable.
+              const needsRetry = isNotVerified || isSensorUnavailable;
+              // "Completed" badge shows for a sensor-verified round or a legacy one.
+              const showCompleted = isVerified || (round.completed && !vstate.status);
 
               return (
                 <div
@@ -603,11 +610,16 @@ export function WateringScheduleView({
                           <Clock className="h-4 w-4" />
                           Under review
                         </span>
+                      ) : needsRetry ? (
+                        <span className="inline-flex items-center gap-1.5 text-amber-700">
+                          <Clock className="h-4 w-4" />
+                          Not verified
+                        </span>
                       ) : (
-                        round.completed && (
+                        showCompleted && (
                           <span className="inline-flex items-center gap-1.5 text-emerald-700">
                             <CheckCircle2 className="h-4 w-4" />
-                            Completed
+                            {isVerified ? "Verified" : "Completed"}
                           </span>
                         )
                       )}
@@ -617,6 +629,24 @@ export function WateringScheduleView({
                       <p className="mt-1 text-xs font-semibold text-amber-700">
                         GreenMirror is waiting for the soil sensor to detect a
                         moisture increase.
+                      </p>
+                    ) : isNotVerified ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        The soil sensor hasn't detected a moisture increase yet.
+                        You can water again.
+                      </p>
+                    ) : isSensorUnavailable ? (
+                      <p className="mt-1 text-xs font-semibold text-amber-700">
+                        GreenMirror couldn't read the soil sensor to confirm
+                        this. You can try again.
+                      </p>
+                    ) : isVerified ? (
+                      <p className="mt-1 text-xs font-semibold text-emerald-700">
+                        Confirmed by the soil sensor
+                        {round.completedByName
+                          ? ` · watered by ${round.completedByName}`
+                          : ""}
+                        .
                       </p>
                     ) : (
                       round.completedByName && (
@@ -629,15 +659,15 @@ export function WateringScheduleView({
 
                   <Button
                     type="button"
-                    variant={round.completed ? "secondary" : "primary"}
+                    variant={showCompleted ? "secondary" : "primary"}
                     size="sm"
                     disabled={
-                      round.completed || isPending || !canComplete || isUpdating
+                      showCompleted || isPending || !canComplete || isUpdating
                     }
                     className={
                       isPending
                         ? "bg-amber-50 font-black text-amber-700"
-                        : round.completed
+                        : showCompleted
                           ? "bg-emerald-50 font-black text-emerald-700"
                           : "bg-emerald-600 font-black text-white hover:bg-emerald-700"
                     }
@@ -652,7 +682,13 @@ export function WateringScheduleView({
                     }
                     onClick={() => handleRoundComplete(schedule, round.id)}
                   >
-                    {isPending ? "Under review" : round.completed ? "Done" : "Mark done"}
+                    {isPending
+                      ? "Under review"
+                      : showCompleted
+                        ? "Done"
+                        : needsRetry
+                          ? "Water again"
+                          : "Mark done"}
                   </Button>
                 </div>
               );

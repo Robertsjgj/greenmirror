@@ -251,6 +251,229 @@ export function buildScheduledWateringEvent(
   };
 }
 
+// ─── Verification engine (Phase 2) ──────────────────────────────────────────
+//
+// Decides whether a PENDING watering was borne out by the soil sensor. It is
+// deliberately FORGIVING, not forensic: a small, believable moisture rise (or a
+// bed that is already wet) counts as verified, and a negative verdict is only
+// reached after the soil has had hours to respond. The goal is to stop claiming
+// "done" the instant a button is tapped — not to punish a good watering because
+// the sensor was noisy.
+
+/** A single usable moisture sample for a zone, in chronological terms. */
+export interface MoistureSample {
+  pct: number;
+  ts: number; // epoch ms
+}
+
+/** Lenient defaults — see module note. All are overridable for tests / tuning. */
+export const DEFAULT_MIN_RISE_PCT = 2;               // a +2pp bump is enough
+export const DEFAULT_SETTLE_WINDOW_MS = 3 * 60 * 60 * 1000; // wait ~3h before a negative verdict
+export const DEFAULT_WET_ENOUGH_PCT = 85;            // already near field capacity → accept
+
+export interface EvaluateWateringInput {
+  /** Moisture at the moment "Watered" was tapped; null when none was captured. */
+  baselineMoisture: number | null;
+  /** When the user marked it watered (epoch ms). */
+  markedWateredAt: number;
+  /** Every usable moisture sample GreenMirror has for this bed (any time). */
+  samples: MoistureSample[];
+  now?: number;
+  minRisePct?: number;
+  settleWindowMs?: number;
+  wetEnoughPct?: number;
+}
+
+export interface WateringVerdict {
+  status: WateringVerificationStatus; // 'pending_verification' | 'verified' | 'not_verified' | 'sensor_unavailable'
+  /** Highest moisture seen after watering, when any reading exists. */
+  peakMoisture: number | null;
+  /** peak − baseline, when both are known. */
+  rise: number | null;
+}
+
+/**
+ * Evaluate one pending watering. Pure and deterministic.
+ *
+ *  - a rise ≥ minRise, OR a bed already at/above wetEnough → verified
+ *  - no evidence yet, still inside the settle window          → stay pending
+ *  - settle window elapsed with valid readings but no rise    → not_verified
+ *  - settle window elapsed with no usable reading at all      → sensor_unavailable
+ */
+export function evaluateWateringVerification(input: EvaluateWateringInput): WateringVerdict {
+  const now = input.now ?? Date.now();
+  const minRise = input.minRisePct ?? DEFAULT_MIN_RISE_PCT;
+  const settleWindow = input.settleWindowMs ?? DEFAULT_SETTLE_WINDOW_MS;
+  const wetEnough = input.wetEnoughPct ?? DEFAULT_WET_ENOUGH_PCT;
+
+  const post = input.samples
+    .filter((s) => Number.isFinite(s.pct) && Number.isFinite(s.ts) && s.ts > input.markedWateredAt)
+    .sort((a, b) => a.ts - b.ts);
+
+  const elapsed = now - input.markedWateredAt;
+  const settled = elapsed >= settleWindow;
+
+  if (post.length === 0) {
+    // Nothing since the tap. Give the sensor time before saying it went quiet.
+    return { status: settled ? 'sensor_unavailable' : 'pending_verification', peakMoisture: null, rise: null };
+  }
+
+  const peak = post.reduce((m, s) => (s.pct > m ? s.pct : m), post[0].pct);
+
+  if (input.baselineMoisture != null) {
+    const rise = Math.round((peak - input.baselineMoisture) * 10) / 10;
+    if (rise >= minRise || peak >= wetEnough) {
+      return { status: 'verified', peakMoisture: peak, rise };
+    }
+    return { status: settled ? 'not_verified' : 'pending_verification', peakMoisture: peak, rise };
+  }
+
+  // No baseline to compare against — we can only accept an already-wet bed.
+  if (peak >= wetEnough) return { status: 'verified', peakMoisture: peak, rise: null };
+  return { status: settled ? 'sensor_unavailable' : 'pending_verification', peakMoisture: peak, rise: null };
+}
+
+/**
+ * Collect the usable post-watering moisture samples for one canonical zone from
+ * a batch of readings. Mirrors the baseline sampler's validity rules so both
+ * ends of the verification use the same definition of a trustworthy reading.
+ */
+export function collectZoneSamples(
+  readings: LatestReading[],
+  canonicalZoneId: string,
+): MoistureSample[] {
+  const out: MoistureSample[] = [];
+  for (const reading of readings ?? []) {
+    if (!reading?.timestamp) continue;
+    const ts = new Date(reading.timestamp).getTime();
+    if (!Number.isFinite(ts)) continue;
+    const zone = zoneEntry(reading, canonicalZoneId);
+    if (!zone || !isUsableMoisture(zone)) continue;
+    out.push({ pct: zone.soil_moisture_pct as number, ts });
+  }
+  return out;
+}
+
+/**
+ * Fold several beds' verdicts into one round-level status, leniently: a round
+ * counts as verified if ANY of its beds showed the sensor responding, because
+ * the user watered the whole round and sparse sensors need not all agree.
+ *
+ *  - any bed verified                                  → verified
+ *  - any bed still pending (inside its window)          → pending_verification
+ *  - all settled, at least one not_verified             → not_verified
+ *  - all settled, only sensor_unavailable               → sensor_unavailable
+ */
+export function foldRoundVerdict(statuses: WateringVerificationStatus[]): WateringVerificationStatus {
+  if (statuses.length === 0) return 'pending_verification';
+  if (statuses.includes('verified')) return 'verified';
+  if (statuses.includes('pending_verification')) return 'pending_verification';
+  if (statuses.includes('not_verified')) return 'not_verified';
+  return 'sensor_unavailable';
+}
+
+// ─── SDK-agnostic verification planner ───────────────────────────────────────
+//
+// The one place the "look at pending waterings + readings → decide" logic lives.
+// It takes plain data and returns plain instructions, so the browser (client
+// Firestore SDK) and the scheduled server job (firebase-admin SDK) run byte-for-
+// byte the same decisions — only the read/write plumbing differs between them.
+
+/** A pending watering event reduced to the fields the planner needs. */
+export interface PendingWateringLite {
+  id: string;
+  scheduleId: string;
+  roundId: string;
+  zoneId: string; // raw or canonical — resolved internally
+  markedWateredAt: string; // ISO
+  baselineMoisture: number | null;
+}
+
+/** "Write this terminal status onto this event." */
+export interface EventVerdictUpdate {
+  id: string;
+  status: WateringVerificationStatus; // never 'pending_verification'
+  peakMoisture: number | null;
+  rise: number | null;
+}
+
+/** "This round has settled — advance it to this terminal status." */
+export interface RoundVerdictDecision {
+  scheduleId: string;
+  roundId: string;
+  folded: WateringVerificationStatus; // never 'pending_verification'
+}
+
+export interface VerificationPlan {
+  eventUpdates: EventVerdictUpdate[];
+  roundDecisions: RoundVerdictDecision[];
+}
+
+export interface PlanVerificationParams {
+  pending: PendingWateringLite[];
+  readings: LatestReading[];
+  now?: number;
+  minRisePct?: number;
+  settleWindowMs?: number;
+  wetEnoughPct?: number;
+}
+
+/**
+ * Decide, for a batch of pending waterings, which events and rounds have
+ * settled. Events still inside their window produce no update; rounds still
+ * waiting on any bed produce no decision. Pure and deterministic.
+ */
+export function planWateringVerification(params: PlanVerificationParams): VerificationPlan {
+  const now = params.now ?? Date.now();
+  const eventUpdates: EventVerdictUpdate[] = [];
+  const rounds = new Map<string, { scheduleId: string; roundId: string; statuses: WateringVerificationStatus[] }>();
+
+  for (const e of params.pending) {
+    const verdict = evaluateWateringVerification({
+      baselineMoisture: e.baselineMoisture,
+      markedWateredAt: Date.parse(e.markedWateredAt),
+      samples: collectZoneSamples(params.readings, resolveZoneId(e.zoneId)),
+      now,
+      minRisePct: params.minRisePct,
+      settleWindowMs: params.settleWindowMs,
+      wetEnoughPct: params.wetEnoughPct,
+    });
+
+    const key = `${e.scheduleId}__${e.roundId}`;
+    if (!rounds.has(key)) rounds.set(key, { scheduleId: e.scheduleId, roundId: e.roundId, statuses: [] });
+    rounds.get(key)!.statuses.push(verdict.status);
+
+    if (verdict.status !== 'pending_verification') {
+      eventUpdates.push({ id: e.id, status: verdict.status, peakMoisture: verdict.peakMoisture, rise: verdict.rise });
+    }
+  }
+
+  const roundDecisions: RoundVerdictDecision[] = [];
+  for (const { scheduleId, roundId, statuses } of rounds.values()) {
+    const folded = foldRoundVerdict(statuses);
+    if (folded !== 'pending_verification') roundDecisions.push({ scheduleId, roundId, folded });
+  }
+
+  return { eventUpdates, roundDecisions };
+}
+
+/** The exact round fields to write for a settled verdict. Shared by both callers. */
+export interface RoundStatePatch {
+  status: WateringVerificationStatus;
+  completed: boolean;
+  completedAt: string | null;
+  verifiedAt: string | null;
+  verifiedBySensor: boolean;
+}
+
+export function roundPatchFor(folded: WateringVerificationStatus, nowIso: string): RoundStatePatch {
+  if (folded === 'verified') {
+    return { status: 'verified', completed: true, completedAt: nowIso, verifiedAt: nowIso, verifiedBySensor: true };
+  }
+  // not_verified / sensor_unavailable — leave the round incomplete and re-actionable.
+  return { status: folded, completed: false, completedAt: null, verifiedAt: null, verifiedBySensor: false };
+}
+
 // ─── Legacy normalization ───────────────────────────────────────────────────
 
 export interface RoundVerificationView {
