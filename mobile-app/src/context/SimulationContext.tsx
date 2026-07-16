@@ -26,6 +26,7 @@ import {
 import type { ReactNode } from 'react';
 import type { LatestReading } from '../zoneLayout';
 import { useGreenhouse } from './GreenhouseContext';
+import { SIMULATION_ENABLED } from '../featureFlags';
 import {
   getSimZoneIds,
   tickStates,
@@ -129,6 +130,10 @@ export function SimulationProvider({ children }: { children: ReactNode }) {
   }, [isSimulating, greenhouse, clearSim]);
 
   const startSimulation = useCallback(() => {
+    if (!SIMULATION_ENABLED) {
+      console.info('[Simulation] Ignored — disabled via SIMULATION_ENABLED flag');
+      return;
+    }
     console.info('[Simulation] Starting simulation mode');
     setIsSimulating(true);
   }, []);

@@ -14,6 +14,7 @@ import {
   sanitizeSettings
 } from '../zoneLayout';
 import { useSimulation } from '../context/SimulationContext';
+import { SIMULATION_ENABLED } from '../featureFlags';
 
 interface GreenhouseViewProps {
   latestReading: LatestReading | null;
@@ -116,14 +117,16 @@ export function GreenhouseView({
       </div>
 
       {/* View mode toggle — Map (live) vs Simulation (same map on simulated data) */}
-      <div className="gm-seg">
-        <button className={!isSimulating ? 'active' : ''} onClick={() => { if (isSimulating) stopSimulation(); }}>
-          🗺 Map
-        </button>
-        <button className={isSimulating ? 'active' : ''} onClick={() => { if (!isSimulating) startSimulation(); }}>
-          🧪 Simulation
-        </button>
-      </div>
+      {SIMULATION_ENABLED && (
+        <div className="gm-seg">
+          <button className={!isSimulating ? 'active' : ''} onClick={() => { if (isSimulating) stopSimulation(); }}>
+            🗺 Map
+          </button>
+          <button className={isSimulating ? 'active' : ''} onClick={() => { if (!isSimulating) startSimulation(); }}>
+            🧪 Simulation
+          </button>
+        </div>
+      )}
 
       {/* ── MAP (live or simulated — same screen) ───────────────────────────── */}
       <div style={{ textAlign: 'center', padding: '2px 0' }}>

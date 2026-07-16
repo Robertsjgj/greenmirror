@@ -2,6 +2,7 @@ import { useState } from "react";
 import { type MapKind, GREENHOUSES } from "../greenhouses";
 import { useGreenhouse } from "../context/GreenhouseContext";
 import { useSimulation } from "../context/SimulationContext";
+import { SIMULATION_ENABLED } from "../featureFlags";
 
 interface SiteSwitcherSheetProps {
   open: boolean;
@@ -452,6 +453,7 @@ export function SiteSwitcherSheet({
           </div>
 
           {/* Testing & simulation */}
+          {SIMULATION_ENABLED && (
           <div
             style={{
               marginTop: 20,
@@ -549,6 +551,7 @@ export function SiteSwitcherSheet({
               )}
             </button>
           </div>
+          )}
 
           {/* Account actions */}
           <div
