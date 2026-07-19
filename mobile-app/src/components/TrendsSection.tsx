@@ -12,6 +12,7 @@ import {
 import type { TimeRange } from '../hooks/useReadingsHistory';
 import type { LatestReading, VisualZone } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
+import { moistureChartCeiling } from '../plantRequirements';
 
 interface TrendsSectionProps {
   greenhouseId: string;
@@ -381,7 +382,7 @@ export function TrendsSection({ greenhouseId, simHistory, zones, profilesById }:
                       interval="preserveStartEnd"
                     />
                     <YAxis
-                      domain={[0, 100]}
+                      domain={[0, moistureChartCeiling(trendData.map((point) => point.avgMoisture))]}
                       tickCount={3}
                       tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 600 }}
                       tickLine={false}

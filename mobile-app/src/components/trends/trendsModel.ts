@@ -11,6 +11,9 @@ import type { VisualZone, LatestReading } from '../../zoneLayout';
 import type { PlantProfile } from '../../plantProfiles';
 import type { ActivityEntry } from '../../activityLog';
 import type { TimeRange } from '../../hooks/useReadingsHistory';
+import {
+  FIELD_CAPACITY_UPPER_TOLERANCE_PCT, MAX_PLAUSIBLE_SENSOR_PCT, classifyMoistureAgainstTarget,
+} from '../../plantRequirements';
 
 const D = 86_400_000;
 const RANGE_SPAN_MS: Record<TimeRange, number> = {
@@ -52,7 +55,7 @@ export interface CurrentReading {
 export interface MoistureStatus {
   label: string;
   color: string;
-  tone: 'crit' | 'dry' | 'wet' | 'good';
+  tone: 'crit' | 'dry' | 'wet' | 'good' | 'check';
 }
 
 export interface WateringEvt {
@@ -101,7 +104,11 @@ const NEED_COLOR = '#ef4444', WATCH_COLOR = '#f59e0b', GOOD_COLOR = '#16a34a', W
 export function statusOf(m: number, plant: PlantLite | null): SimpleStatus {
   const s = moistureStatus(m, plant);
   if (s.tone === 'crit' || s.tone === 'dry') return { kind: 'need', label: 'Needs water', color: NEED_COLOR };
-  if (s.tone === 'wet')                       return { kind: 'wet',  label: 'Too wet',     color: WET_COLOR };
+  // Above the plant's saved maximum is never "Good". The wet side keeps the
+  // classifier's own wording so 101–110% (tolerated) reads differently from
+  // above 110% (too wet). A sensor-check reading counts as one to watch, not
+  // one that is healthy.
+  if (s.tone === 'wet' || s.tone === 'check') return { kind: 'wet', label: s.label, color: s.color };
   return { kind: 'healthy', label: 'Good', color: GOOD_COLOR };
 }
 
@@ -153,13 +160,29 @@ const WD_SHORT    = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
 // ── Pure status + time helpers (used across charts + views) ─────────────────
+// Assigned zones use the shared registry classifier, so Trends agrees with the
+// Map, Plant Care and the AI sheet: 100% is field capacity, 101–110% is above
+// the target but tolerated, and only beyond that is the soil called too wet.
 export function moistureStatus(m: number, plant: PlantLite | null): MoistureStatus {
   if (plant) {
-    if (m < plant.moistureMin * 0.7) return { label: 'Critical', color: '#ef4444', tone: 'crit' };
-    if (m < plant.moistureMin)        return { label: 'Dry',      color: '#f59e0b', tone: 'dry'  };
-    if (m > plant.moistureMax)        return { label: 'Too wet',  color: '#0ea5e9', tone: 'wet'  };
-    return { label: 'Good', color: '#16a34a', tone: 'good' };
+    switch (classifyMoistureAgainstTarget(m, plant.moistureMin, plant.moistureMax)) {
+      case 'sensor_check':
+        return { label: 'Check sensor', color: '#64748b', tone: 'check' };
+      case 'below_target':
+        return m < plant.moistureMin * 0.7
+          ? { label: 'Critical', color: '#ef4444', tone: 'crit' }
+          : { label: 'Dry', color: '#f59e0b', tone: 'dry' };
+      case 'above_target_tolerated':
+        return { label: 'Above target', color: '#f59e0b', tone: 'wet' };
+      case 'too_wet':
+        return { label: 'Too wet', color: '#0ea5e9', tone: 'wet' };
+      default:
+        return { label: 'Good', color: '#16a34a', tone: 'good' };
+    }
   }
+  // No plant assigned — generic thresholds, but still never "Good" past the
+  // wet-side tolerance.
+  if (m > FIELD_CAPACITY_UPPER_TOLERANCE_PCT) return { label: 'Too wet', color: '#0ea5e9', tone: 'wet' };
   if (m < 15) return { label: 'Critical', color: '#ef4444', tone: 'crit' };
   if (m < 25) return { label: 'Dry',      color: '#f59e0b', tone: 'dry'  };
   if (m > 80) return { label: 'Too wet',  color: '#0ea5e9', tone: 'wet'  };
@@ -253,7 +276,7 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
       for (const z of r.zones ?? []) {
         if (!accept(z.zone_id)) continue;
         const m = z.soil_moisture_pct;
-        if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= 100) { mSum += m; mC++; }
+        if (typeof m === 'number' && isFinite(m) && m >= 0 && m <= MAX_PLAUSIBLE_SENSOR_PCT) { mSum += m; mC++; }
         const t = z.soil_temp_c;
         if (typeof t === 'number' && isFinite(t) && t !== -127 && t !== 85 && t > -40 && t < 80) { tSum += t; tC++; }
       }
@@ -319,7 +342,7 @@ export function buildGreenhouseModel(input: ModelInput): GreenhouseModel {
     if (!ts || isNaN(ts)) continue;
     for (const z of r.zones ?? []) {
       const m = z.soil_moisture_pct;
-      if (typeof m !== 'number' || !isFinite(m) || m < 0 || m > 100) continue;
+      if (typeof m !== 'number' || !isFinite(m) || m < 0 || m > MAX_PLAUSIBLE_SENSOR_PCT) continue;
       if (!zoneHist.has(z.zone_id)) zoneHist.set(z.zone_id, []);
       zoneHist.get(z.zone_id)!.push({ ts, moisture: m });
     }

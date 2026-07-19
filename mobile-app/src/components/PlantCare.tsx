@@ -165,6 +165,11 @@ export function PlantCare({
   const [completedIds, setCompletedIds] = useState<Set<string>>(() =>
     loadCompletedTaskIds(greenhouseId),
   );
+  // Water tasks the user has actioned but the soil sensor has not yet confirmed.
+  // Kept in memory only: a task clears itself the moment the live reading shows
+  // the zone is no longer thirsty (it stops being built), which IS the sensor
+  // verification. Not persisted, so a reload never shows a false "done".
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setProfilePage(0);
@@ -173,6 +178,7 @@ export function PlantCare({
   // Reload completed tasks when greenhouse switches
   useEffect(() => {
     setCompletedIds(loadCompletedTaskIds(greenhouseId));
+    setPendingIds(new Set());
   }, [greenhouseId]);
 
   const allTasks = useMemo(() => {
@@ -187,27 +193,39 @@ export function PlantCare({
       .filter((t): t is Task => t !== null);
   }, [assignmentsLoaded, zones, profilesById]);
 
-  const { incompleteTasks, completedTasks } = useMemo(() => {
+  const { incompleteTasks, pendingTasks, completedTasks } = useMemo(() => {
     const incomplete: Task[] = [],
+      pending: Task[] = [],
       complete: Task[] = [];
-    allTasks.forEach((t) =>
-      (completedIds.has(t.id) ? complete : incomplete).push(t),
-    );
-    return { incompleteTasks: incomplete, completedTasks: complete };
-  }, [allTasks, completedIds]);
+    allTasks.forEach((t) => {
+      if (completedIds.has(t.id)) complete.push(t);
+      else if (pendingIds.has(t.id)) pending.push(t);
+      else incomplete.push(t);
+    });
+    return {
+      incompleteTasks: incomplete,
+      pendingTasks: pending,
+      completedTasks: complete,
+    };
+  }, [allTasks, completedIds, pendingIds]);
 
   function handleComplete(task: Task) {
+    // Watering is not "done" on tap — it is logged and then held under review
+    // until the soil sensor shows the zone recovered (the task stops being
+    // built). Only the non-watering "check" tasks complete immediately.
+    if (task.kind === "water" && onWaterZone) {
+      onWaterZone(task.zone, 200);
+      setPendingIds((prev) => new Set(prev).add(task.id));
+      onToast("💧 Watering logged — checking the soil sensor");
+      return;
+    }
     persistCompletedTask(greenhouseId, task.id);
     setCompletedIds((prev) => {
       const next = new Set(prev);
       next.add(task.id);
       return next;
     });
-    if (task.kind === "water" && onWaterZone) {
-      onWaterZone(task.zone, 200);
-    } else {
-      onToast(`✓ ${task.label}`);
-    }
+    onToast(`✓ ${task.label}`);
   }
 
   const visibleIncompleteTasks = showAllTasks
@@ -317,14 +335,22 @@ export function PlantCare({
         <div style={{ padding: "0 2px 10px" }}>
           <h2 className="gm-h2">Today's Tasks</h2>
           <div className="gm-sub">
-            {totalIncompleteTasks === 0 && completedTasks.length === 0
+            {totalIncompleteTasks === 0 &&
+            completedTasks.length === 0 &&
+            pendingTasks.length === 0
               ? "Nothing to do · assign plants in the Map to get tasks"
               : totalIncompleteTasks === 0
-                ? `All ${completedTasks.length} task${completedTasks.length !== 1 ? "s" : ""} done today 🎉`
-                : `${totalIncompleteTasks} to do${completedTasks.length > 0 ? ` · ${completedTasks.length} done` : ""}`}
+                ? `${
+                    completedTasks.length > 0
+                      ? `All ${completedTasks.length} task${completedTasks.length !== 1 ? "s" : ""} done today 🎉`
+                      : "Nothing left to do"
+                  }${pendingTasks.length > 0 ? ` · ${pendingTasks.length} checking sensor` : ""}`
+                : `${totalIncompleteTasks} to do${pendingTasks.length > 0 ? ` · ${pendingTasks.length} checking` : ""}${completedTasks.length > 0 ? ` · ${completedTasks.length} done` : ""}`}
           </div>
         </div>
-        {totalIncompleteTasks === 0 && completedTasks.length === 0 ? (
+        {totalIncompleteTasks === 0 &&
+        completedTasks.length === 0 &&
+        pendingTasks.length === 0 ? (
           <div
             className="gm-card"
             style={{ padding: 22, textAlign: "center", color: "var(--ink-3)" }}
@@ -401,6 +427,38 @@ export function PlantCare({
                   ›
                 </span>
               </button>
+            )}
+
+            {/* Under review — watered, awaiting sensor confirmation */}
+            {pendingTasks.length > 0 && (
+              <>
+                <div
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    color: "var(--ink-3)",
+                    letterSpacing: "0.1em",
+                    padding: "6px 2px 2px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Checking the soil sensor
+                </div>
+                {pendingTasks.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    profile={
+                      task.zone.assignedPlant
+                        ? (profilesById.get(task.zone.assignedPlant) ?? null)
+                        : null
+                    }
+                    completed={false}
+                    pending
+                    onOpen={() => onOpenZone(task.zone)}
+                  />
+                ))}
+              </>
             )}
 
             {/* Completed tasks */}
@@ -681,12 +739,14 @@ function TaskCard({
   task,
   profile,
   completed,
+  pending = false,
   onOpen,
   onAction,
 }: {
   task: Task;
   profile: PlantProfile | null;
   completed: boolean;
+  pending?: boolean;
   onOpen: () => void;
   onAction?: () => void;
 }) {
@@ -716,15 +776,17 @@ function TaskCard({
           flexShrink: 0,
           background: completed
             ? "var(--good-soft, #e9fbe9)"
-            : profile
-              ? "var(--primary-soft)"
-              : "var(--bg-sub)",
+            : pending
+              ? "#fffbeb"
+              : profile
+                ? "var(--primary-soft)"
+                : "var(--bg-sub)",
           display: "grid",
           placeItems: "center",
           fontSize: 26,
         }}
       >
-        {completed ? "✅" : (profile?.icon ?? "🌱")}
+        {completed ? "✅" : pending ? "⏳" : (profile?.icon ?? "🌱")}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
@@ -741,25 +803,45 @@ function TaskCard({
         <div
           style={{
             fontSize: 13,
-            color: "var(--ink-3)",
+            color: pending ? "#b45309" : "var(--ink-3)",
             marginTop: 1,
             fontWeight: 600,
           }}
         >
-          {completed ? "Done today ✓" : task.detail}
+          {completed
+            ? "Done today ✓"
+            : pending
+              ? "Watered · waiting for the soil sensor to confirm"
+              : task.detail}
         </div>
       </div>
-      {!completed && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onAction?.();
+      {pending ? (
+        <span
+          style={{
+            flexShrink: 0,
+            fontSize: 11,
+            fontWeight: 800,
+            color: "#b45309",
+            background: "#fef3c7",
+            borderRadius: 999,
+            padding: "6px 12px",
           }}
-          className={`gm-btn ${task.kind === "water" ? "water" : "check"}`}
-          style={{ padding: "10px 18px", flexShrink: 0, fontSize: 14 }}
         >
-          {task.actionLabel}
-        </button>
+          Under review
+        </span>
+      ) : (
+        !completed && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAction?.();
+            }}
+            className={`gm-btn ${task.kind === "water" ? "water" : "check"}`}
+            style={{ padding: "10px 18px", flexShrink: 0, fontSize: 14 }}
+          >
+            {task.actionLabel}
+          </button>
+        )
       )}
     </div>
   );

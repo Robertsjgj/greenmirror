@@ -53,7 +53,10 @@ import {
   savePlantProfiles,
   loadZoneAssignmentsForGh,
   saveZoneAssignmentsForGh,
+  applyRequirementToPlantProfile,
+  normalizeExistingProfileWithRequirements,
 } from "./plantProfiles";
+import { findPlantRequirementByName, findProvisionalPlantRequirement } from "./plantRequirements";
 import { mapZonesToSydneyLayout } from "./sydneyLayout";
 import {
   resolveZoneId,
@@ -61,6 +64,9 @@ import {
   hasLegacyAssignmentKeys,
   assignmentKeysForZone,
 } from "./zoneRegistry";
+import { useReadingsHistory } from "./hooks/useReadingsHistory";
+import { buildAllZoneInsights } from "./services/aiInsights";
+import { evaluatePendingWateringEvents } from "./services/wateringVerification";
 import {
   LatestReading,
   LayoutSettings,
@@ -317,6 +323,7 @@ export function App() {
   const [activityFallback, setActivityFallback] = useState(!firebaseEnabled);
   const [siteSheetOpen, setSiteSheetOpen] = useState(false);
   const [trendsOpen, setTrendsOpen] = useState(false);
+  const [trendsInitialSection, setTrendsInitialSection] = useState<'overview' | 'zones'>('overview');
   // Alerts opens as a full standalone page (own header + back button, no bottom
   // nav). Kept separate from `activeTab` so closing it returns to the previous
   // screen (the tab that was showing when the bell was tapped).
@@ -577,7 +584,7 @@ export function App() {
           const merged: PlantProfile[] = DEFAULT_PLANT_PROFILES.map((def) => {
             const override = firestoreById.get(def.id);
             return override
-              ? { ...override, isDefault: true }
+              ? { ...normalizeExistingProfileWithRequirements(override), isDefault: true } as PlantProfile
               : { ...def, isDefault: true };
           });
           firestoreProfiles
@@ -781,6 +788,19 @@ export function App() {
     return () => window.clearInterval(id);
   }, []);
 
+  // Sensor-verify pending waterings. Compares the soil sensor's later readings
+  // against the baseline captured when "Watered" was tapped, and completes a
+  // round ONLY once the sensor confirms a moisture increase. Runs on open and
+  // every 60s for a real greenhouse (simulation has no Firestore readings).
+  useEffect(() => {
+    if (!ghId || isSimulating) return;
+    let cancelled = false;
+    const run = () => { if (!cancelled) void evaluatePendingWateringEvents(ghId); };
+    run();
+    const id = window.setInterval(run, 60_000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [ghId, isSimulating]);
+
   const profilesById = useMemo(
     () => new Map(plantProfiles.map((p) => [p.id, p])),
     [plantProfiles],
@@ -801,6 +821,30 @@ export function App() {
       profilesById,
     ).rows.flatMap((r) => r.zones);
   }, [mapKind, latestReading, layoutSettings, zoneAssignments, profilesById]);
+
+  // ── GreenMirror AI (pilot) ──────────────────────────────────────────────────
+  // Recent history feeds per-zone moisture trends. Simulation uses its own
+  // history; live mode reads the 24h window the Trends screen already uses.
+  const { readings: aiHistoryLive } = useReadingsHistory(
+    isSimulating ? null : ghId,
+    "24h",
+  );
+  const aiHistory: LatestReading[] = useMemo(
+    () => (isSimulating ? (simHistory ?? []) : aiHistoryLive),
+    [isSimulating, simHistory, aiHistoryLive],
+  );
+
+  const aiInsights = useMemo(
+    () =>
+      buildAllZoneInsights({
+        greenhouseId: ghId ?? "",
+        zones: resolvedZones,
+        historyReadings: aiHistory,
+        activities: firestoreActivity.length ? firestoreActivity : activityLog,
+        weatherCondition: latestReading?.external_weather?.condition ?? null,
+      }),
+    [ghId, resolvedZones, aiHistory, firestoreActivity, activityLog, latestReading],
+  );
 
   // Derive the open sheet's zone from the LIVE zone array (recomputed each time
   // readings update, ~5s) by matching the canonical ID — so it never shows a
@@ -966,15 +1010,10 @@ export function App() {
   // Plant profile CRUD
   const onAddProfile = useCallback((prefill?: string) => {
     if (prefill) {
-      setEditorProfile({
-        id: "",
-        name: prefill,
-        icon: "🌱",
-        moistureMin: 50,
-        moistureMax: 70,
-        soilTempMin: 15,
-        soilTempMax: 25,
-      });
+      const requirement = findPlantRequirementByName(prefill) ?? findProvisionalPlantRequirement(prefill);
+      setEditorProfile(requirement
+        ? applyRequirementToPlantProfile({ id: '', name: prefill }, requirement)
+        : ({ id: '', name: prefill, icon: '🪴' } as PlantProfile));
     } else {
       setEditorProfile("new");
     }
@@ -1399,7 +1438,7 @@ export function App() {
             key={item.id}
             className={`gm-tab${active ? ' active' : ''}`}
             onClick={() => {
-              if (item.id === 'trends') setTrendsOpen(true);
+              if (item.id === 'trends') { setTrendsInitialSection('overview'); setTrendsOpen(true); }
               else { setTrendsOpen(false); setActiveTab(item.id as Tab); }
             }}
           >
@@ -1424,10 +1463,7 @@ export function App() {
               </h1>
               <small>{ghName}</small>
             </div>
-            <div className="gm-header-actions">
-              {bellButton}
-              {avatarButton}
-            </div>
+            <div className="gm-header-actions">{bellButton}{avatarButton}</div>
           </header>
           <div
             className="gm-scroll"
@@ -1442,6 +1478,9 @@ export function App() {
               profilesById={profilesById}
               plantProfiles={plantProfiles}
               simHistory={isSimulating ? simHistory : undefined}
+              shared24hReadings={aiHistory}
+              aiInsights={aiInsights}
+              initialSection={trendsInitialSection}
               activityLog={activityLog}
               firestoreActivity={firestoreActivity}
               onClose={() => setTrendsOpen(false)}

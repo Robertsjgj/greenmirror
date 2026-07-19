@@ -13,10 +13,13 @@ import type { TimeRange } from '../hooks/useReadingsHistory';
 import type { VisualZone, LatestReading } from '../zoneLayout';
 import type { PlantProfile } from '../plantProfiles';
 import type { ActivityEntry } from '../activityLog';
+import type { ZoneAIInsight } from '../services/aiInsights';
+import { fetchZoneVerificationStates, type ZoneVerificationState } from '../services/wateringVerification';
 import { buildGreenhouseModel } from './trends/trendsModel';
 import {
   GreenhouseHealthCard, GreenhouseTrendCard, ZonesView, PlantsView, WateringView,
 } from './trends/TrendsViews';
+import type { AIContext } from './trends/TrendsViews';
 import { BackButton } from './trends/TrendsCharts';
 
 type Section = 'overview' | 'zones' | 'plants' | 'watering';
@@ -29,6 +32,9 @@ interface TrendsDashboardProps {
   profilesById?: Map<string, PlantProfile>;
   plantProfiles?: PlantProfile[];
   simHistory?: LatestReading[];
+  shared24hReadings?: LatestReading[];
+  aiInsights?: ZoneAIInsight[];
+  initialSection?: 'overview' | 'zones';
   activityLog?: ActivityEntry[];
   firestoreActivity?: ActivityEntry[];
   onClose: () => void;
@@ -96,15 +102,28 @@ export function TrendsDashboard({
   profilesById,
   plantProfiles = [],
   simHistory,
+  shared24hReadings = [],
+  aiInsights = [],
+  initialSection = 'overview',
   activityLog = [],
   firestoreActivity = [],
   scrollRef,
   backRef,
 }: TrendsDashboardProps) {
-  const [section, setSection] = useState<Section>('overview');
+  const [section, setSection] = useState<Section>(initialSection);
   const [range, setRange] = useState<TimeRange>('24h');
   const [selZone, setSelZone] = useState<string | null>(null);
   const [selPlant, setSelPlant] = useState<string | null>(null);
+  const [verification, setVerification] = useState<Map<string, ZoneVerificationState>>(new Map());
+
+  useEffect(() => {
+    let active = true;
+    if (!open || !greenhouseId) { setVerification(new Map()); return; }
+    void fetchZoneVerificationStates(greenhouseId).then((states) => {
+      if (active) setVerification(states);
+    });
+    return () => { active = false; };
+  }, [open, greenhouseId]);
 
   // Scroll bookkeeping: remember the Explore scroll position when opening a
   // section, so Back can restore it; new sections open scrolled to the top.
@@ -114,14 +133,14 @@ export function TrendsDashboard({
   // Time-series history — Firestore quota protection: pass null (→ no listener)
   // unless the page is open. Always uses the greenhouse's real (or sim) data.
   const { readings: firestoreReadings, loading } = useReadingsHistory(
-    simHistory ? null : (open ? greenhouseId : null),
+    simHistory || range === '24h' ? null : (open ? greenhouseId : null),
     range,
   );
   const readings = useMemo(
-    () => (simHistory ?? firestoreReadings),
-    [simHistory, firestoreReadings],
+    () => (simHistory ?? (range === '24h' ? shared24hReadings : firestoreReadings)),
+    [simHistory, range, shared24hReadings, firestoreReadings],
   );
-  const chartLoading = simHistory ? false : loading;
+  const chartLoading = simHistory || range === '24h' ? false : loading;
 
   // Watering events (full history — model aggregates the stats itself)
   const wateringEvents = useMemo(() => {
@@ -136,6 +155,15 @@ export function TrendsDashboard({
     readings,
     wateringEvents,
   }), [zones, profilesById, plantProfiles, readings, wateringEvents]);
+
+  // Everything the contextual AI chips need. AI is never rendered as a section
+  // here — the tabs attach it to the card the user is already looking at.
+  const ai: AIContext = useMemo(() => ({
+    insights: aiInsights,
+    zones: zones ?? [],
+    profilesById: profilesById ?? new Map(),
+    verification,
+  }), [aiInsights, zones, profilesById, verification]);
 
   // Apply the pending scroll after the new view renders: top when entering a
   // section or a zone/plant detail, and the saved Explore position on Back.
@@ -185,7 +213,7 @@ export function TrendsDashboard({
             See how your greenhouse is doing over time — soil moisture, temperature, plant
             health and watering history. Pick a section below to explore the details.
           </div>
-          <GreenhouseHealthCard gm={gm} range={range} />
+          <GreenhouseHealthCard gm={gm} range={range} greenhouseId={greenhouseId} />
           <GreenhouseTrendCard gm={gm} range={range} setRange={setRange} loading={chartLoading} />
           <SectionNav
             go={goSection}
@@ -196,19 +224,19 @@ export function TrendsDashboard({
         </div>
       ) : section === 'zones' ? (
         <SectionWrap showBack={!selZone} onBack={backToOverview}>
-          <ZonesView {...baseProps} selected={selZone}
+          <ZonesView {...baseProps} selected={selZone} ai={ai}
             onSelect={(id) => { pendingScroll.current = 0; setSelZone(id); }}
             onBack={() => { pendingScroll.current = 0; setSelZone(null); }} />
         </SectionWrap>
       ) : section === 'plants' ? (
         <SectionWrap showBack={!selPlant} onBack={backToOverview}>
-          <PlantsView {...baseProps} selected={selPlant}
+          <PlantsView {...baseProps} selected={selPlant} ai={ai}
             onSelect={(id) => { pendingScroll.current = 0; setSelPlant(id); }}
             onBack={() => { pendingScroll.current = 0; setSelPlant(null); }} />
         </SectionWrap>
       ) : (
         <SectionWrap showBack onBack={backToOverview}>
-          <WateringView gm={gm} />
+          <WateringView gm={gm} ai={ai} />
         </SectionWrap>
       )}
     </div>

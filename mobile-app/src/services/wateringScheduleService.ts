@@ -12,6 +12,10 @@ import {
 } from "firebase/firestore";
 import { getDb } from "./firebase";
 import type { LatestReading, VisualZone } from "../zoneLayout";
+import type { WateringVerificationStatus } from "./wateringVerificationCore";
+
+// Re-export so existing importers can get the status type from this service.
+export type { WateringVerificationStatus } from "./wateringVerificationCore";
 
 const WATERING_TIME_ZONE = "America/Halifax";
 const DEFAULT_HOSE_FLOW_RATE_LPM = 8;
@@ -54,6 +58,20 @@ export interface WateringRound {
   completedAt?: string | null;
   completedBy?: string | null;
   completedByName?: string | null;
+
+  // ── Sensor-verification (Phase 1) ────────────────────────────────────────
+  // Explicit lifecycle state. Optional so legacy rounds (completed boolean only)
+  // keep working; when absent, treat via normalizeRoundVerificationStatus().
+  status?: WateringVerificationStatus;
+  // When the user tapped "Watered" (ISO). Distinct from completedAt for clarity.
+  markedWateredAt?: string | null;
+
+  // ── Sensor-verification (Phase 2) ────────────────────────────────────────
+  // Stamped by the verification engine when the soil sensor confirms (or fails
+  // to confirm) the watering. `verifiedBySensor` distinguishes a sensor-backed
+  // completion from a legacy manual one.
+  verifiedAt?: string | null;
+  verifiedBySensor?: boolean;
 }
 
 export interface WateringBedTask {
@@ -744,10 +762,17 @@ export async function markWateringRoundComplete(
     round.id === roundId
       ? {
           ...round,
-          completed: true,
-          completedAt: now,
+          // A tap is now a CLAIM, not a completion. The round is not "completed"
+          // until the soil sensor confirms the watering (see the verification
+          // engine). We keep who claimed it, but hold completed=false meanwhile.
+          completed: false,
+          completedAt: null,
           completedBy: user.uid,
           completedByName: user.displayName,
+          status: "pending_verification" as WateringVerificationStatus,
+          markedWateredAt: now,
+          verifiedAt: null,
+          verifiedBySensor: false,
         }
       : round,
   );
